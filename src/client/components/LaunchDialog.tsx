@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
+import type { ProjectSummary } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -43,6 +44,8 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
 
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -56,6 +59,21 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     }
   }, [open, batchMode]);
 
+  // Fetch projects when dialog opens
+  useEffect(() => {
+    if (open) {
+      api.get<ProjectSummary[]>('projects').then((data) => {
+        setProjects(data);
+        // Auto-select if only one project
+        if (data.length === 1) {
+          setSelectedProjectId(String(data[0].id));
+        }
+      }).catch(() => {
+        setProjects([]);
+      });
+    }
+  }, [open, api]);
+
   // Reset form when dialog opens
   useEffect(() => {
     if (open) {
@@ -65,6 +83,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       setStaggerDelay('15000');
       setError(null);
       setBatchMode(false);
+      setSelectedProjectId('');
     }
   }, [open]);
 
@@ -99,6 +118,11 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
   const handleLaunch = useCallback(async () => {
     setError(null);
 
+    if (projects.length > 0 && !selectedProjectId) {
+      setError('Please select a project');
+      return;
+    }
+
     const num = parseInt(issueNumber.trim(), 10);
     if (isNaN(num) || num < 1) {
       setError('Issue number must be a positive integer');
@@ -106,14 +130,16 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     }
 
     const effectivePrompt = prompt.trim() || getDefaultPrompt(String(num));
+    const projectId = selectedProjectId ? parseInt(selectedProjectId, 10) : undefined;
 
     setLoading(true);
     try {
       await api.post('teams/launch', {
         issueNumber: num,
         prompt: effectivePrompt,
+        projectId,
       });
-      setToast(`Team kea-${num} launched`);
+      setToast(`Team launched for #${num}`);
       onClose();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -121,7 +147,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     } finally {
       setLoading(false);
     }
-  }, [issueNumber, prompt, api, onClose]);
+  }, [issueNumber, prompt, api, onClose, projects, selectedProjectId]);
 
   // --- Batch launch ---
   const handleLaunchBatch = useCallback(async () => {
@@ -155,8 +181,14 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       return;
     }
 
+    if (projects.length > 0 && !selectedProjectId) {
+      setError('Please select a project');
+      return;
+    }
+
     const issues = numbers.map((n) => ({ number: n }));
     const effectivePrompt = prompt.trim() || undefined;
+    const projectId = selectedProjectId ? parseInt(selectedProjectId, 10) : undefined;
 
     setLoading(true);
     try {
@@ -164,6 +196,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
         issues,
         prompt: effectivePrompt,
         delayMs: delay,
+        projectId,
       });
       setToast(`Launched ${numbers.length} team${numbers.length > 1 ? 's' : ''}`);
       onClose();
@@ -173,7 +206,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     } finally {
       setLoading(false);
     }
-  }, [batchIssues, staggerDelay, prompt, api, onClose]);
+  }, [batchIssues, staggerDelay, prompt, api, onClose, projects, selectedProjectId]);
 
   // Handle Enter key in single-mode input
   const handleKeyDown = useCallback(
@@ -232,6 +265,28 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
 
             {/* --- Body --- */}
             <div className="px-5 py-4 space-y-4">
+              {/* Project selector */}
+              {projects.length > 0 && (
+                <div>
+                  <label className="block text-sm text-dark-muted mb-1">
+                    Project <span className="text-[#F85149]">*</span>
+                  </label>
+                  <select
+                    value={selectedProjectId}
+                    onChange={(e) => setSelectedProjectId(e.target.value)}
+                    className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+                    disabled={loading}
+                  >
+                    <option value="">Select a project...</option>
+                    {projects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               {/* Batch mode toggle */}
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <input

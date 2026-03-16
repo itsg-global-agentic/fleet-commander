@@ -58,7 +58,7 @@ async function main() {
     await server.register(fastifyStatic, {
       root: clientDistPath,
       prefix: '/',
-      decorateReply: false,
+      decorateReply: true,
     });
 
     server.setNotFoundHandler((request, reply) => {

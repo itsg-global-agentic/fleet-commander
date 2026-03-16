@@ -10,6 +10,7 @@ const items: NavItem[] = [
   { to: '/', label: 'Fleet Grid', icon: '\u229E' },       // ⊞
   { to: '/issues', label: 'Issue Tree', icon: '\uD83C\uDF33' },  // 🌳
   { to: '/usage', label: 'Usage View', icon: '%' },
+  { to: '/projects', label: 'Projects', icon: 'P' },
 ];
 
 export function SideNav() {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useFleet } from '../context/FleetContext';
 import { LaunchDialog } from './LaunchDialog';
+import { ProjectSelector } from './ProjectSelector';
 import { useApi } from '../hooks/useApi';
 
 // Status colors from PRD
@@ -79,9 +80,12 @@ export function TopBar() {
   return (
     <>
       <header className="h-12 min-h-[48px] bg-dark-surface border-b border-dark-border flex items-center px-4 justify-between shrink-0">
-        <h1 className="text-sm font-semibold text-dark-text tracking-wide">
-          Fleet Commander
-        </h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-sm font-semibold text-dark-text tracking-wide">
+            Fleet Commander
+          </h1>
+          <ProjectSelector />
+        </div>
         <div className="flex items-center gap-2">
           {pills.map(pill => (
             pill.count > 0 && (

@@ -7,6 +7,7 @@ import { TeamDetail } from './components/TeamDetail';
 import { FleetGridView } from './views/FleetGridView';
 import { IssueTreeView } from './views/IssueTreeView';
 import { UsageViewPage } from './views/UsageViewPage';
+import { ProjectsPage } from './views/ProjectsPage';
 
 export function App() {
   return (
@@ -27,6 +28,7 @@ export function App() {
                 <Route path="/" element={<FleetGridView />} />
                 <Route path="/issues" element={<IssueTreeView />} />
                 <Route path="/usage" element={<UsageViewPage />} />
+                <Route path="/projects" element={<ProjectsPage />} />
               </Routes>
             </main>
           </div>
