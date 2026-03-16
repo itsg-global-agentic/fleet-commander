@@ -63,6 +63,16 @@ export function CleanupModal({ projectId, open, onClose, onDone }: CleanupModalP
   const [error, setError] = useState<string | null>(null);
 
   // -------------------------------------------------------------------
+  // Close handler (after result, also trigger parent refresh)
+  // -------------------------------------------------------------------
+  const handleClose = useCallback(() => {
+    if (phase === 'result') {
+      onDone();
+    }
+    onClose();
+  }, [phase, onClose, onDone]);
+
+  // -------------------------------------------------------------------
   // Fetch preview when modal opens
   // -------------------------------------------------------------------
   useEffect(() => {
@@ -145,16 +155,6 @@ export function CleanupModal({ projectId, open, onClose, onDone }: CleanupModalP
       setPhase('preview'); // go back to preview so user can retry
     }
   }, [api, projectId, selected]);
-
-  // -------------------------------------------------------------------
-  // Close handler (after result, also trigger parent refresh)
-  // -------------------------------------------------------------------
-  const handleClose = useCallback(() => {
-    if (phase === 'result') {
-      onDone();
-    }
-    onClose();
-  }, [phase, onClose, onDone]);
 
   // Backdrop click
   const handleBackdropClick = useCallback(

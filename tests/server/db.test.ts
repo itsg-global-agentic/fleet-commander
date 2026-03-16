@@ -64,7 +64,6 @@ describe('Schema', () => {
     expect(names).toContain('events');
     expect(names).toContain('pull_requests');
     expect(names).toContain('commands');
-    expect(names).toContain('cost_entries');
     expect(names).toContain('schema_version');
   });
 
@@ -81,8 +80,8 @@ describe('Schema', () => {
     expect(() => db.initSchema()).not.toThrow();
   });
 
-  it('sets schema version to 1', () => {
-    expect(db.getSchemaVersion()).toBe(1);
+  it('sets schema version to 2', () => {
+    expect(db.getSchemaVersion()).toBe(2);
   });
 });
 
@@ -366,7 +365,7 @@ describe('Pull Requests CRUD', () => {
       title: 'Big feature',
       state: 'open',
       ciStatus: 'passing',
-      mergeState: 'clean',
+      mergeStatus: 'clean',
       autoMerge: true,
       ciFailCount: 1,
       checksJson,
@@ -397,7 +396,7 @@ describe('Pull Requests CRUD', () => {
     const updated = db.updatePullRequest(42, {
       state: 'merged',
       ciStatus: 'passing',
-      mergeState: 'clean',
+      mergeStatus: 'clean',
       mergedAt: '2025-01-01T12:00:00.000Z',
     });
 
@@ -502,84 +501,6 @@ describe('Commands CRUD', () => {
 });
 
 // =============================================================================
-// Cost Entries CRUD
-// =============================================================================
-
-describe('Cost Entries CRUD', () => {
-  beforeEach(() => {
-    db.insertTeam({ issueNumber: 100, worktreeName: 'kea-100' });
-  });
-
-  it('inserts a cost entry', () => {
-    const entry = db.insertCostEntry({
-      teamId: 1,
-      sessionId: 'sess-1',
-      inputTokens: 1000,
-      outputTokens: 500,
-      costUsd: 0.05,
-    });
-
-    expect(entry.id).toBe(1);
-    expect(entry.teamId).toBe(1);
-    expect(entry.sessionId).toBe('sess-1');
-    expect(entry.inputTokens).toBe(1000);
-    expect(entry.outputTokens).toBe(500);
-    expect(entry.costUsd).toBe(0.05);
-    expect(entry.recordedAt).toBeTruthy();
-  });
-
-  it('inserts a cost entry with defaults', () => {
-    const entry = db.insertCostEntry({ teamId: 1 });
-
-    expect(entry.inputTokens).toBe(0);
-    expect(entry.outputTokens).toBe(0);
-    expect(entry.costUsd).toBe(0);
-  });
-
-  it('gets cost summary by team', () => {
-    db.insertCostEntry({ teamId: 1, inputTokens: 1000, outputTokens: 500, costUsd: 0.05 });
-    db.insertCostEntry({ teamId: 1, inputTokens: 2000, outputTokens: 1000, costUsd: 0.10 });
-
-    const summary = db.getCostByTeam(1);
-    expect(summary.totalInputTokens).toBe(3000);
-    expect(summary.totalOutputTokens).toBe(1500);
-    expect(summary.totalCostUsd).toBeCloseTo(0.15);
-    expect(summary.entryCount).toBe(2);
-  });
-
-  it('returns zero summary for team with no cost entries', () => {
-    const summary = db.getCostByTeam(1);
-    expect(summary.totalCostUsd).toBe(0);
-    expect(summary.entryCount).toBe(0);
-  });
-
-  it('gets overall cost summary', () => {
-    db.insertTeam({ issueNumber: 200, worktreeName: 'kea-200' });
-    db.insertCostEntry({ teamId: 1, costUsd: 0.10 });
-    db.insertCostEntry({ teamId: 2, costUsd: 0.20 });
-
-    const summary = db.getCostSummary();
-    expect(summary.totalCostUsd).toBeCloseTo(0.30);
-    expect(summary.entryCount).toBe(2);
-  });
-
-  it('gets cost breakdown by team', () => {
-    db.insertTeam({ issueNumber: 200, worktreeName: 'kea-200' });
-    db.insertCostEntry({ teamId: 1, costUsd: 0.10 });
-    db.insertCostEntry({ teamId: 1, costUsd: 0.05 });
-    db.insertCostEntry({ teamId: 2, costUsd: 0.20 });
-
-    const breakdown = db.getCostByTeamBreakdown();
-    expect(breakdown).toHaveLength(2);
-    // Ordered by cost DESC
-    expect(breakdown[0].worktreeName).toBe('kea-200');
-    expect(breakdown[0].totalCostUsd).toBeCloseTo(0.20);
-    expect(breakdown[1].worktreeName).toBe('kea-100');
-    expect(breakdown[1].totalCostUsd).toBeCloseTo(0.15);
-  });
-});
-
-// =============================================================================
 // v_team_dashboard view
 // =============================================================================
 
@@ -595,9 +516,6 @@ describe('v_team_dashboard view', () => {
 
     db.updateTeam(1, { lastEventAt: minutesAgo(2) });
 
-    db.insertCostEntry({ teamId: 1, costUsd: 0.10, sessionId: 'sess-1' });
-    db.insertCostEntry({ teamId: 1, costUsd: 0.05, sessionId: 'sess-2' });
-
     db.insertEvent({ teamId: 1, eventType: 'SessionStart' });
     db.insertEvent({ teamId: 1, eventType: 'ToolUse' });
 
@@ -610,8 +528,8 @@ describe('v_team_dashboard view', () => {
     expect(row.worktreeName).toBe('kea-100');
     expect(row.status).toBe('running');
     expect(row.phase).toBe('implementing');
-    expect(row.totalCost).toBeCloseTo(0.15);
-    expect(row.sessionCount).toBe(2);
+    expect(row.totalCost).toBe(0);
+    expect(row.sessionCount).toBe(0);
   });
 
   it('includes PR info when associated', () => {
@@ -627,7 +545,7 @@ describe('v_team_dashboard view', () => {
       teamId: 1,
       state: 'open',
       ciStatus: 'passing',
-      mergeState: 'clean',
+      mergeStatus: 'clean',
     });
 
     const rows = db.getTeamDashboard();
@@ -711,7 +629,8 @@ describe('getStuckCandidates', () => {
     db.insertTeam({ issueNumber: 300, worktreeName: 'kea-300', status: 'idle' });
     db.updateTeam(3, { lastEventAt: minutesAgo(10) });
 
-    const candidates = db.getStuckCandidates(5);
+    // idleMinutes=5 for running teams, stuckMinutes=8 for idle teams
+    const candidates = db.getStuckCandidates(5, 8);
     expect(candidates).toHaveLength(2);
     expect(candidates.map((c) => c.worktreeName).sort()).toEqual(['kea-100', 'kea-300']);
   });
@@ -739,7 +658,8 @@ describe('getStuckCandidates', () => {
     db.insertTeam({ issueNumber: 300, worktreeName: 'kea-300', status: 'idle' });
     db.updateTeam(3, { lastEventAt: minutesAgo(15) });
 
-    const candidates = db.getStuckCandidates(5);
+    // idleMinutes=5, stuckMinutes=10 so all three qualify
+    const candidates = db.getStuckCandidates(5, 10);
     expect(candidates).toHaveLength(3);
     // Ordered by minutes DESC: kea-200 (20), kea-300 (15), kea-100 (10)
     expect(candidates[0].worktreeName).toBe('kea-200');

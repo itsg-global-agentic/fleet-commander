@@ -188,7 +188,7 @@ class GitHubPoller {
     const prData = {
       state,
       ciStatus,
-      mergeState,
+      mergeStatus: mergeState,
       autoMerge,
       ciFailCount,
       checksJson,

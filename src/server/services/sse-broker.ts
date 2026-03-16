@@ -23,7 +23,6 @@ export type SSEEventType =
   | 'pr_updated'
   | 'team_launched'
   | 'team_stopped'
-  | 'cost_updated'
   | 'usage_updated'
   | 'project_added'
   | 'project_updated'
@@ -35,12 +34,11 @@ export type SSEEventType =
 /** Payload shapes for each event type */
 export interface SSEEventPayloads {
   team_status_changed: { team_id: number; status: string; previous_status: string; phase?: string; reason?: string; idle_minutes?: number };
-  team_event: { team_id: number; event_type: string; event_id: number; team?: string; session_id?: string | null; agent_name?: string | null; tool_name?: string | null; timestamp?: string };
+  team_event: { team_id: number; event_type: string; event_id: number; session_id?: string | null; agent_name?: string | null; tool_name?: string | null; timestamp?: string };
   team_output: { team_id: number; event: StreamEvent };
   pr_updated: { pr_number: number; team_id: number; state?: string; ci_status?: string; merge_status?: string; auto_merge?: boolean; ci_fail_count?: number; action?: string };
   team_launched: { team_id: number; issue_number: number; project_id?: number | null };
   team_stopped: { team_id: number };
-  cost_updated: { team_id: number; total_cost_usd: number };
   usage_updated: { daily_percent: number; weekly_percent: number; sonnet_percent: number; extra_percent: number };
   project_added: { project_id: number; name: string; repo_path: string };
   project_updated: { project_id: number; name: string; status: string };

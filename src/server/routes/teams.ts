@@ -347,9 +347,6 @@ const teamsRoutes: FastifyPluginCallback = (
           });
         }
 
-        // Aggregate cost / session data
-        const costSummary = db.getCostByTeam(teamId);
-
         // Compute duration & idle in minutes
         const launchedAt = team.launchedAt ? new Date(team.launchedAt) : null;
         const now = new Date();
@@ -407,7 +404,6 @@ const teamsRoutes: FastifyPluginCallback = (
           pid: team.pid,
           sessionId: team.sessionId,
           worktreeName: team.worktreeName,
-          worktreePath: team.worktreePath,
           branchName: team.branchName,
           prNumber: team.prNumber,
           launchedAt: team.launchedAt,
@@ -415,10 +411,10 @@ const teamsRoutes: FastifyPluginCallback = (
           lastEventAt: team.lastEventAt,
           durationMin,
           idleMin,
-          totalCost: costSummary.totalCostUsd,
-          totalInputTokens: costSummary.totalInputTokens,
-          totalOutputTokens: costSummary.totalOutputTokens,
-          sessionCount: costSummary.entryCount,
+          totalCost: 0,
+          totalInputTokens: 0,
+          totalOutputTokens: 0,
+          sessionCount: 0,
           pr: prDetail,
           recentEvents,
           outputTail,

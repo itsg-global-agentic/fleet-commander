@@ -13,7 +13,6 @@ import type {
   CIStatus,
   Event,
   Command,
-  CostEntry,
   UsageSnapshot,
   TeamDashboardRow,
   TeamStatus,
@@ -85,7 +84,7 @@ export interface PRInsert {
   title?: string | null;
   state?: string | null;
   ciStatus?: string | null;
-  mergeState?: string | null;
+  mergeStatus?: string | null;
   autoMerge?: boolean;
   ciFailCount?: number;
   checksJson?: string | null;
@@ -96,7 +95,7 @@ export interface PRUpdate {
   title?: string | null;
   state?: string | null;
   ciStatus?: string | null;
-  mergeState?: string | null;
+  mergeStatus?: string | null;
   autoMerge?: boolean;
   ciFailCount?: number;
   checksJson?: string | null;
@@ -107,29 +106,6 @@ export interface CommandInsert {
   teamId: number;
   targetAgent?: string | null;
   message: string;
-}
-
-export interface CostInsert {
-  teamId: number;
-  sessionId?: string | null;
-  inputTokens?: number;
-  outputTokens?: number;
-  costUsd?: number;
-}
-
-export interface CostSummary {
-  totalCostUsd: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  entryCount: number;
-}
-
-export interface CostByDay {
-  day: string;
-  totalCostUsd: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  entryCount: number;
 }
 
 export interface UsageInsert {
@@ -264,37 +240,38 @@ export class FleetDatabase {
    * Migrate an existing v1 database to v2 (add projects table, project_id to teams).
    */
   private migrateToV2(): void {
-    this.db.transaction(() => {
-      // Add projects table
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS projects (
-          id              INTEGER PRIMARY KEY AUTOINCREMENT,
-          name            TEXT NOT NULL,
-          repo_path       TEXT NOT NULL UNIQUE,
-          github_repo     TEXT,
-          status          TEXT NOT NULL DEFAULT 'active',
-          hooks_installed INTEGER NOT NULL DEFAULT 0,
-          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-          updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
-      `);
+    // DDL is auto-committed in SQLite, so run statements sequentially
+    // without a transaction wrapper (db.exec inside db.transaction can throw).
 
-      // Add project_id column to teams if it doesn't exist
-      const cols = this.db.prepare("PRAGMA table_info(teams)").all() as Array<{ name: string }>;
-      if (!cols.some(c => c.name === 'project_id')) {
-        this.db.exec('ALTER TABLE teams ADD COLUMN project_id INTEGER REFERENCES projects(id)');
-      }
+    // Add projects table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT NOT NULL,
+        repo_path       TEXT NOT NULL UNIQUE,
+        github_repo     TEXT,
+        status          TEXT NOT NULL DEFAULT 'active',
+        hooks_installed INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+    `);
 
-      // Add index on project_id
-      this.db.exec('CREATE INDEX IF NOT EXISTS idx_teams_project ON teams(project_id)');
+    // Add project_id column to teams if it doesn't exist
+    const cols = this.db.prepare("PRAGMA table_info(teams)").all() as Array<{ name: string }>;
+    if (!cols.some(c => c.name === 'project_id')) {
+      this.db.exec('ALTER TABLE teams ADD COLUMN project_id INTEGER REFERENCES projects(id)');
+    }
 
-      // Drop and recreate the view to include project info
-      this.db.exec('DROP VIEW IF EXISTS v_team_dashboard');
+    // Add index on project_id
+    this.db.exec('CREATE INDEX IF NOT EXISTS idx_teams_project ON teams(project_id)');
 
-      // Insert version 2
-      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (2)');
-    })();
+    // Drop and recreate the view to include project info
+    this.db.exec('DROP VIEW IF EXISTS v_team_dashboard');
+
+    // Insert version 2
+    this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (2)');
   }
 
   /**
@@ -375,7 +352,7 @@ export class FleetDatabase {
     sql += ' ORDER BY created_at DESC';
 
     const stmt = this.db.prepare(sql);
-    const rows = stmt.all(params) as Record<string, unknown>[];
+    const rows = (Object.keys(params).length > 0 ? stmt.all(params) : stmt.all()) as Record<string, unknown>[];
     return rows.map((r) => this.mapProjectRow(r));
   }
 
@@ -513,7 +490,7 @@ export class FleetDatabase {
     sql += ' ORDER BY created_at DESC';
 
     const stmt = this.db.prepare(sql);
-    const rows = stmt.all(params) as Record<string, unknown>[];
+    const rows = (Object.keys(params).length > 0 ? stmt.all(params) : stmt.all()) as Record<string, unknown>[];
     return rows.map((r) => this.mapTeamRow(r));
   }
 
@@ -684,7 +661,7 @@ export class FleetDatabase {
     }
 
     const stmt = this.db.prepare(sql);
-    const rows = stmt.all(params) as Record<string, unknown>[];
+    const rows = (Object.keys(params).length > 0 ? stmt.all(params) : stmt.all()) as Record<string, unknown>[];
     return rows.map((r) => this.mapEventRow(r));
   }
 
@@ -704,7 +681,7 @@ export class FleetDatabase {
       title: data.title ?? null,
       state: data.state ?? null,
       ciStatus: data.ciStatus ?? null,
-      mergeState: data.mergeState ?? null,
+      mergeState: data.mergeStatus ?? null,
       autoMerge: data.autoMerge ? 1 : 0,
       ciFailCount: data.ciFailCount ?? 0,
       checksJson: data.checksJson ?? null,
@@ -745,9 +722,9 @@ export class FleetDatabase {
       setClauses.push('ci_status = @ciStatus');
       params.ciStatus = fields.ciStatus;
     }
-    if (fields.mergeState !== undefined) {
-      setClauses.push('merge_state = @mergeState');
-      params.mergeState = fields.mergeState;
+    if (fields.mergeStatus !== undefined) {
+      setClauses.push('merge_state = @mergeStatus');
+      params.mergeStatus = fields.mergeStatus;
     }
     if (fields.autoMerge !== undefined) {
       setClauses.push('auto_merge = @autoMerge');
@@ -813,140 +790,6 @@ export class FleetDatabase {
 
     const row = this.db.prepare('SELECT * FROM commands WHERE id = ?').get(id) as Record<string, unknown> | undefined;
     return row ? this.mapCommandRow(row) : undefined;
-  }
-
-  // -------------------------------------------------------------------------
-  // Cost Entries
-  // -------------------------------------------------------------------------
-
-  insertCostEntry(data: CostInsert): CostEntry {
-    const stmt = this.db.prepare(`
-      INSERT INTO cost_entries (team_id, session_id, input_tokens, output_tokens, cost_usd)
-      VALUES (@teamId, @sessionId, @inputTokens, @outputTokens, @costUsd)
-    `);
-
-    const info = stmt.run({
-      teamId: data.teamId,
-      sessionId: data.sessionId ?? null,
-      inputTokens: data.inputTokens ?? 0,
-      outputTokens: data.outputTokens ?? 0,
-      costUsd: data.costUsd ?? 0,
-    });
-
-    const row = this.db.prepare('SELECT * FROM cost_entries WHERE id = ?').get(
-      Number(info.lastInsertRowid)
-    ) as Record<string, unknown>;
-    return this.mapCostRow(row);
-  }
-
-  getCostByTeam(teamId: number): CostSummary {
-    const stmt = this.db.prepare(`
-      SELECT
-        COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
-        COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
-        COUNT(*) AS entry_count
-      FROM cost_entries
-      WHERE team_id = ?
-    `);
-
-    const row = stmt.get(teamId) as Record<string, unknown>;
-    return {
-      totalCostUsd: row.total_cost_usd as number,
-      totalInputTokens: row.total_input_tokens as number,
-      totalOutputTokens: row.total_output_tokens as number,
-      entryCount: row.entry_count as number,
-    };
-  }
-
-  getCostSummary(): CostSummary {
-    const stmt = this.db.prepare(`
-      SELECT
-        COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
-        COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
-        COUNT(*) AS entry_count
-      FROM cost_entries
-    `);
-
-    const row = stmt.get() as Record<string, unknown>;
-    return {
-      totalCostUsd: row.total_cost_usd as number,
-      totalInputTokens: row.total_input_tokens as number,
-      totalOutputTokens: row.total_output_tokens as number,
-      entryCount: row.entry_count as number,
-    };
-  }
-
-  getCostByDay(): CostByDay[] {
-    const stmt = this.db.prepare(`
-      SELECT
-        date(recorded_at) AS day,
-        COALESCE(SUM(cost_usd), 0) AS total_cost_usd,
-        COALESCE(SUM(input_tokens), 0) AS total_input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS total_output_tokens,
-        COUNT(*) AS entry_count
-      FROM cost_entries
-      GROUP BY date(recorded_at)
-      ORDER BY day DESC
-    `);
-
-    const rows = stmt.all() as Record<string, unknown>[];
-    return rows.map((r) => ({
-      day: r.day as string,
-      totalCostUsd: r.total_cost_usd as number,
-      totalInputTokens: r.total_input_tokens as number,
-      totalOutputTokens: r.total_output_tokens as number,
-      entryCount: r.entry_count as number,
-    }));
-  }
-
-  /**
-   * Get cost summary broken down by team (all teams).
-   * Includes team metadata (issue number, title, status, duration, session count).
-   */
-  getCostByTeamBreakdown(): Array<CostSummary & {
-    teamId: number;
-    worktreeName: string;
-    issueNumber: number;
-    issueTitle: string | null;
-    status: TeamStatus;
-    sessionCount: number;
-    durationMin: number;
-  }> {
-    const stmt = this.db.prepare(`
-      SELECT
-        c.team_id,
-        t.worktree_name,
-        t.issue_number,
-        t.issue_title,
-        t.status,
-        COUNT(DISTINCT c.session_id) AS session_count,
-        ROUND((julianday('now') - julianday(t.launched_at)) * 24 * 60, 0) AS duration_min,
-        COALESCE(SUM(c.cost_usd), 0) AS total_cost_usd,
-        COALESCE(SUM(c.input_tokens), 0) AS total_input_tokens,
-        COALESCE(SUM(c.output_tokens), 0) AS total_output_tokens,
-        COUNT(*) AS entry_count
-      FROM cost_entries c
-      JOIN teams t ON t.id = c.team_id
-      GROUP BY c.team_id
-      ORDER BY total_cost_usd DESC
-    `);
-
-    const rows = stmt.all() as Record<string, unknown>[];
-    return rows.map((r) => ({
-      teamId: r.team_id as number,
-      worktreeName: r.worktree_name as string,
-      issueNumber: r.issue_number as number,
-      issueTitle: r.issue_title as string | null,
-      status: r.status as TeamStatus,
-      sessionCount: r.session_count as number,
-      durationMin: r.duration_min as number,
-      totalCostUsd: r.total_cost_usd as number,
-      totalInputTokens: r.total_input_tokens as number,
-      totalOutputTokens: r.total_output_tokens as number,
-      entryCount: r.entry_count as number,
-    }));
   }
 
   // -------------------------------------------------------------------------
@@ -1129,7 +972,6 @@ export class FleetDatabase {
       pid: row.pid as number | null,
       sessionId: row.session_id as string | null,
       worktreeName: row.worktree_name as string,
-      worktreePath: null, // not stored in v1 schema; reserved for future use
       branchName: row.branch_name as string | null,
       prNumber: row.pr_number as number | null,
       launchedAt: (row.launched_at as string | null) ?? null,
@@ -1191,18 +1033,6 @@ export class FleetDatabase {
       sonnetPercent: row.sonnet_percent as number,
       extraPercent: row.extra_percent as number,
       rawOutput: row.raw_output as string | null,
-      recordedAt: row.recorded_at as string,
-    };
-  }
-
-  private mapCostRow(row: Record<string, unknown>): CostEntry {
-    return {
-      id: row.id as number,
-      teamId: row.team_id as number,
-      sessionId: row.session_id as string | null,
-      inputTokens: row.input_tokens as number,
-      outputTokens: row.output_tokens as number,
-      costUsd: row.cost_usd as number,
       recordedAt: row.recorded_at as string,
     };
   }

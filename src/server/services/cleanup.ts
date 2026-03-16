@@ -146,38 +146,6 @@ export function getCleanupPreview(projectId: number): CleanupPreview {
     // git command failed — skip branch check for project branches
   }
 
-  try {
-    // Also check legacy kea-* pattern
-    const keaOutput = execSync(
-      `git -C "${repoPath}" branch --list "worktree-kea-*"`,
-      { encoding: 'utf-8', stdio: 'pipe', timeout: 10000 },
-    );
-
-    for (const rawLine of keaOutput.split('\n')) {
-      const branch = rawLine.replace(/^[\s*]+/, '').trim();
-      if (!branch) continue;
-
-      const worktreeName = branch.slice('worktree-'.length);
-      const worktreeExists = fs.existsSync(path.join(worktreeDir, worktreeName));
-      if (!worktreeExists) {
-        // Avoid duplicates (if slug is already "kea")
-        const alreadyListed = items.some(
-          (it) => it.type === 'stale_branch' && it.name === branch,
-        );
-        if (!alreadyListed) {
-          items.push({
-            type: 'stale_branch',
-            name: branch,
-            path: branch,
-            reason: 'Legacy branch without worktree',
-          });
-        }
-      }
-    }
-  } catch {
-    // git command failed — skip legacy branch check
-  }
-
   return { projectId, projectName: project.name, items };
 }
 

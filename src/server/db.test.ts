@@ -37,13 +37,13 @@ describe('Database initialization', () => {
     expect(result[0].journal_mode).toBe('wal');
   });
 
-  it('has schema version 1', () => {
-    expect(db.getSchemaVersion()).toBe(1);
+  it('has schema version 2', () => {
+    expect(db.getSchemaVersion()).toBe(2);
   });
 
   it('is idempotent — running initSchema twice does not throw', () => {
     expect(() => db.initSchema()).not.toThrow();
-    expect(db.getSchemaVersion()).toBe(1);
+    expect(db.getSchemaVersion()).toBe(2);
   });
 });
 
@@ -287,57 +287,6 @@ describe('Commands CRUD', () => {
   });
 });
 
-describe('Cost Entries', () => {
-  let teamId: number;
-
-  beforeEach(() => {
-    const team = db.insertTeam({ issueNumber: 800, worktreeName: 'kea-800' });
-    teamId = team.id;
-  });
-
-  it('inserts cost entries and gets summary by team', () => {
-    db.insertCostEntry({
-      teamId,
-      sessionId: 'sess-1',
-      inputTokens: 1000,
-      outputTokens: 500,
-      costUsd: 0.05,
-    });
-    db.insertCostEntry({
-      teamId,
-      sessionId: 'sess-2',
-      inputTokens: 2000,
-      outputTokens: 1000,
-      costUsd: 0.10,
-    });
-
-    const summary = db.getCostByTeam(teamId);
-    expect(summary.totalCostUsd).toBeCloseTo(0.15, 5);
-    expect(summary.totalInputTokens).toBe(3000);
-    expect(summary.totalOutputTokens).toBe(1500);
-    expect(summary.entryCount).toBe(2);
-  });
-
-  it('getCostSummary returns global totals', () => {
-    const team2 = db.insertTeam({ issueNumber: 801, worktreeName: 'kea-801' });
-    db.insertCostEntry({ teamId, costUsd: 1.0 });
-    db.insertCostEntry({ teamId: team2.id, costUsd: 2.0 });
-
-    const summary = db.getCostSummary();
-    expect(summary.totalCostUsd).toBeCloseTo(3.0, 5);
-    expect(summary.entryCount).toBe(2);
-  });
-
-  it('getCostByDay groups by date', () => {
-    db.insertCostEntry({ teamId, costUsd: 0.5 });
-    db.insertCostEntry({ teamId, costUsd: 0.3 });
-
-    const byDay = db.getCostByDay();
-    expect(byDay.length).toBeGreaterThanOrEqual(1);
-    expect(byDay[0].totalCostUsd).toBeCloseTo(0.8, 5);
-  });
-});
-
 describe('Dashboard View', () => {
   it('returns joined team dashboard data', () => {
     const team = db.insertTeam({
@@ -347,9 +296,6 @@ describe('Dashboard View', () => {
       status: 'running',
       launchedAt: new Date().toISOString(),
     });
-
-    // Add a cost entry
-    db.insertCostEntry({ teamId: team.id, costUsd: 0.25 });
 
     // Add an event
     db.insertEvent({ teamId: team.id, eventType: 'session_start' });
@@ -366,7 +312,7 @@ describe('Dashboard View', () => {
     expect(row!.issueNumber).toBe(900);
     expect(row!.issueTitle).toBe('Implement feature X');
     expect(row!.status).toBe('running');
-    expect(row!.totalCost).toBeCloseTo(0.25, 5);
+    expect(row!.totalCost).toBe(0);
     expect(row!.prState).toBe('open');
     expect(row!.ciStatus).toBe('passing');
   });

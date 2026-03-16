@@ -482,6 +482,12 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
+        // Mark queued teams as failed before deletion
+        const queuedTeams = db.getQueuedTeamsByProject(projectId);
+        for (const t of queuedTeams) {
+          db.updateTeam(t.id, { status: 'failed' });
+        }
+
         // Stop all active teams for this project
         const activeTeams = db.getTeams({ projectId }).filter((t) =>
           ['launching', 'running', 'idle', 'stuck'].includes(t.status),

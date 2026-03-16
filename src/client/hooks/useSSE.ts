@@ -43,7 +43,7 @@ export function useSSE(options: UseSSEOptions = {}): UseSSEResult {
     // We listen for each known named event type AND onmessage as a fallback.
     const namedEventTypes = [
       'snapshot', 'team_status_changed', 'team_event', 'team_output',
-      'pr_updated', 'team_launched', 'team_stopped', 'cost_updated',
+      'pr_updated', 'team_launched', 'team_stopped',
       'usage_updated', 'project_added', 'project_updated', 'project_removed',
       'project_cleanup', 'heartbeat',
     ];

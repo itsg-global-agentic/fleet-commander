@@ -145,7 +145,6 @@ export function processEvent(
   if (team.status === 'idle' || team.status === 'stuck') {
     db.updateTeam(teamId, {
       status: 'running',
-      updatedAt: nowIso,
     });
   }
 
@@ -156,7 +155,6 @@ export function processEvent(
     if (evt === 'session_start' || evt === 'subagent_start') {
       db.updateTeam(teamId, {
         status: 'running',
-        updatedAt: nowIso,
       });
     }
   }
@@ -205,7 +203,6 @@ export function processEvent(
   sse.broadcast('team_event', {
     event_id: eventId,
     team_id: teamId,
-    team: payload.team,
     event_type: eventType,
     session_id: payload.session_id || null,
     agent_name: payload.agent_type || null,

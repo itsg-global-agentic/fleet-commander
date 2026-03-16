@@ -71,17 +71,6 @@ function seedPR(prNumber: number, teamId: number) {
   });
 }
 
-/** Seed a cost entry directly in the DB. */
-function seedCost(teamId: number, costUsd: number) {
-  const db = getDatabase();
-  return db.insertCostEntry({
-    teamId,
-    costUsd,
-    inputTokens: 1000,
-    outputTokens: 500,
-    sessionId: `sess-${Date.now()}`,
-  });
-}
 
 // ---------------------------------------------------------------------------
 // Server lifecycle
@@ -210,9 +199,8 @@ describe('Events API', () => {
     const body = res.json();
     expect(body.team_id).toBeDefined();
     expect(body.processed).toBe(true);
-    // event_id is an Event object (FleetDatabase.insertEvent returns Event, not number)
     expect(body.event_id).toBeDefined();
-    expect(body.event_id.id).toBeGreaterThan(0);
+    expect(body.event_id).toBeGreaterThan(0);
   });
 
   it('GET /api/events returns stored events', async () => {
@@ -345,8 +333,7 @@ describe('Event -> DB verification', () => {
     expect(postRes.statusCode).toBe(200);
     const postBody = postRes.json();
     expect(postBody.processed).toBe(true);
-    // event_id is an Event object (FleetDatabase.insertEvent returns Event)
-    const eventId = postBody.event_id.id;
+    const eventId = postBody.event_id;
 
     // GET events filtered by team_id for the new team
     const getRes = await server.inject({
@@ -379,8 +366,7 @@ describe('Event -> DB verification', () => {
         },
       });
       expect(res.statusCode).toBe(200);
-      // event_id is an Event object; extract numeric id
-      ids.push(res.json().event_id.id);
+      ids.push(res.json().event_id);
     }
 
     // IDs should be increasing
@@ -469,53 +455,6 @@ describe('PRs API (read-only)', () => {
   });
 });
 
-// =============================================================================
-// Costs: GET
-// =============================================================================
-
-describe('Costs API', () => {
-  it('GET /api/costs returns cost summary', async () => {
-    // Seed some cost data
-    seedCost(1, 0.05);
-    seedCost(1, 0.10);
-
-    const res = await server.inject({ method: 'GET', url: '/api/costs' });
-
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.totalCostUsd).toBeGreaterThan(0);
-    expect(body.entryCount).toBeGreaterThan(0);
-    expect(body.totalInputTokens).toBeGreaterThan(0);
-    expect(body.totalOutputTokens).toBeGreaterThan(0);
-  });
-
-  it('GET /api/costs/by-team returns per-team breakdown', async () => {
-    const res = await server.inject({
-      method: 'GET',
-      url: '/api/costs/by-team',
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.count).toBeGreaterThan(0);
-    expect(Array.isArray(body.teams)).toBe(true);
-    expect(body.teams[0].teamId).toBeDefined();
-    expect(body.teams[0].totalCostUsd).toBeGreaterThan(0);
-  });
-
-  it('GET /api/costs/by-day returns daily aggregation', async () => {
-    const res = await server.inject({
-      method: 'GET',
-      url: '/api/costs/by-day',
-    });
-
-    expect(res.statusCode).toBe(200);
-    const body = res.json();
-    expect(body.count).toBeGreaterThan(0);
-    expect(Array.isArray(body.days)).toBe(true);
-    expect(body.days[0].day).toBeDefined();
-  });
-});
 
 // =============================================================================
 // System: GET diagnostics and status

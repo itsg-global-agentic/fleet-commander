@@ -835,6 +835,9 @@ export class TeamManager {
 
       for (const team of toDequeue) {
         console.log(`[TeamManager] Dequeuing team ${team.id} (${team.worktreeName})`);
+        // Mark as launching BEFORE releasing the guard, so concurrent calls
+        // see this team as active (counted towards the active limit).
+        db.updateTeam(team.id, { status: 'launching' });
         try {
           await this.launchQueued(team);
         } catch (err: unknown) {

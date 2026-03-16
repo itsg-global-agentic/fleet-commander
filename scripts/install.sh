@@ -31,6 +31,12 @@ if [ -z "$TARGET" ]; then
   exit 1
 fi
 
+# Verify TARGET exists before attempting to cd into it
+if [ ! -d "$TARGET" ]; then
+  echo "Error: Target directory does not exist: $TARGET"
+  exit 1
+fi
+
 # Normalise path (resolve symlinks, remove trailing slash)
 TARGET="$(cd "$TARGET" && pwd)"
 

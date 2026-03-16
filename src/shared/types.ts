@@ -64,7 +64,6 @@ export interface Team {
   pid: number | null;
   sessionId: string | null;
   worktreeName: string;
-  worktreePath: string | null;
   branchName: string | null;
   prNumber: number | null;
   launchedAt: string | null;
@@ -109,17 +108,6 @@ export interface Command {
   status: 'pending' | 'delivered' | 'failed';
   createdAt: string;
   deliveredAt: string | null;
-}
-
-/** A cost entry for tracking token usage and costs per session */
-export interface CostEntry {
-  id: number;
-  teamId: number;
-  sessionId: string | null;
-  inputTokens: number;
-  outputTokens: number;
-  costUsd: number;
-  recordedAt: string;
 }
 
 /** A usage snapshot for tracking usage percentages */
@@ -208,7 +196,6 @@ export interface TeamDetail {
   pid: number | null;
   sessionId: string | null;
   worktreeName: string;
-  worktreePath: string | null;
   branchName: string | null;
   prNumber: number | null;
   launchedAt: string | null;

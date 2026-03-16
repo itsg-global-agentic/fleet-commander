@@ -6,4 +6,4 @@
 
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 input=$(cat)
-echo "$input" | "$HOOK_DIR/send_event.sh" "tool_use"
+echo "$input" | "$HOOK_DIR/send_event.sh" "tool_use" &

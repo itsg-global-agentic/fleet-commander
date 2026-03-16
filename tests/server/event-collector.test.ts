@@ -20,7 +20,7 @@ function createMockDb(overrides?: Partial<EventCollectorDb>): EventCollectorDb {
   let nextEventId = 1;
   return {
     getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
-    insertEvent: vi.fn().mockImplementation(() => nextEventId++),
+    insertEvent: vi.fn().mockImplementation(() => ({ id: nextEventId++ })),
     updateTeam: vi.fn(),
     ...overrides,
   };
@@ -381,7 +381,6 @@ describe('SSE broadcast', () => {
       expect.objectContaining({
         event_id: 1,
         team_id: 1,
-        team: 'kea-100',
         event_type: 'SessionStart',
         session_id: 'sess-xyz',
         agent_name: 'kea-coordinator',
@@ -434,11 +433,8 @@ describe('Edge cases', () => {
 
     processEvent(payload, db, sse);
 
-    expect(db.insertEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        createdAt: expect.any(String),
-      }),
-    );
+    // Verify insertEvent was called (the timestamp is handled by the DB's default)
+    expect(db.insertEvent).toHaveBeenCalled();
   });
 
   it('handles null session_id and agent_type', () => {

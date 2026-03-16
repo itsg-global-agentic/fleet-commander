@@ -103,19 +103,6 @@ CREATE TABLE IF NOT EXISTS commands (
 );
 
 -- ---------------------------------------------------------------------------
--- COST ENTRIES — token usage and cost tracking per session
--- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS cost_entries (
-  id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  team_id         INTEGER NOT NULL REFERENCES teams(id),
-  session_id      TEXT,
-  input_tokens    INTEGER NOT NULL DEFAULT 0,
-  output_tokens   INTEGER NOT NULL DEFAULT 0,
-  cost_usd        REAL NOT NULL DEFAULT 0.0,
-  recorded_at     TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
--- ---------------------------------------------------------------------------
 -- VIEW: Dashboard overview (one row per team)
 -- ---------------------------------------------------------------------------
 DROP VIEW IF EXISTS v_team_dashboard;
@@ -134,9 +121,8 @@ SELECT
   t.last_event_at,
   ROUND((julianday('now') - julianday(t.launched_at)) * 24 * 60, 0) AS duration_min,
   ROUND((julianday('now') - julianday(t.last_event_at)) * 24 * 60, 1) AS idle_min,
-  COALESCE(SUM(c.cost_usd), 0) AS total_cost,
-  COUNT(DISTINCT c.session_id) AS session_count,
-  (SELECT COUNT(*) FROM events e WHERE e.team_id = t.id) AS event_count,
+  0 AS total_cost,
+  0 AS session_count,
   pr.state AS pr_state,
   pr.ci_status,
   pr.merge_state AS merge_status,
@@ -144,9 +130,7 @@ SELECT
   t.updated_at
 FROM teams t
 LEFT JOIN projects p ON p.id = t.project_id
-LEFT JOIN cost_entries c ON c.team_id = t.id
-LEFT JOIN pull_requests pr ON pr.team_id = t.id
-GROUP BY t.id;
+LEFT JOIN pull_requests pr ON pr.team_id = t.id;
 
 -- ---------------------------------------------------------------------------
 -- USAGE SNAPSHOTS — usage percentage tracking (replaces cost tracking)

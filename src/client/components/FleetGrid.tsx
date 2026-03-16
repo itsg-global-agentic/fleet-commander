@@ -7,7 +7,7 @@ interface FleetGridProps {
   onSelectTeam: (id: number) => void;
 }
 
-const COLUMNS = ['Status', 'Issue', 'Duration', 'Est. Cost', 'PR', 'Actions'] as const;
+const COLUMNS = ['Status', 'Issue', 'Duration', 'API Cost', 'PR', 'Actions'] as const;
 
 export function FleetGrid({ teams, selectedTeamId, onSelectTeam }: FleetGridProps) {
   return (

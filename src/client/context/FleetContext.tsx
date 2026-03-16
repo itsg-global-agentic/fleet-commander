@@ -45,9 +45,6 @@ export function FleetProvider({ children }: { children: ReactNode }) {
         console.log('[FleetContext] Teams loaded from SSE:', payload.teams.length, payload.teams.map(t => ({ id: t.id, status: t.status })));
         setAllTeams(payload.teams);
       }
-    } else if (type === 'cost_updated') {
-      // Cost event doesn't trigger a snapshot from the server — refresh manually.
-      fetchTeams();
     } else if (type === 'usage_updated') {
       // Usage data changed — refresh teams to pick up any related state changes.
       fetchTeams();

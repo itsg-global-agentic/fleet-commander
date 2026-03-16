@@ -262,7 +262,7 @@ export function TeamDetail() {
                     Duration: <span className="text-dark-text">{formatDuration(detail.durationMin)}</span>
                   </span>
                   <span className="text-dark-muted">
-                    Cost: <span className="text-dark-text font-mono">${(detail.totalCost ?? 0).toFixed(2)}</span>
+                    API Cost: <span className="text-dark-text font-mono">${(detail.totalCost ?? 0).toFixed(2)}</span>
                   </span>
                   <span className="text-dark-muted">
                     Sessions: <span className="text-dark-text">{detail.sessionCount ?? 0}</span>

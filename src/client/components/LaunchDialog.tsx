@@ -155,16 +155,19 @@ function LaunchLog({ teamId, issueNumber, onClose }: LaunchLogProps) {
   const onCloseRef = useRef(onClose);
   useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
 
-  // Auto-close 3 seconds after team reaches 'running'
+  // Status effect — only SETS the timer, never clears it
   useEffect(() => {
     if (teamStatus === 'running' && !autoCloseTimerRef.current) {
       autoCloseTimerRef.current = setTimeout(() => onCloseRef.current(), 3000);
     }
+  }, [teamStatus]);
 
+  // Unmount-only cleanup
+  useEffect(() => {
     return () => {
       if (autoCloseTimerRef.current) { clearTimeout(autoCloseTimerRef.current); autoCloseTimerRef.current = null; }
     };
-  }, [teamStatus]);
+  }, []);
 
   // Status indicator color
   const statusColor = (() => {
