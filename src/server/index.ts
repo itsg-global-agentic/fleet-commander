@@ -10,6 +10,10 @@ import issueRoutes from './routes/issues.js';
 import teamsRoutes from './routes/teams.js';
 import { sseBroker } from './services/sse-broker.js';
 import { getIssueFetcher } from './services/issue-fetcher.js';
+import { stuckDetector } from './services/stuck-detector.js';
+import { githubPoller } from './services/github-poller.js';
+import { errorHandler } from './middleware/error-handler.js';
+import { closeDatabase } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -17,7 +21,12 @@ const __dirname = path.dirname(__filename);
 const PORT = parseInt(process.env['PORT'] ?? '4680', 10);
 
 async function main() {
-  const server = Fastify({ logger: true });
+  const server = Fastify({
+    logger: { level: process.env['LOG_LEVEL'] || 'info' },
+  });
+
+  // Centralized error handler
+  server.setErrorHandler(errorHandler);
 
   await server.register(cors, { origin: true });
 
@@ -28,14 +37,8 @@ async function main() {
 
   // API routes
   await server.register(eventsRoutes);
-
-  // SSE streaming endpoint
   await server.register(streamRoutes);
-
-  // Issue hierarchy routes
   await server.register(issueRoutes);
-
-  // Team management routes
   await server.register(teamsRoutes);
 
   // Static file serving for production builds
@@ -47,7 +50,6 @@ async function main() {
       decorateReply: false,
     });
 
-    // SPA fallback - serve index.html for non-API routes
     server.setNotFoundHandler((request, reply) => {
       if (request.url.startsWith('/api/')) {
         reply.status(404).send({ error: 'Not found', code: 'NOT_FOUND' });
@@ -57,23 +59,35 @@ async function main() {
     });
   }
 
-  // Start services
+  // Start all services
   sseBroker.start();
-  server.log.info('SSE broker heartbeat started');
-
   const issueFetcher = getIssueFetcher();
   issueFetcher.start();
-  server.log.info('Issue fetcher polling started');
+  stuckDetector.start();
+  githubPoller.start();
+  server.log.info('All services started (SSE, issues, stuck detector, GitHub poller)');
 
   // Graceful shutdown
   server.addHook('onClose', async () => {
-    sseBroker.stop();
+    githubPoller.stop();
+    stuckDetector.stop();
     issueFetcher.stop();
-    server.log.info('Services stopped');
+    sseBroker.stop();
+    closeDatabase();
+    server.log.info('All services stopped, database closed');
   });
 
   await server.listen({ port: PORT, host: '0.0.0.0' });
   server.log.info(`Fleet Commander server listening on port ${PORT}`);
+
+  // Signal handlers for graceful shutdown
+  const shutdown = async (signal: string) => {
+    server.log.info(`Received ${signal}, shutting down...`);
+    await server.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 main().catch((err) => {
