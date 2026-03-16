@@ -7,6 +7,7 @@ import { fileURLToPath } from 'url';
 import eventsRoutes from './routes/events.js';
 import streamRoutes from './routes/stream.js';
 import issueRoutes from './routes/issues.js';
+import teamsRoutes from './routes/teams.js';
 import { sseBroker } from './services/sse-broker.js';
 import { getIssueFetcher } from './services/issue-fetcher.js';
 
@@ -33,6 +34,9 @@ async function main() {
 
   // Issue hierarchy routes
   await server.register(issueRoutes);
+
+  // Team management routes
+  await server.register(teamsRoutes);
 
   // Static file serving for production builds
   const clientDistPath = path.resolve(__dirname, '..', 'client');
