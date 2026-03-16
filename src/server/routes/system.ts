@@ -11,6 +11,8 @@ import type {
   FastifyRequest,
   FastifyReply,
 } from 'fastify';
+import fs from 'fs';
+import path from 'path';
 import { getDatabase } from '../db.js';
 import { sseBroker } from '../services/sse-broker.js';
 import config from '../config.js';
@@ -180,6 +182,54 @@ const systemRoutes: FastifyPluginCallback = (
         });
       } catch (err: unknown) {
         _request.log.error(err, 'Failed to get server status');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // GET /api/system/browse-dirs — list subdirectories for path picker
+  // -------------------------------------------------------------------------
+  fastify.get(
+    '/api/system/browse-dirs',
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const { path: dirPath } = request.query as { path?: string };
+        const targetPath = dirPath ||
+          (process.platform === 'win32' ? 'C:/Git' : (process.env['HOME'] || '/home') + '/projects');
+
+        let entries: fs.Dirent[];
+        try {
+          entries = fs.readdirSync(targetPath, { withFileTypes: true });
+        } catch {
+          return reply.code(200).send({ parentPath: targetPath.replace(/\\/g, '/'), dirs: [] });
+        }
+
+        const dirs = entries
+          .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+          .map((e) => {
+            const fullPath = path.join(targetPath, e.name).replace(/\\/g, '/');
+            let isGitRepo = false;
+            try {
+              isGitRepo = fs.existsSync(path.join(fullPath, '.git'));
+            } catch {
+              // ignore permission errors
+            }
+            return { name: e.name, path: fullPath, isGitRepo };
+          })
+          .sort((a, b) =>
+            (b.isGitRepo ? 1 : 0) - (a.isGitRepo ? 1 : 0) || a.name.localeCompare(b.name),
+          );
+
+        return reply.code(200).send({
+          parentPath: targetPath.replace(/\\/g, '/'),
+          dirs,
+        });
+      } catch (err: unknown) {
+        request.log.error(err, 'Failed to browse directories');
         return reply.code(500).send({
           error: 'Internal Server Error',
           message: err instanceof Error ? err.message : String(err),

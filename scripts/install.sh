@@ -132,9 +132,9 @@ if [ -z "$BASE_BRANCH" ]; then
 fi
 
 # Copy workflow template with placeholder replacement
-sed -e "s/{{PROJECT_NAME}}/$PROJECT_NAME/g" \
-    -e "s/{{project_slug}}/$project_slug/g" \
-    -e "s/{{BASE_BRANCH}}/$BASE_BRANCH/g" \
+sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
+    -e "s|{{project_slug}}|$project_slug|g" \
+    -e "s|{{BASE_BRANCH}}|$BASE_BRANCH|g" \
     "$FC_ROOT/templates/workflow.md" > "$PROMPTS_DIR/fleet-workflow.md"
 echo "  Installed workflow template to $PROMPTS_DIR/fleet-workflow.md"
 echo "    PROJECT_NAME=$PROJECT_NAME  project_slug=$project_slug  BASE_BRANCH=$BASE_BRANCH"

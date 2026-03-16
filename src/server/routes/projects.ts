@@ -34,6 +34,7 @@ interface UpdateProjectBody {
   name?: string;
   status?: ProjectStatus;
   githubRepo?: string | null;
+  hooksInstalled?: boolean;
 }
 
 interface ProjectIdParams {
@@ -358,7 +359,7 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const { name, status, githubRepo } = request.body || {};
+        const { name, status, githubRepo, hooksInstalled } = request.body || {};
 
         // Validate status if provided
         if (status !== undefined) {
@@ -383,6 +384,7 @@ const projectsRoutes: FastifyPluginCallback = (
           name: name?.trim(),
           status,
           githubRepo,
+          hooksInstalled,
         });
 
         // Broadcast SSE event
