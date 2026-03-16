@@ -1,12 +1,39 @@
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { FleetProvider } from './context/FleetContext';
+import { TopBar } from './components/TopBar';
+import { SideNav } from './components/SideNav';
+import { StatusBar } from './components/StatusBar';
+import { FleetGridView } from './views/FleetGridView';
+import { IssueTreeView } from './views/IssueTreeView';
+import { CostViewPage } from './views/CostViewPage';
+
 export function App() {
   return (
-    <div className="min-h-screen bg-dark-base text-dark-text flex flex-col items-center justify-center">
-      <h1 className="text-4xl font-bold text-dark-accent mb-4">
-        Fleet Commander
-      </h1>
-      <p className="text-dark-muted text-lg">
-        Agent team orchestration dashboard
-      </p>
-    </div>
+    <BrowserRouter>
+      <FleetProvider>
+        <div className="h-screen w-screen flex flex-col bg-dark-base text-dark-text overflow-hidden">
+          {/* Top bar — fixed 48px */}
+          <TopBar />
+
+          {/* Middle section: SideNav + main content */}
+          <div className="flex flex-1 min-h-0">
+            {/* Side navigation — fixed 56px wide */}
+            <SideNav />
+
+            {/* Main content area — fills remaining space */}
+            <main className="flex-1 min-w-0 overflow-auto">
+              <Routes>
+                <Route path="/" element={<FleetGridView />} />
+                <Route path="/issues" element={<IssueTreeView />} />
+                <Route path="/costs" element={<CostViewPage />} />
+              </Routes>
+            </main>
+          </div>
+
+          {/* Status bar — fixed 24px */}
+          <StatusBar />
+        </div>
+      </FleetProvider>
+    </BrowserRouter>
   );
 }
