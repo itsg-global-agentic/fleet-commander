@@ -3,3 +3,4 @@ dist/
 fleet.db
 .env
 *.log
+.claude/worktrees/
