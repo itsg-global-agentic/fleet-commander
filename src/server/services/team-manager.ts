@@ -246,6 +246,7 @@ export class TeamManager {
     // normal ANSI output so the user can read the Claude Code UI.
     if (isHeadless) {
       args.push('--output-format', 'stream-json');  // Structured NDJSON output
+      args.push('--verbose');  // Required when using stream-json with prompt (--print mode)
     }
 
     if (config.skipPermissions) {
@@ -480,6 +481,7 @@ export class TeamManager {
     const args: string[] = [];
     args.push('--resume', '--worktree', team.worktreeName);
     args.push('--output-format', 'stream-json');  // Structured NDJSON output
+    args.push('--verbose');  // Required when using stream-json with prompt (--print mode)
 
     if (config.skipPermissions) {
       args.push('--dangerously-skip-permissions');

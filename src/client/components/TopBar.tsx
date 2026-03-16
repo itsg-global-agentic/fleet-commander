@@ -143,7 +143,12 @@ export function TopBar() {
 
           {/* Launch Team button */}
           <button
-            onClick={() => setLaunchOpen(true)}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              setLaunchOpen(true);
+            }}
             className="ml-2 px-3 py-1 text-xs font-medium rounded border border-dark-accent/40 text-dark-accent hover:bg-dark-accent/10 transition-colors inline-flex items-center gap-1.5"
             title="Launch a new team"
           >
