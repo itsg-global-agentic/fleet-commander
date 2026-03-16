@@ -17,6 +17,7 @@ import path from 'path';
 import { getDatabase } from '../db.js';
 import { getTeamManager } from '../services/team-manager.js';
 import { getIssueFetcher } from '../services/issue-fetcher.js';
+import { cleanupProject } from '../services/cleanup.js';
 import { sseBroker } from '../services/sse-broker.js';
 import config from '../config.js';
 import type { ProjectStatus, InstallStatus } from '../../shared/types.js';
@@ -526,6 +527,54 @@ const projectsRoutes: FastifyPluginCallback = (
         return reply.code(200).send(teams);
       } catch (err: unknown) {
         request.log.error(err, 'Failed to get project teams');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // POST /api/projects/:id/cleanup — run cleanup for a project
+  // -------------------------------------------------------------------------
+  fastify.post(
+    '/api/projects/:id/cleanup',
+    async (
+      request: FastifyRequest<{ Params: ProjectIdParams }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const projectId = parseInt(request.params.id, 10);
+        if (isNaN(projectId) || projectId < 1) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: 'Invalid project ID',
+          });
+        }
+
+        const db = getDatabase();
+        const project = db.getProject(projectId);
+        if (!project) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: `Project ${projectId} not found`,
+          });
+        }
+
+        const result = await cleanupProject(projectId);
+
+        // Broadcast SSE event so dashboards refresh
+        sseBroker.broadcast('project_cleanup', {
+          project_id: projectId,
+          worktrees_removed: result.worktreesRemoved.length,
+          signal_files_removed: result.signalFilesRemoved.length,
+          zombies_fixed: result.zombiesFixed,
+        });
+
+        return reply.code(200).send(result);
+      } catch (err: unknown) {
+        request.log.error(err, 'Failed to clean up project');
         return reply.code(500).send({
           error: 'Internal Server Error',
           message: err instanceof Error ? err.message : String(err),

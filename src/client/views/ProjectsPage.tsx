@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { AddProjectDialog } from '../components/AddProjectDialog';
-import type { ProjectSummary, ProjectStatus } from '../../shared/types';
+import type { ProjectSummary, ProjectStatus, CleanupResult } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Status badge colors
@@ -22,6 +22,8 @@ export function ProjectsPage() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+  const [cleaningUp, setCleaningUp] = useState<number | null>(null);
+  const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(null);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -74,6 +76,23 @@ export function ProjectsPage() {
     setAddOpen(false);
     fetchProjects();
   }, [fetchProjects]);
+
+  const handleCleanup = useCallback(
+    async (project: ProjectSummary) => {
+      setCleaningUp(project.id);
+      setCleanupResult(null);
+      try {
+        const result = await api.post<CleanupResult>(`projects/${project.id}/cleanup`);
+        setCleanupResult(result);
+        await fetchProjects();
+      } catch {
+        // ignore — the modal won't open
+      } finally {
+        setCleaningUp(null);
+      }
+    },
+    [api, fetchProjects],
+  );
 
   // --- Render ---
 
@@ -185,6 +204,14 @@ export function ProjectsPage() {
                   {/* Right: actions */}
                   <div className="flex items-center gap-2 shrink-0">
                     <button
+                      onClick={() => handleCleanup(project)}
+                      disabled={cleaningUp === project.id}
+                      className="px-3 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted transition-colors disabled:opacity-50 disabled:cursor-wait"
+                      title="Clean up orphan worktrees, signal files, and zombie processes"
+                    >
+                      {cleaningUp === project.id ? 'Cleaning...' : 'Clean Up'}
+                    </button>
+                    <button
                       onClick={() => handleToggleStatus(project)}
                       className="px-3 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted transition-colors"
                     >
@@ -205,6 +232,79 @@ export function ProjectsPage() {
       </div>
 
       <AddProjectDialog open={addOpen} onClose={() => setAddOpen(false)} onAdded={handleAdded} />
+
+      {/* Cleanup result modal */}
+      {cleanupResult && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setCleanupResult(null)}
+        >
+          <div
+            className="bg-dark-surface border border-dark-border rounded-lg p-6 max-w-lg w-full mx-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 className="text-lg font-semibold text-dark-text mb-4">Cleanup Results</h2>
+            <div className="space-y-2 text-sm text-dark-muted">
+              {cleanupResult.worktreesRemoved.length > 0 && (
+                <p>
+                  <span className="text-dark-text font-medium">{cleanupResult.worktreesRemoved.length}</span> orphan worktree{cleanupResult.worktreesRemoved.length !== 1 ? 's' : ''} removed
+                  <span className="text-dark-muted/60 ml-1">({cleanupResult.worktreesRemoved.join(', ')})</span>
+                </p>
+              )}
+              {cleanupResult.staleDirsRemoved.length > 0 && (
+                <p>
+                  <span className="text-dark-text font-medium">{cleanupResult.staleDirsRemoved.length}</span> stale director{cleanupResult.staleDirsRemoved.length !== 1 ? 'ies' : 'y'} removed
+                </p>
+              )}
+              {cleanupResult.signalFilesRemoved.length > 0 && (
+                <p>
+                  <span className="text-dark-text font-medium">{cleanupResult.signalFilesRemoved.length}</span> signal file{cleanupResult.signalFilesRemoved.length !== 1 ? 's' : ''} cleaned
+                </p>
+              )}
+              {cleanupResult.branchesPruned.length > 0 && (
+                <p>
+                  <span className="text-dark-text font-medium">{cleanupResult.branchesPruned.length}</span> stale branch{cleanupResult.branchesPruned.length !== 1 ? 'es' : ''} pruned
+                  <span className="text-dark-muted/60 ml-1">({cleanupResult.branchesPruned.join(', ')})</span>
+                </p>
+              )}
+              {cleanupResult.zombiesFixed > 0 && (
+                <p>
+                  <span className="text-dark-text font-medium">{cleanupResult.zombiesFixed}</span> zombie process{cleanupResult.zombiesFixed !== 1 ? 'es' : ''} fixed
+                </p>
+              )}
+              {cleanupResult.staleTeamsCleaned > 0 && (
+                <p>
+                  <span className="text-dark-text font-medium">{cleanupResult.staleTeamsCleaned}</span> stale team record{cleanupResult.staleTeamsCleaned !== 1 ? 's' : ''} found ({'>'}7 days old)
+                </p>
+              )}
+              {cleanupResult.worktreesRemoved.length === 0 &&
+               cleanupResult.staleDirsRemoved.length === 0 &&
+               cleanupResult.signalFilesRemoved.length === 0 &&
+               cleanupResult.branchesPruned.length === 0 &&
+               cleanupResult.zombiesFixed === 0 &&
+               cleanupResult.staleTeamsCleaned === 0 && (
+                <p className="text-dark-muted/80">Nothing to clean up — project is already tidy.</p>
+              )}
+              {cleanupResult.errors.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-dark-border">
+                  <p className="text-[#F85149] font-medium mb-1">{cleanupResult.errors.length} error{cleanupResult.errors.length !== 1 ? 's' : ''}:</p>
+                  {cleanupResult.errors.map((err, i) => (
+                    <p key={i} className="text-xs text-[#F85149]/80 truncate" title={err}>{err}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="flex justify-end mt-5">
+              <button
+                onClick={() => setCleanupResult(null)}
+                className="px-4 py-1.5 text-sm font-medium rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

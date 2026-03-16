@@ -139,6 +139,21 @@ export interface UsageSnapshot {
 }
 
 // ---------------------------------------------------------------------------
+// Cleanup
+// ---------------------------------------------------------------------------
+
+/** Result of a project cleanup operation */
+export interface CleanupResult {
+  worktreesRemoved: string[];
+  signalFilesRemoved: string[];
+  staleDirsRemoved: string[];
+  branchesPruned: string[];
+  zombiesFixed: number;
+  staleTeamsCleaned: number;
+  errors: string[];
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard View (v_team_dashboard)
 // ---------------------------------------------------------------------------
 
