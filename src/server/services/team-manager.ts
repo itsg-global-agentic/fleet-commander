@@ -64,10 +64,16 @@ export class TeamManager {
     const worktreeRelPath = path.posix.join(config.worktreeDir, worktreeName);
     const worktreeAbsPath = path.join(project.repoPath, config.worktreeDir, worktreeName);
 
-    // Check if a team already exists and is active for this issue
+    // Check if a team already exists for this worktree name
     const existing = db.getTeamByWorktree(worktreeName);
-    if (existing && ['launching', 'running', 'idle', 'stuck'].includes(existing.status)) {
-      throw new Error(`Team ${worktreeName} is already active (status: ${existing.status})`);
+    let relaunchTeamId: number | null = null;
+
+    if (existing) {
+      if (['running', 'launching', 'idle', 'stuck', 'queued'].includes(existing.status)) {
+        throw new Error(`Team already active for issue ${issueNumber} (status: ${existing.status})`);
+      }
+      // Terminal state (done/failed) — reuse the existing team record
+      relaunchTeamId = existing.id;
     }
 
     // 1. Create git worktree in the PROJECT's repo (if it doesn't exist)
@@ -123,21 +129,40 @@ export class TeamManager {
       fs.copyFileSync(settingsExamplePath, settingsDestPath);
     }
 
-    // 4. Insert team record in DB (with projectId)
-    console.log(`[TeamManager] Inserting team record: worktree=${worktreeName}, branch=${branchName}`);
+    // 4. Insert or reuse team record in DB (with projectId)
     const now = new Date().toISOString();
-    const team = db.insertTeam({
-      projectId,
-      issueNumber,
-      issueTitle: issueTitle ?? null,
-      worktreeName,
-      branchName,
-      status: 'launching',
-      phase: 'init',
-      launchedAt: now,
-    });
+    let team: Team;
 
-    console.log(`[TeamManager] Team inserted: id=${team.id}, status=${team.status}`);
+    if (relaunchTeamId !== null) {
+      // Relaunch: reset the existing terminal team record
+      console.log(`[TeamManager] Relaunching existing team record: id=${relaunchTeamId}, worktree=${worktreeName}`);
+      db.updateTeam(relaunchTeamId, {
+        status: 'launching',
+        phase: 'init',
+        pid: null,
+        sessionId: null,
+        issueTitle: issueTitle ?? null,
+        launchedAt: now,
+        stoppedAt: null,
+        lastEventAt: null,
+      });
+      team = db.getTeam(relaunchTeamId)!;
+    } else {
+      // Fresh launch: insert new team record
+      console.log(`[TeamManager] Inserting team record: worktree=${worktreeName}, branch=${branchName}`);
+      team = db.insertTeam({
+        projectId,
+        issueNumber,
+        issueTitle: issueTitle ?? null,
+        worktreeName,
+        branchName,
+        status: 'launching',
+        phase: 'init',
+        launchedAt: now,
+      });
+    }
+
+    console.log(`[TeamManager] Team ready: id=${team.id}, status=${team.status}, relaunch=${relaunchTeamId !== null}`);
 
     // 5. Spawn Claude Code process
     const resolvedPrompt = prompt || `${config.defaultPrompt} ${issueNumber}`;
