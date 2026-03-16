@@ -10,12 +10,14 @@ import issueRoutes from './routes/issues.js';
 import teamsRoutes from './routes/teams.js';
 import systemRoutes from './routes/system.js';
 import costsRoutes from './routes/costs.js';
+import prsRoutes from './routes/prs.js';
 import { sseBroker } from './services/sse-broker.js';
 import { getIssueFetcher } from './services/issue-fetcher.js';
 import { stuckDetector } from './services/stuck-detector.js';
 import { githubPoller } from './services/github-poller.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { closeDatabase } from './db.js';
+import { recoverOnStartup } from './services/startup-recovery.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,6 +46,7 @@ async function main() {
   await server.register(teamsRoutes);
   await server.register(systemRoutes);
   await server.register(costsRoutes);
+  await server.register(prsRoutes);
 
   // Static file serving for production builds
   const clientDistPath = path.resolve(__dirname, '..', 'client');
@@ -62,6 +65,9 @@ async function main() {
       }
     });
   }
+
+  // Recover state from before restart (reconcile PIDs, detect orphan worktrees)
+  await recoverOnStartup();
 
   // Start all services
   sseBroker.start();

@@ -16,7 +16,7 @@
  * It auto-detects the team ID from the worktree name / git branch.
  *
  * Configuration (env vars):
- *   FLEET_SERVER_URL  - Dashboard HTTP endpoint (default: http://localhost:4000)
+ *   FLEET_SERVER_URL  - Dashboard HTTP endpoint (default: http://localhost:4680)
  *   FLEET_TEAM_ID     - Override team ID auto-detection
  *   FLEET_TIMEOUT_MS  - HTTP timeout in ms (default: 5000)
  */
@@ -30,7 +30,7 @@ import type { FleetStatusResponse, DashboardError } from "./types.js";
 
 // ─── Configuration ────────────────────────────────────────────────────
 
-const FLEET_SERVER_URL = process.env.FLEET_SERVER_URL || "http://localhost:4000";
+const FLEET_SERVER_URL = process.env.FLEET_SERVER_URL || "http://localhost:4680";
 const FLEET_TIMEOUT_MS = parseInt(process.env.FLEET_TIMEOUT_MS || "5000", 10);
 
 // ─── MCP Server Setup ─────────────────────────────────────────────────

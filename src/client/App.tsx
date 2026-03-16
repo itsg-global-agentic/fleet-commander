@@ -3,6 +3,7 @@ import { FleetProvider } from './context/FleetContext';
 import { TopBar } from './components/TopBar';
 import { SideNav } from './components/SideNav';
 import { StatusBar } from './components/StatusBar';
+import { TeamDetail } from './components/TeamDetail';
 import { FleetGridView } from './views/FleetGridView';
 import { IssueTreeView } from './views/IssueTreeView';
 import { CostViewPage } from './views/CostViewPage';
@@ -33,6 +34,9 @@ export function App() {
           {/* Status bar — fixed 24px */}
           <StatusBar />
         </div>
+
+        {/* Team detail slide-over panel — rendered as overlay outside the main layout */}
+        <TeamDetail />
       </FleetProvider>
     </BrowserRouter>
   );

@@ -440,6 +440,12 @@ export class FleetDatabase {
     return row ? this.mapPRRow(row) : undefined;
   }
 
+  getAllPullRequests(): PullRequest[] {
+    const stmt = this.db.prepare('SELECT * FROM pull_requests ORDER BY updated_at DESC');
+    const rows = stmt.all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapPRRow(r));
+  }
+
   updatePullRequest(prNumber: number, fields: PRUpdate): PullRequest | undefined {
     const setClauses: string[] = [];
     const params: Record<string, unknown> = { prNumber };
@@ -618,12 +624,26 @@ export class FleetDatabase {
 
   /**
    * Get cost summary broken down by team (all teams).
+   * Includes team metadata (issue number, title, status, duration, session count).
    */
-  getCostByTeamBreakdown(): Array<CostSummary & { teamId: number; worktreeName: string }> {
+  getCostByTeamBreakdown(): Array<CostSummary & {
+    teamId: number;
+    worktreeName: string;
+    issueNumber: number;
+    issueTitle: string | null;
+    status: TeamStatus;
+    sessionCount: number;
+    durationMin: number;
+  }> {
     const stmt = this.db.prepare(`
       SELECT
         c.team_id,
         t.worktree_name,
+        t.issue_number,
+        t.issue_title,
+        t.status,
+        COUNT(DISTINCT c.session_id) AS session_count,
+        ROUND((julianday('now') - julianday(t.launched_at)) * 24 * 60, 0) AS duration_min,
         COALESCE(SUM(c.cost_usd), 0) AS total_cost_usd,
         COALESCE(SUM(c.input_tokens), 0) AS total_input_tokens,
         COALESCE(SUM(c.output_tokens), 0) AS total_output_tokens,
@@ -638,6 +658,11 @@ export class FleetDatabase {
     return rows.map((r) => ({
       teamId: r.team_id as number,
       worktreeName: r.worktree_name as string,
+      issueNumber: r.issue_number as number,
+      issueTitle: r.issue_title as string | null,
+      status: r.status as TeamStatus,
+      sessionCount: r.session_count as number,
+      durationMin: r.duration_min as number,
       totalCostUsd: r.total_cost_usd as number,
       totalInputTokens: r.total_input_tokens as number,
       totalOutputTokens: r.total_output_tokens as number,

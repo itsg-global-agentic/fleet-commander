@@ -117,3 +117,48 @@ export interface TeamDashboardRow {
   ciStatus: string | null;
   mergeStatus: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Team Detail (full detail returned by GET /api/teams/:id)
+// ---------------------------------------------------------------------------
+
+/** Individual CI check result */
+export interface CICheck {
+  name: string;
+  status: string;
+  conclusion: string | null;
+}
+
+/** Full team detail returned by GET /api/teams/:id */
+export interface TeamDetail {
+  id: number;
+  issueNumber: number;
+  issueTitle: string | null;
+  status: TeamStatus;
+  phase: TeamPhase;
+  pid: number | null;
+  sessionId: string | null;
+  worktreeName: string;
+  worktreePath: string | null;
+  branchName: string | null;
+  prNumber: number | null;
+  launchedAt: string;
+  stoppedAt: string | null;
+  lastEventAt: string | null;
+  durationMin: number;
+  idleMin: number | null;
+  totalCost: number;
+  sessionCount: number;
+  pr: {
+    number: number;
+    state: string | null;
+    mergeStatus: string | null;
+    ciStatus: string | null;
+    ciConclusion: string | null;
+    ciFailCount: number;
+    checks: CICheck[];
+    autoMerge: boolean;
+  } | null;
+  recentEvents: Event[];
+  outputTail: string | null;
+}

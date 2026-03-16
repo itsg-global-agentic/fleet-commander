@@ -1,0 +1,184 @@
+import { useState } from 'react';
+import { StatusBadge } from './StatusBadge';
+import { PRBadge } from './PRBadge';
+import type { TeamStatus } from '../../shared/types';
+
+// ---------------------------------------------------------------------------
+// Types (mirrors IssueNode from the server issue-fetcher)
+// ---------------------------------------------------------------------------
+
+export interface IssueNode {
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+  labels: string[];
+  url: string;
+  boardStatus?: string;
+  subIssueSummary?: { total: number; completed: number; percentCompleted: number };
+  prReferences?: { number: number; state: string }[];
+  children: IssueNode[];
+  activeTeam?: { id: number; status: string } | null;
+}
+
+// ---------------------------------------------------------------------------
+// Sub-issue progress bar
+// ---------------------------------------------------------------------------
+
+function SubIssueProgress({ completed, total }: { completed: number; total: number }) {
+  if (total <= 0) return null;
+
+  const pct = Math.round((completed / total) * 100);
+  const barColor = pct === 100 ? '#3FB950' : pct >= 50 ? '#D29922' : '#58A6FF';
+
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-dark-muted">
+      <span className="relative w-16 h-1.5 bg-dark-border rounded-full overflow-hidden">
+        <span
+          className="absolute inset-y-0 left-0 rounded-full transition-all duration-300"
+          style={{ width: `${pct}%`, backgroundColor: barColor }}
+        />
+      </span>
+      <span>{completed}/{total}</span>
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// State badge (open/closed)
+// ---------------------------------------------------------------------------
+
+function IssueStateBadge({ state }: { state: 'open' | 'closed' }) {
+  if (state === 'open') {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs font-medium text-[#3FB950]">
+        <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+          <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
+        </svg>
+      </span>
+    );
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1 text-xs font-medium text-dark-muted">
+      <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M11.28 6.78a.75.75 0 0 0-1.06-1.06L7.25 8.69 5.78 7.22a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0l3.5-3.5Z" />
+        <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z" />
+      </svg>
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TreeNode component (recursive)
+// ---------------------------------------------------------------------------
+
+interface TreeNodeProps {
+  node: IssueNode;
+  depth: number;
+  onLaunch: (issueNumber: number, title: string) => void;
+}
+
+export function TreeNode({ node, depth, onLaunch }: TreeNodeProps) {
+  const [expanded, setExpanded] = useState(depth < 2);
+  const hasChildren = node.children.length > 0;
+  const hasActiveTeam = node.activeTeam != null;
+
+  // Find first PR reference for PRBadge
+  const firstPR = node.prReferences?.[0] ?? null;
+
+  return (
+    <div>
+      {/* Node row */}
+      <div
+        className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-dark-surface/80 group transition-colors"
+        style={{ paddingLeft: `${depth * 20 + 8}px` }}
+      >
+        {/* Expand/collapse arrow */}
+        <button
+          onClick={() => hasChildren && setExpanded(!expanded)}
+          className={`w-4 h-4 flex items-center justify-center text-dark-muted shrink-0 transition-transform duration-150 ${
+            hasChildren ? 'cursor-pointer hover:text-dark-text' : 'invisible'
+          } ${expanded ? 'rotate-90' : ''}`}
+          aria-label={expanded ? 'Collapse' : 'Expand'}
+          tabIndex={hasChildren ? 0 : -1}
+        >
+          <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+          </svg>
+        </button>
+
+        {/* Issue state icon */}
+        <IssueStateBadge state={node.state} />
+
+        {/* Issue number */}
+        <a
+          href={node.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-dark-muted hover:text-dark-accent transition-colors shrink-0"
+          onClick={(e) => e.stopPropagation()}
+        >
+          #{node.number}
+        </a>
+
+        {/* Issue title */}
+        <span className={`text-sm truncate ${node.state === 'closed' ? 'text-dark-muted line-through' : 'text-dark-text'}`}>
+          {node.title}
+        </span>
+
+        {/* StatusBadge for active team */}
+        {hasActiveTeam && (
+          <span className="shrink-0 ml-1">
+            <StatusBadge status={node.activeTeam!.status as TeamStatus} />
+          </span>
+        )}
+
+        {/* PR badge */}
+        {firstPR && (
+          <span className="shrink-0 ml-1">
+            <PRBadge prNumber={firstPR.number} ciStatus={null} />
+          </span>
+        )}
+
+        {/* Sub-issue progress */}
+        {node.subIssueSummary && node.subIssueSummary.total > 0 && (
+          <span className="shrink-0 ml-1">
+            <SubIssueProgress
+              completed={node.subIssueSummary.completed}
+              total={node.subIssueSummary.total}
+            />
+          </span>
+        )}
+
+        {/* Play button — only for leaf issues with no active team that are open */}
+        {!hasActiveTeam && node.state === 'open' && !hasChildren && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onLaunch(node.number, node.title);
+            }}
+            className="ml-auto shrink-0 opacity-0 group-hover:opacity-100 transition-opacity px-1.5 py-0.5 text-xs rounded border border-dark-border text-dark-muted hover:text-[#3FB950] hover:border-[#3FB950]/50"
+            title={`Launch team for #${node.number}`}
+          >
+            {'\u25B6'}
+          </button>
+        )}
+      </div>
+
+      {/* Children (recursive) */}
+      {hasChildren && expanded && (
+        <div>
+          {node.children.map((child) => (
+            <TreeNode
+              key={child.number}
+              node={child}
+              depth={depth + 1}
+              onLaunch={onLaunch}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
