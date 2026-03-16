@@ -6,7 +6,9 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import eventsRoutes from './routes/events.js';
 import streamRoutes from './routes/stream.js';
+import issueRoutes from './routes/issues.js';
 import { sseBroker } from './services/sse-broker.js';
+import { getIssueFetcher } from './services/issue-fetcher.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +31,9 @@ async function main() {
   // SSE streaming endpoint
   await server.register(streamRoutes);
 
+  // Issue hierarchy routes
+  await server.register(issueRoutes);
+
   // Static file serving for production builds
   const clientDistPath = path.resolve(__dirname, '..', 'client');
   if (fs.existsSync(clientDistPath)) {
@@ -48,14 +53,19 @@ async function main() {
     });
   }
 
-  // Start the SSE heartbeat
+  // Start services
   sseBroker.start();
   server.log.info('SSE broker heartbeat started');
+
+  const issueFetcher = getIssueFetcher();
+  issueFetcher.start();
+  server.log.info('Issue fetcher polling started');
 
   // Graceful shutdown
   server.addHook('onClose', async () => {
     sseBroker.stop();
-    server.log.info('SSE broker stopped');
+    issueFetcher.stop();
+    server.log.info('Services stopped');
   });
 
   await server.listen({ port: PORT, host: '0.0.0.0' });
