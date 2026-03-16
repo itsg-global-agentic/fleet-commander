@@ -10,12 +10,23 @@ Fleet Commander is a standalone TypeScript web dashboard for orchestrating multi
 
 ## Quick Start
 
-```bash
-# When implemented, the intended workflow is:
-npm install
-npm run build
-npm run dev          # Starts Fastify server on http://localhost:4680
+The fastest way to start Fleet Commander:
 
+```bash
+npm run launch          # auto-installs, builds, opens browser
+```
+
+Or on Windows, double-click `fleet-commander.bat` -- it does the same thing.
+
+The launcher automatically installs dependencies and builds the app on first run, so there is no manual `npm install` or `npm run build` step required.
+
+For development with hot reload:
+
+```bash
+npm run dev             # Starts Fastify server + Vite HMR on http://localhost:4680
+```
+
+```bash
 # MCP server (already implemented):
 cd mcp && npm install && npm run build
 ```

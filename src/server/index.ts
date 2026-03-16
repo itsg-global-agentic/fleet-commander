@@ -20,6 +20,7 @@ import { githubPoller } from './services/github-poller.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { closeDatabase } from './db.js';
 import { recoverOnStartup } from './services/startup-recovery.js';
+import { usagePoller } from './services/usage-tracker.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -79,10 +80,12 @@ async function main() {
   issueFetcher.start();
   stuckDetector.start();
   githubPoller.start();
-  server.log.info('All services started (SSE, issues, stuck detector, GitHub poller)');
+  usagePoller.start();
+  server.log.info('All services started (SSE, issues, stuck detector, GitHub poller, usage poller)');
 
   // Graceful shutdown
   server.addHook('onClose', async () => {
+    usagePoller.stop();
     githubPoller.stop();
     stuckDetector.stop();
     issueFetcher.stop();

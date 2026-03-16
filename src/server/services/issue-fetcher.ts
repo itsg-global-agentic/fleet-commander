@@ -286,6 +286,14 @@ export class IssueFetcher {
   }
 
   /**
+   * Clear cached issues for a specific project.
+   * Called when a project is deleted to prevent stale data.
+   */
+  clearProject(projectId: number): void {
+    this.cacheByProject.delete(projectId);
+  }
+
+  /**
    * Force a re-fetch from GitHub for a specific project.
    */
   refresh(projectId?: number): IssueNode[] {

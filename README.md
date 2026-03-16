@@ -1,34 +1,52 @@
 # Fleet Commander
 
-Web dashboard for orchestrating multiple Claude Code agent teams working on GitHub issues in parallel. A PM can launch, monitor, intervene, and resume teams from a single dark-themed interface.
+**One-click dashboard for orchestrating Claude Code agent teams across multiple repositories.**
+
+No setup. No config files. Double-click and go.
+
+> **Why Fleet Commander?** Other tools require you to configure YAML, write plugins, set up databases. Fleet Commander works out of the box.
 
 ## Prerequisites
 
 - **Node.js 20+** ([download](https://nodejs.org/))
-- **GitHub CLI** (`gh`) authenticated -- run `gh auth status` to verify
-- **Git** with worktree support (Git 2.15+)
-- **Windows 10+** with Git Bash (or Linux/macOS)
+- **GitHub CLI** (`gh`) authenticated -- run `gh auth login`, then `gh auth status` to verify
+
+That's it.
 
 ## Quick Start
 
+### Windows (double-click)
+1. Clone this repo
+2. Double-click `fleet-commander.bat`
+3. Browser opens -- add your first project -- launch teams
+
+### Terminal
 ```bash
-git clone https://github.com/user/fleet-commander.git
+git clone https://github.com/itsg-global-agentic/fleet-commander.git
 cd fleet-commander
-npm install
-npm run build
-npm run dev          # Development (Fastify + Vite HMR)
-npm start            # Production (port 4680)
+npm run launch    # auto-installs, builds, opens browser
 ```
 
-Open http://localhost:4680 in your browser, then:
+That's it. Fleet Commander automatically:
+- Installs dependencies on first run
+- Builds the app on first run
+- Opens your browser to the dashboard
+- Creates the database
+- Installs hooks when you add a project
+- Removes hooks when you remove a project
 
-1. **Add a project** -- provide a repository path and GitHub remote (e.g., `itsg-global-agentic/itsg-kea`)
-2. **Launch teams** against issues in that project
-3. **Monitor** all teams across all projects from the dashboard
+### Adding Your First Project
 
-## Installing Hooks into a Target Repo
+1. Click the **Projects** icon in the sidebar
+2. Click **"Add Project"**
+3. Browse to your repo folder
+4. Click **Add** -- hooks are auto-installed
+5. Go to **Issue Tree** -- click **Refresh** -- see your issues
+6. Launch teams from **Fleet Grid** or **Issue Tree**
 
-Fleet Commander monitors agent teams via bash hook scripts. Install them into any target repository:
+## Installing Hooks Manually
+
+Fleet Commander installs and removes hooks automatically when you add or remove a project. If you need manual control:
 
 ```bash
 ./scripts/install.sh /path/to/target/repo

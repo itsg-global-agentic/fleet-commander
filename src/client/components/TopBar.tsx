@@ -15,11 +15,19 @@ const STATUS_COLORS: Record<string, string> = {
   launching: '#58A6FF',
 };
 
-/** Get pill color based on usage threshold */
-function getUsagePillColor(percent: number): string {
+/** Base colors per usage category */
+const USAGE_BASE_COLORS: Record<string, string> = {
+  daily: '#58A6FF',
+  weekly: '#3FB950',
+  sonnet: '#A371F7',
+  extra: '#D29922',
+};
+
+/** Get bar fill color: base color under 50%, yellow 50-80%, red over 80% */
+function getUsageBarColor(percent: number, baseColor: string): string {
   if (percent > 80) return '#F85149';
   if (percent >= 50) return '#D29922';
-  return '#3FB950';
+  return baseColor;
 }
 
 interface UsageData {
@@ -56,20 +64,15 @@ export function TopBar() {
     return acc;
   }, {} as Record<string, number>);
 
-  // Determine highest usage for the pill display
-  const highestUsage = usage
-    ? Math.max(usage.dailyPercent, usage.weeklyPercent, usage.sonnetPercent, usage.extraPercent)
-    : 0;
-  const highestLabel = usage
-    ? (() => {
-        const max = highestUsage;
-        if (max === usage.dailyPercent) return 'Daily';
-        if (max === usage.weeklyPercent) return 'Weekly';
-        if (max === usage.sonnetPercent) return 'Sonnet';
-        return 'Extra';
-      })()
-    : 'Daily';
-  const usageColor = getUsagePillColor(highestUsage);
+  // Build 4 usage indicators
+  const usageIndicators = usage
+    ? [
+        { key: 'daily', label: 'D', percent: usage.dailyPercent, baseColor: USAGE_BASE_COLORS.daily },
+        { key: 'weekly', label: 'W', percent: usage.weeklyPercent, baseColor: USAGE_BASE_COLORS.weekly },
+        { key: 'sonnet', label: 'S', percent: usage.sonnetPercent, baseColor: USAGE_BASE_COLORS.sonnet },
+        { key: 'extra', label: 'E', percent: usage.extraPercent, baseColor: USAGE_BASE_COLORS.extra },
+      ]
+    : [];
 
   const pills = [
     { label: 'Running', count: counts.running || 0, color: STATUS_COLORS.running },
@@ -103,16 +106,40 @@ export function TopBar() {
               </span>
             )
           ))}
-          <span
-            className="px-2 py-0.5 rounded-full text-xs font-medium"
-            style={{
-              backgroundColor: usageColor + '20',
-              color: usageColor,
-              border: `1px solid ${usageColor}40`,
-            }}
-          >
-            {highestLabel}: {highestUsage.toFixed(0)}%
-          </span>
+          {/* Usage indicators — 4 compact inline bars */}
+          {usageIndicators.map(ind => {
+            const fillColor = getUsageBarColor(ind.percent, ind.baseColor);
+            const clampedPercent = Math.min(100, Math.max(0, ind.percent));
+            return (
+              <div
+                key={ind.key}
+                className="flex flex-col items-center"
+                style={{ minWidth: 48 }}
+                title={`${ind.key.charAt(0).toUpperCase() + ind.key.slice(1)}: ${ind.percent.toFixed(0)}%`}
+              >
+                <span className="text-[10px] leading-tight font-medium" style={{ color: fillColor }}>
+                  {ind.label}: {ind.percent.toFixed(0)}%
+                </span>
+                <div
+                  className="rounded-full overflow-hidden"
+                  style={{
+                    width: 48,
+                    height: 4,
+                    backgroundColor: '#30363D',
+                    marginTop: 2,
+                  }}
+                >
+                  <div
+                    className="h-full rounded-full"
+                    style={{
+                      width: `${clampedPercent}%`,
+                      backgroundColor: fillColor,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
 
           {/* Launch Team button */}
           <button

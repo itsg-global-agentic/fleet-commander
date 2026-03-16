@@ -6,3 +6,4 @@ fleet.db
 .claude/worktrees/
 fleet.db-shm
 fleet.db-wal
+*.png

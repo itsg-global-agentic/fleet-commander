@@ -16,6 +16,7 @@ import fs from 'fs';
 import path from 'path';
 import { getDatabase } from '../db.js';
 import { getTeamManager } from '../services/team-manager.js';
+import { getIssueFetcher } from '../services/issue-fetcher.js';
 import { sseBroker } from '../services/sse-broker.js';
 import config from '../config.js';
 import type { ProjectStatus } from '../../shared/types.js';
@@ -448,6 +449,10 @@ const projectsRoutes: FastifyPluginCallback = (
 
         // Uninstall hooks
         uninstallHooks(project.repoPath);
+
+        // Clear cached issues for this project
+        const issueFetcher = getIssueFetcher();
+        issueFetcher.clearProject(projectId);
 
         // Delete the project from DB
         db.deleteProject(projectId);
