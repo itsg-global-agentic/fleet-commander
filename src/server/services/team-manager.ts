@@ -26,6 +26,61 @@ const MAX_OUTPUT_LINES = config.outputBufferLines;
 const MAX_PARSED_EVENTS = 200;
 
 // ---------------------------------------------------------------------------
+// Resolve claude executable path (Windows needs full path for shell-free spawn)
+// ---------------------------------------------------------------------------
+
+let _resolvedClaudePath: string | null = null;
+
+/**
+ * On Windows, `spawn('claude', ...)` with `shell: false` fails because Node
+ * cannot resolve bare command names via PATH without a shell. We use `where`
+ * to find the full path to claude.exe once, then cache the result.
+ *
+ * On non-Windows platforms, the bare command name works fine with shell: false.
+ */
+function resolveClaudePath(): string {
+  if (_resolvedClaudePath) return _resolvedClaudePath;
+
+  if (process.platform === 'win32') {
+    try {
+      const result = execSync('where claude.exe', {
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      const firstLine = result.trim().split('\n')[0]?.trim();
+      if (firstLine) {
+        _resolvedClaudePath = firstLine;
+        console.log(`[TeamManager] Resolved claude path: ${_resolvedClaudePath}`);
+        return _resolvedClaudePath;
+      }
+    } catch {
+      // `where` failed — try `where claude` without .exe extension
+      try {
+        const result = execSync('where claude', {
+          encoding: 'utf-8',
+          timeout: 5000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        const firstLine = result.trim().split('\n')[0]?.trim();
+        if (firstLine) {
+          _resolvedClaudePath = firstLine;
+          console.log(`[TeamManager] Resolved claude path: ${_resolvedClaudePath}`);
+          return _resolvedClaudePath;
+        }
+      } catch {
+        // Fall through to default
+      }
+    }
+  }
+
+  // Non-Windows or resolution failed — use configured command as-is
+  _resolvedClaudePath = config.claudeCmd;
+  console.log(`[TeamManager] Using claude command: ${_resolvedClaudePath}`);
+  return _resolvedClaudePath;
+}
+
+// ---------------------------------------------------------------------------
 // summarizeEvent — short text summary for console logging
 // ---------------------------------------------------------------------------
 
@@ -269,7 +324,9 @@ export class TeamManager {
       console.log(`[TeamManager] CLAUDE_CODE_GIT_BASH_PATH=${gitBash}`);
     }
 
-    console.log(`[TeamManager] Spawning: ${config.claudeCmd} ${args.join(' ')} (headless=${isHeadless})`);
+    // Resolve the full path to claude executable (needed for shell-free spawn on Windows)
+    const claudePath = resolveClaudePath();
+    console.log(`[TeamManager] Spawning: ${claudePath} ${args.join(' ')} (headless=${isHeadless})`);
 
     if (!isHeadless && process.platform === 'win32') {
       // ── Interactive mode (Windows): open Claude Code in a new terminal window ──
@@ -324,12 +381,15 @@ export class TeamManager {
     }
 
     // ── Headless mode (default): spawn in background, capture output ──
-    const child = spawn(config.claudeCmd, args, {
+    // IMPORTANT: Do NOT use shell: true here. On Windows, shell: true wraps the
+    // spawn in cmd.exe, creating node → cmd.exe → claude.exe. The stdout pipe
+    // connects to cmd.exe, not claude.exe, so Claude's NDJSON output never
+    // reaches our capture handler. Instead, we resolve the full path to the
+    // claude executable and spawn it directly.
+    const child = spawn(claudePath, args, {
       cwd: project.repoPath,
       env: spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
-      // On Windows, use shell so cmd.exe resolves commands in PATH
-      shell: process.platform === 'win32',
       // Detach so parent can exit without killing children (if needed)
       detached: false,
     });
@@ -507,11 +567,15 @@ export class TeamManager {
       console.log(`[TeamManager] Resume: CLAUDE_CODE_GIT_BASH_PATH=${resumeGitBash}`);
     }
 
-    const child = spawn(config.claudeCmd, args, {
+    // Resolve full path to claude executable — do NOT use shell: true (see
+    // headless spawn comment above for why cmd.exe wrapper breaks stdout capture).
+    const claudePath = resolveClaudePath();
+    console.log(`[TeamManager] Resume spawning: ${claudePath} ${args.join(' ')}`);
+
+    const child = spawn(claudePath, args, {
       cwd: project.repoPath,
       env: resumeEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
       detached: false,
     });
 
