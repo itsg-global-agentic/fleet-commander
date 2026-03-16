@@ -30,15 +30,15 @@ async function main() {
   await server.register(streamRoutes);
 
   // Static file serving for production builds
-  const clientDir = path.resolve(__dirname, '..', 'client');
-  if (fs.existsSync(clientDir)) {
+  const clientDistPath = path.resolve(__dirname, '..', 'client');
+  if (fs.existsSync(clientDistPath)) {
     await server.register(fastifyStatic, {
-      root: clientDir,
+      root: clientDistPath,
       prefix: '/',
       decorateReply: false,
     });
 
-    // SPA fallback
+    // SPA fallback - serve index.html for non-API routes
     server.setNotFoundHandler((request, reply) => {
       if (request.url.startsWith('/api/')) {
         reply.status(404).send({ error: 'Not found', code: 'NOT_FOUND' });
