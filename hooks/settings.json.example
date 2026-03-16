@@ -8,7 +8,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/fleet-commander/on_session_start.sh"
+            "command": "bash .claude/hooks/fleet-commander/on_session_start.sh"
           }
         ]
       }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/fleet-commander/on_session_end.sh"
+            "command": "bash .claude/hooks/fleet-commander/on_session_end.sh"
           }
         ]
       }
@@ -28,7 +28,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/fleet-commander/on_stop.sh"
+            "command": "bash .claude/hooks/fleet-commander/on_stop.sh"
           }
         ]
       }
@@ -38,7 +38,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/fleet-commander/on_subagent_start.sh"
+            "command": "bash .claude/hooks/fleet-commander/on_subagent_start.sh"
           }
         ]
       }
@@ -48,7 +48,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/fleet-commander/on_subagent_stop.sh"
+            "command": "bash .claude/hooks/fleet-commander/on_subagent_stop.sh"
           }
         ]
       }
@@ -58,7 +58,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/fleet-commander/on_notification.sh"
+            "command": "bash .claude/hooks/fleet-commander/on_notification.sh"
           }
         ]
       }
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/fleet-commander/on_pre_compact.sh"
+            "command": "bash .claude/hooks/fleet-commander/on_pre_compact.sh"
           }
         ]
       }
@@ -78,7 +78,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/fleet-commander/on_post_tool_use.sh"
+            "command": "bash .claude/hooks/fleet-commander/on_post_tool_use.sh"
           }
         ]
       }
@@ -88,7 +88,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/fleet-commander/on_tool_error.sh"
+            "command": "bash .claude/hooks/fleet-commander/on_tool_error.sh"
           }
         ]
       }
@@ -98,7 +98,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/pr-watcher-idle.sh"
+            "command": "bash .claude/hooks/pr-watcher-idle.sh"
           }
         ]
       }
