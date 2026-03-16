@@ -1,0 +1,119 @@
+// =============================================================================
+// Fleet Commander — Shared TypeScript Types (v1, aligned with PRD section 4)
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// Enums / Union Types
+// ---------------------------------------------------------------------------
+
+/** Team operational status */
+export type TeamStatus = 'launching' | 'running' | 'idle' | 'stuck' | 'done' | 'failed';
+
+/** Team domain phase */
+export type TeamPhase = 'init' | 'analyzing' | 'implementing' | 'reviewing' | 'pr' | 'done' | 'blocked';
+
+/** Pull request state */
+export type PRState = 'draft' | 'open' | 'merged' | 'closed';
+
+/** CI pipeline status */
+export type CIStatus = 'none' | 'pending' | 'passing' | 'failing';
+
+/** Merge readiness state */
+export type MergeState = 'unknown' | 'clean' | 'behind' | 'blocked' | 'dirty';
+
+/** Issue board status */
+export type BoardStatus = 'Backlog' | 'Ready' | 'InProgress' | 'Done' | 'Blocked';
+
+// ---------------------------------------------------------------------------
+// Core Entities (matching PRD section 4 schema)
+// ---------------------------------------------------------------------------
+
+/** A team of agents working on a single issue in a worktree */
+export interface Team {
+  id: number;
+  issueNumber: number;
+  issueTitle: string | null;
+  status: TeamStatus;
+  phase: TeamPhase;
+  pid: number | null;
+  sessionId: string | null;
+  worktreeName: string;
+  worktreePath: string | null;
+  branchName: string | null;
+  prNumber: number | null;
+  launchedAt: string;
+  stoppedAt: string | null;
+  lastEventAt: string | null;
+  createdAt: string;
+}
+
+/** A pull request associated with a team */
+export interface PullRequest {
+  prNumber: number;
+  teamId: number | null;
+  state: string | null;
+  mergeStatus: string | null;
+  ciStatus: string | null;
+  ciConclusion: string | null;
+  ciFailCount: number;
+  checksJson: string | null;
+  autoMerge: boolean;
+  lastPolledAt: string | null;
+  updatedAt: string;
+}
+
+/** A hook event received from a Claude Code instance */
+export interface Event {
+  id: number;
+  teamId: number;
+  hookType: string;
+  sessionId: string | null;
+  toolName: string | null;
+  agentType: string | null;
+  payload: string | null;
+  createdAt: string;
+}
+
+/** A command from the PM to a team */
+export interface Command {
+  id: number;
+  teamId: number;
+  message: string;
+  sentAt: string;
+  delivered: boolean;
+}
+
+/** A cost entry for tracking token usage and costs per session */
+export interface CostEntry {
+  id: number;
+  teamId: number;
+  sessionId: string | null;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  recordedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard View (v_team_dashboard)
+// ---------------------------------------------------------------------------
+
+/** Aggregated row from the v_team_dashboard view */
+export interface TeamDashboardRow {
+  id: number;
+  issueNumber: number;
+  issueTitle: string | null;
+  status: TeamStatus;
+  phase: TeamPhase;
+  worktreeName: string;
+  prNumber: number | null;
+  launchedAt: string;
+  lastEventAt: string | null;
+  durationMin: number;
+  idleMin: number | null;
+  totalCost: number;
+  sessionCount: number;
+  prState: string | null;
+  ciStatus: string | null;
+  mergeStatus: string | null;
+}

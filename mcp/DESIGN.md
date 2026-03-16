@@ -10,7 +10,7 @@ Lets Claude Code agent teams inspect how they appear to the PM dashboard ("Claud
                      ┌──────────────────────┐
                      │  Claude Fleet        │
                      │  Commander Dashboard │
-                     │  (http://host:4000)  │
+                     │  (http://host:4680)  │
                      └──────┬───────────────┘
                             │ GET /api/teams/:id/status
                             │
@@ -136,7 +136,7 @@ Add to the existing `.mcp.json`:
       "command": "node",
       "args": ["tools/fleet-mcp/dist/server.js"],
       "env": {
-        "FLEET_SERVER_URL": "http://localhost:4000"
+        "FLEET_SERVER_URL": "http://localhost:4680"
       }
     }
   }
@@ -152,7 +152,7 @@ Add to the existing `.mcp.json`:
       "command": "node",
       "args": ["tools/fleet-mcp/dist/server.js"],
       "env": {
-        "FLEET_SERVER_URL": "http://localhost:4000",
+        "FLEET_SERVER_URL": "http://localhost:4680",
         "FLEET_TEAM_ID": "kea-763"
       }
     }
@@ -164,7 +164,7 @@ Add to the existing `.mcp.json`:
 
 | Variable          | Default                  | Description                    |
 |-------------------|--------------------------|--------------------------------|
-| FLEET_SERVER_URL  | http://localhost:4000    | Dashboard API base URL         |
+| FLEET_SERVER_URL  | http://localhost:4680    | Dashboard API base URL         |
 | FLEET_TEAM_ID     | (auto-detected)          | Override team ID detection     |
 | FLEET_TIMEOUT_MS  | 5000                     | HTTP timeout for dashboard API |
 
