@@ -114,9 +114,40 @@ else
 fi
 echo "  Added MCP server entry to .mcp.json"
 
+# ── 4. Install workflow template and command ─────────────────────
+PROMPTS_DIR="$TARGET/.claude/prompts"
+COMMANDS_DIR="$TARGET/.claude/commands"
+mkdir -p "$PROMPTS_DIR"
+mkdir -p "$COMMANDS_DIR"
+
+# Derive project name from the target directory basename
+PROJECT_NAME="$(basename "$TARGET")"
+# Lowercase slug (replace spaces/special chars with hyphens)
+project_slug="$(echo "$PROJECT_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//')"
+
+# Detect default branch
+BASE_BRANCH="$(git -C "$TARGET" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||')" || true
+if [ -z "$BASE_BRANCH" ]; then
+  BASE_BRANCH="main"
+fi
+
+# Copy workflow template with placeholder replacement
+sed -e "s/{{PROJECT_NAME}}/$PROJECT_NAME/g" \
+    -e "s/{{project_slug}}/$project_slug/g" \
+    -e "s/{{BASE_BRANCH}}/$BASE_BRANCH/g" \
+    "$FC_ROOT/templates/workflow.md" > "$PROMPTS_DIR/fleet-workflow.md"
+echo "  Installed workflow template to $PROMPTS_DIR/fleet-workflow.md"
+echo "    PROJECT_NAME=$PROJECT_NAME  project_slug=$project_slug  BASE_BRANCH=$BASE_BRANCH"
+
+# Copy command template (no placeholders needed)
+cp "$FC_ROOT/templates/next-issue.md" "$COMMANDS_DIR/next-issue.md"
+echo "  Installed command to $COMMANDS_DIR/next-issue.md"
+
 # ── Done ──────────────────────────────────────────────────────────
 echo ""
 echo "Fleet Commander installed successfully!"
 echo "  Hooks:    $HOOK_DIR"
 echo "  Settings: $SETTINGS"
 echo "  MCP:      $MCP_JSON"
+echo "  Workflow: $PROMPTS_DIR/fleet-workflow.md"
+echo "  Command:  $COMMANDS_DIR/next-issue.md"

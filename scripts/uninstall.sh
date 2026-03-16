@@ -112,6 +112,28 @@ else
   echo "  .mcp.json not found (nothing to clean)"
 fi
 
+# ── 4. Remove workflow template and command ──────────────────────
+WORKFLOW_FILE="$TARGET/.claude/prompts/fleet-workflow.md"
+COMMAND_FILE="$TARGET/.claude/commands/next-issue.md"
+
+if [ -f "$WORKFLOW_FILE" ]; then
+  rm "$WORKFLOW_FILE"
+  echo "  Removed $WORKFLOW_FILE"
+  # Clean up empty prompts directory
+  rmdir "$TARGET/.claude/prompts" 2>/dev/null && echo "  Removed empty .claude/prompts/" || true
+else
+  echo "  fleet-workflow.md not found (already removed?)"
+fi
+
+if [ -f "$COMMAND_FILE" ]; then
+  rm "$COMMAND_FILE"
+  echo "  Removed $COMMAND_FILE"
+  # Clean up empty commands directory
+  rmdir "$TARGET/.claude/commands" 2>/dev/null && echo "  Removed empty .claude/commands/" || true
+else
+  echo "  next-issue.md not found (already removed?)"
+fi
+
 # ── Done ──────────────────────────────────────────────────────────
 echo ""
 echo "Fleet Commander uninstalled successfully!"
