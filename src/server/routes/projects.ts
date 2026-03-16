@@ -30,6 +30,7 @@ interface CreateProjectBody {
   name: string;
   repoPath: string;
   githubRepo?: string;
+  maxActiveTeams?: number;
 }
 
 interface UpdateProjectBody {
@@ -37,6 +38,7 @@ interface UpdateProjectBody {
   status?: ProjectStatus;
   githubRepo?: string | null;
   hooksInstalled?: boolean;
+  maxActiveTeams?: number;
 }
 
 interface ProjectIdParams {
@@ -210,7 +212,7 @@ const projectsRoutes: FastifyPluginCallback = (
       reply: FastifyReply,
     ) => {
       try {
-        const { name, repoPath, githubRepo } = request.body;
+        const { name, repoPath, githubRepo, maxActiveTeams } = request.body;
 
         // Validate name
         if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -260,11 +262,22 @@ const projectsRoutes: FastifyPluginCallback = (
         // Auto-detect githubRepo if not provided
         const resolvedGithubRepo = githubRepo || detectGithubRepo(normalizedPath);
 
+        // Validate maxActiveTeams if provided
+        if (maxActiveTeams !== undefined) {
+          if (typeof maxActiveTeams !== 'number' || maxActiveTeams < 1 || maxActiveTeams > 50) {
+            return reply.code(400).send({
+              error: 'Bad Request',
+              message: 'maxActiveTeams must be a number between 1 and 50',
+            });
+          }
+        }
+
         // Insert the project
         const project = db.insertProject({
           name: name.trim(),
           repoPath: normalizedPath,
           githubRepo: resolvedGithubRepo,
+          maxActiveTeams: maxActiveTeams ?? 5,
         });
 
         // Install hooks (non-fatal)
@@ -338,11 +351,13 @@ const projectsRoutes: FastifyPluginCallback = (
         const teams = db.getTeams({ projectId });
         const activeStatuses = ['launching', 'running', 'idle', 'stuck'];
         const activeCount = teams.filter((t) => activeStatuses.includes(t.status)).length;
+        const queuedCount = teams.filter((t) => t.status === 'queued').length;
 
         const summary = {
           ...project,
           teamCount: teams.length,
           activeTeamCount: activeCount,
+          queuedTeamCount: queuedCount,
         };
 
         return reply.code(200).send(summary);
@@ -383,7 +398,7 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const { name, status, githubRepo, hooksInstalled } = request.body || {};
+        const { name, status, githubRepo, hooksInstalled, maxActiveTeams } = request.body || {};
 
         // Validate status if provided
         if (status !== undefined) {
@@ -404,11 +419,22 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
+        // Validate maxActiveTeams if provided
+        if (maxActiveTeams !== undefined) {
+          if (typeof maxActiveTeams !== 'number' || maxActiveTeams < 1 || maxActiveTeams > 50) {
+            return reply.code(400).send({
+              error: 'Bad Request',
+              message: 'maxActiveTeams must be a number between 1 and 50',
+            });
+          }
+        }
+
         const updated = db.updateProject(projectId, {
           name: name?.trim(),
           status,
           githubRepo,
           hooksInstalled,
+          maxActiveTeams,
         });
 
         // Broadcast SSE event

@@ -145,6 +145,13 @@ export class TeamManager {
 
     console.log(`[TeamManager] Launch started: project=${project.name} issue=#${issueNumber}`);
 
+    // Check active team limit before proceeding
+    const activeCount = db.getActiveTeamCountByProject(projectId);
+    if (activeCount >= project.maxActiveTeams) {
+      // Queue this team instead of launching
+      return this.queueTeam(db, project, projectId, issueNumber, issueTitle, headless);
+    }
+
     // If no title provided, fetch from GitHub
     if (!issueTitle && project.githubRepo) {
       try {
@@ -440,6 +447,13 @@ export class TeamManager {
 
         this.broadcastSnapshot();
       }
+
+      // Process queue when a slot frees up
+      if (currentTeam.projectId) {
+        this.processQueue(currentTeam.projectId).catch((err) => {
+          console.error(`[TeamManager] processQueue error after team exit:`, err);
+        });
+      }
     });
 
     child.on('error', (err) => {
@@ -463,6 +477,13 @@ export class TeamManager {
         );
 
         this.broadcastSnapshot();
+      }
+
+      // Process queue when a slot frees up
+      if (currentTeam.projectId) {
+        this.processQueue(currentTeam.projectId).catch((queueErr) => {
+          console.error(`[TeamManager] processQueue error after team error:`, queueErr);
+        });
       }
     });
 
@@ -508,6 +529,13 @@ export class TeamManager {
     );
 
     this.broadcastSnapshot();
+
+    // Process queue when a slot frees up
+    if (team.projectId) {
+      this.processQueue(team.projectId).catch((err) => {
+        console.error(`[TeamManager] processQueue error after stop:`, err);
+      });
+    }
 
     return updated!;
   }
@@ -613,6 +641,13 @@ export class TeamManager {
         sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
         this.broadcastSnapshot();
       }
+
+      // Process queue when a slot frees up
+      if (currentTeam.projectId) {
+        this.processQueue(currentTeam.projectId).catch((err) => {
+          console.error(`[TeamManager] processQueue error after resume exit:`, err);
+        });
+      }
     });
 
     child.on('error', (err) => {
@@ -631,6 +666,13 @@ export class TeamManager {
 
         sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
         this.broadcastSnapshot();
+      }
+
+      // Process queue when a slot frees up
+      if (currentTeam.projectId) {
+        this.processQueue(currentTeam.projectId).catch((queueErr) => {
+          console.error(`[TeamManager] processQueue error after resume error:`, queueErr);
+        });
       }
     });
 
@@ -692,6 +734,296 @@ export class TeamManager {
     }
 
     return results;
+  }
+
+  // -------------------------------------------------------------------------
+  // queueTeam — insert a team with 'queued' status without spawning
+  // -------------------------------------------------------------------------
+
+  private async queueTeam(
+    db: ReturnType<typeof getDatabase>,
+    project: NonNullable<ReturnType<ReturnType<typeof getDatabase>['getProject']>>,
+    projectId: number,
+    issueNumber: number,
+    issueTitle?: string,
+    headless?: boolean,
+  ): Promise<Team> {
+    // Fetch title from GitHub if needed
+    if (!issueTitle && project.githubRepo) {
+      try {
+        const result = execSync(
+          `gh issue view ${issueNumber} --repo ${project.githubRepo} --json title --jq .title`,
+          { encoding: 'utf-8', timeout: 10000 },
+        ).trim();
+        if (result) issueTitle = result;
+      } catch {
+        issueTitle = `Issue #${issueNumber}`;
+      }
+    } else if (!issueTitle) {
+      issueTitle = `Issue #${issueNumber}`;
+    }
+
+    const slug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const worktreeName = `${slug}-${issueNumber}`;
+    const branchName = `worktree-${slug}-${issueNumber}`;
+
+    // Check for existing team
+    const existing = db.getTeamByWorktree(worktreeName);
+    if (existing) {
+      if (['running', 'launching', 'idle', 'stuck', 'queued'].includes(existing.status)) {
+        throw new Error(`Team already active for issue ${issueNumber} (status: ${existing.status})`);
+      }
+      // Terminal state — reuse the existing team record as queued
+      const now = new Date().toISOString();
+      db.updateTeam(existing.id, {
+        status: 'queued',
+        phase: 'init',
+        pid: null,
+        sessionId: null,
+        issueTitle: issueTitle ?? null,
+        launchedAt: now,
+        stoppedAt: null,
+        lastEventAt: null,
+      });
+      const team = db.getTeam(existing.id)!;
+      const activeCount = db.getActiveTeamCountByProject(projectId);
+      console.log(`[TeamManager] Team ${team.id} queued (${activeCount}/${project.maxActiveTeams} active)`);
+      this.broadcastSnapshot();
+      return team;
+    }
+
+    // Fresh insert with queued status
+    const now = new Date().toISOString();
+    const team = db.insertTeam({
+      projectId,
+      issueNumber,
+      issueTitle: issueTitle ?? null,
+      worktreeName,
+      branchName,
+      status: 'queued',
+      phase: 'init',
+      launchedAt: now,
+    });
+
+    const activeCount = db.getActiveTeamCountByProject(projectId);
+    console.log(`[TeamManager] Team ${team.id} queued (${activeCount}/${project.maxActiveTeams} active)`);
+    this.broadcastSnapshot();
+    return team;
+  }
+
+  // -------------------------------------------------------------------------
+  // processQueue — dequeue and launch teams when slots free up
+  // -------------------------------------------------------------------------
+
+  async processQueue(projectId: number): Promise<void> {
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project) return;
+
+    const activeCount = db.getActiveTeamCountByProject(projectId);
+    const available = project.maxActiveTeams - activeCount;
+    if (available <= 0) return;
+
+    const queued = db.getQueuedTeamsByProject(projectId);
+    const toDequeue = queued.slice(0, available);
+
+    for (const team of toDequeue) {
+      console.log(`[TeamManager] Dequeuing team ${team.id} (${team.worktreeName})`);
+      try {
+        await this.launchQueued(team);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[TeamManager] Failed to dequeue team ${team.id}: ${msg}`);
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // launchQueued — spawn a team that was previously queued
+  // -------------------------------------------------------------------------
+
+  private async launchQueued(team: Team): Promise<void> {
+    const db = getDatabase();
+    const projectId = team.projectId;
+    if (!projectId) {
+      console.error(`[TeamManager] Queued team ${team.id} has no projectId`);
+      return;
+    }
+
+    const project = db.getProject(projectId);
+    if (!project) {
+      console.error(`[TeamManager] Project ${projectId} not found for queued team ${team.id}`);
+      return;
+    }
+
+    const worktreeAbsPath = path.join(project.repoPath, config.worktreeDir, team.worktreeName);
+    const worktreeRelPath = path.posix.join(config.worktreeDir, team.worktreeName);
+    const branchName = team.branchName ?? `worktree-${team.worktreeName}`;
+
+    // ── Step 1: Create git worktree ──
+    if (!fs.existsSync(worktreeAbsPath)) {
+      try {
+        execSync(
+          `git -C "${project.repoPath}" worktree add "${worktreeRelPath}" -b "${branchName}"`,
+          { encoding: 'utf-8', stdio: 'pipe' },
+        );
+      } catch {
+        try {
+          execSync(
+            `git -C "${project.repoPath}" worktree add "${worktreeRelPath}" "${branchName}"`,
+            { encoding: 'utf-8', stdio: 'pipe' },
+          );
+        } catch (err2: unknown) {
+          const msg = err2 instanceof Error ? err2.message : String(err2);
+          console.error(`[TeamManager] ERROR: Worktree creation failed for queued team ${team.id}: ${msg}`);
+          db.updateTeam(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
+          this.broadcastSnapshot();
+          return;
+        }
+      }
+    }
+
+    console.log(`[TeamManager] Worktree created for dequeued team: ${team.worktreeName}`);
+
+    // Update to launching
+    db.updateTeam(team.id, { status: 'launching' });
+    this.broadcastSnapshot();
+
+    // ── Step 2: Copy hooks ──
+    const hookSrcDir = config.fcHooksDir;
+    const hookDestDir = path.join(worktreeAbsPath, config.hookDir);
+    fs.mkdirSync(hookDestDir, { recursive: true });
+
+    if (fs.existsSync(hookSrcDir)) {
+      const hookFiles = fs.readdirSync(hookSrcDir).filter((f) => f.endsWith('.sh'));
+      for (const file of hookFiles) {
+        const src = path.join(hookSrcDir, file);
+        const dest = path.join(hookDestDir, file);
+        fs.copyFileSync(src, dest);
+        if (process.platform !== 'win32') {
+          fs.chmodSync(dest, 0o755);
+        }
+      }
+    }
+
+    // Generate settings.json from example
+    const settingsExamplePath = path.join(hookSrcDir, 'settings.json.example');
+    const settingsDestDir = path.join(worktreeAbsPath, '.claude');
+    const settingsDestPath = path.join(settingsDestDir, 'settings.json');
+    fs.mkdirSync(settingsDestDir, { recursive: true });
+    if (fs.existsSync(settingsExamplePath)) {
+      fs.copyFileSync(settingsExamplePath, settingsDestPath);
+    }
+
+    // ── Step 3: Spawn Claude Code ──
+    const resolvedPrompt = `${config.defaultPrompt} ${team.issueNumber}`;
+    const args: string[] = [];
+    args.push('--worktree', team.worktreeName);
+    args.push('--output-format', 'stream-json');
+    args.push('--verbose');
+
+    if (config.skipPermissions) {
+      args.push('--dangerously-skip-permissions');
+    }
+
+    args.push(resolvedPrompt);
+
+    const spawnEnv: Record<string, string | undefined> = {
+      ...process.env,
+      FLEET_TEAM_ID: team.worktreeName,
+      FLEET_PROJECT_ID: String(projectId),
+      FLEET_GITHUB_REPO: project.githubRepo ?? '',
+    };
+    const gitBash = findGitBash();
+    if (gitBash) {
+      spawnEnv['CLAUDE_CODE_GIT_BASH_PATH'] = gitBash;
+    }
+
+    const claudePath = resolveClaudePath();
+    console.log(`[TeamManager] Spawning dequeued team ${team.id}: ${claudePath} ${args.join(' ')}`);
+
+    const child = spawn(claudePath, args, {
+      cwd: project.repoPath,
+      env: spawnEnv,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: false,
+    });
+
+    const pid = child.pid;
+    if (pid === undefined) {
+      console.error(`[TeamManager] ERROR: spawn failed for dequeued team ${team.id}: no PID returned`);
+      db.updateTeam(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
+      this.broadcastSnapshot();
+      return;
+    }
+
+    console.log(`[TeamManager] Dequeued team ${team.id} spawned: PID ${pid}`);
+    db.updateTeam(team.id, { pid });
+    this.broadcastSnapshot();
+
+    this.childProcesses.set(team.id, child);
+    this.initOutputBuffer(team.id);
+    this.captureOutput(team.id, child);
+
+    // Handle process exit — trigger queue processing
+    child.on('exit', (code, signal) => {
+      console.log(`[TeamManager] Process exited for dequeued team ${team.id} (code=${code}, signal=${signal})`);
+      this.childProcesses.delete(team.id);
+
+      const currentTeam = db.getTeam(team.id);
+      if (!currentTeam) return;
+
+      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
+        const exitStatus = (code === 0) ? 'done' : 'failed';
+        db.updateTeam(team.id, {
+          status: exitStatus,
+          pid: null,
+          stoppedAt: new Date().toISOString(),
+        });
+
+        sseBroker.broadcast('team_stopped', { team_id: team.id }, team.id);
+        this.broadcastSnapshot();
+      }
+
+      // Process queue when a slot frees up
+      if (currentTeam.projectId) {
+        this.processQueue(currentTeam.projectId).catch((err) => {
+          console.error(`[TeamManager] processQueue error after dequeued team exit:`, err);
+        });
+      }
+    });
+
+    child.on('error', (err) => {
+      console.error(`[TeamManager] ERROR: process error for dequeued team ${team.id}:`, err.message);
+      this.childProcesses.delete(team.id);
+
+      const currentTeam = db.getTeam(team.id);
+      if (!currentTeam) return;
+
+      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
+        db.updateTeam(team.id, {
+          status: 'failed',
+          pid: null,
+          stoppedAt: new Date().toISOString(),
+        });
+
+        sseBroker.broadcast('team_stopped', { team_id: team.id }, team.id);
+        this.broadcastSnapshot();
+      }
+
+      // Process queue when a slot frees up
+      if (currentTeam.projectId) {
+        this.processQueue(currentTeam.projectId).catch((queueErr) => {
+          console.error(`[TeamManager] processQueue error after dequeued team error:`, queueErr);
+        });
+      }
+    });
+
+    sseBroker.broadcast(
+      'team_launched',
+      { team_id: team.id, issue_number: team.issueNumber, project_id: projectId },
+      team.id,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -828,6 +1160,29 @@ export class TeamManager {
             events.push(timestampedEvent);
             if (events.length > MAX_PARSED_EVENTS) {
               events.shift();
+            }
+
+            // Extract cost from result events and persist to DB
+            if (event.type === 'result' && typeof (event as any).total_cost_usd === 'number') {
+              const costUsd = (event as any).total_cost_usd as number;
+              const usage = (event as any).usage as { input_tokens?: number; output_tokens?: number } | undefined;
+              const sessionId = (event as any).session_id as string | undefined;
+
+              db.insertCostEntry({
+                teamId,
+                sessionId: sessionId ?? 'unknown',
+                inputTokens: usage?.input_tokens ?? 0,
+                outputTokens: usage?.output_tokens ?? 0,
+                costUsd,
+              });
+
+              console.log(`[TeamManager] Team ${teamId} cost: $${costUsd.toFixed(4)}`);
+
+              // Broadcast cost update via SSE
+              sseBroker.broadcast('cost_updated', {
+                team_id: teamId,
+                total_cost_usd: costUsd,
+              }, teamId);
             }
 
             // Broadcast interesting events via SSE

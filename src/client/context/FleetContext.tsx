@@ -60,8 +60,8 @@ export function FleetProvider({ children }: { children: ReactNode }) {
           return [...prev, updated];
         });
       }
-    } else if (type === 'team_launched' || type === 'team_stopped' || type === 'team_status_changed') {
-      // A team lifecycle event occurred — refresh the full list
+    } else if (type === 'team_launched' || type === 'team_stopped' || type === 'team_status_changed' || type === 'cost_updated') {
+      // A team lifecycle or cost event occurred — refresh the full list
       // so the grid is always up to date.
       fetchTeams();
     }

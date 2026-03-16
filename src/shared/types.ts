@@ -39,6 +39,7 @@ export interface Project {
   githubRepo: string | null;
   status: ProjectStatus;
   hooksInstalled: boolean;
+  maxActiveTeams: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -54,6 +55,7 @@ export interface InstallStatus {
 export interface ProjectSummary extends Project {
   teamCount: number;
   activeTeamCount: number;
+  queuedTeamCount: number;
   installStatus?: InstallStatus;
 }
 
@@ -232,6 +234,8 @@ export interface TeamDetail {
   durationMin: number;
   idleMin: number | null;
   totalCost: number;
+  totalInputTokens: number;
+  totalOutputTokens: number;
   sessionCount: number;
   pr: {
     number: number;

@@ -3,6 +3,7 @@ import { processEvent, EventCollectorError } from '../services/event-collector.j
 import type { EventPayload, EventCollectorDb, SseBroker } from '../services/event-collector.js';
 import { getDatabase } from '../db.js';
 import { sseBroker } from '../services/sse-broker.js';
+import { getTeamManager } from '../services/team-manager.js';
 
 interface EventQuerystring {
   team_id?: string;
@@ -44,6 +45,18 @@ const eventsRoutes: FastifyPluginCallback = (
 
         const db = getDatabase();
         const result = processEvent(payload, db as unknown as EventCollectorDb, sseBroker as unknown as SseBroker);
+
+        // When a stop event is received, a team may be finishing —
+        // trigger queue processing so queued teams can launch.
+        if (payload.event === 'stop' || payload.event === 'session_end') {
+          const team = db.getTeamByWorktree(payload.team);
+          if (team?.projectId) {
+            getTeamManager().processQueue(team.projectId).catch((err) => {
+              request.log.error(err, 'processQueue error after stop/session_end event');
+            });
+          }
+        }
+
         return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof EventCollectorError) {

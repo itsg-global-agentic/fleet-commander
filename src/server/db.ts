@@ -160,6 +160,7 @@ export interface ProjectInsert {
   name: string;
   repoPath: string;
   githubRepo?: string | null;
+  maxActiveTeams?: number;
 }
 
 export interface ProjectUpdate {
@@ -167,6 +168,7 @@ export interface ProjectUpdate {
   githubRepo?: string | null;
   status?: ProjectStatus;
   hooksInstalled?: boolean;
+  maxActiveTeams?: number;
 }
 
 export interface ProjectFilter {
@@ -208,6 +210,9 @@ export class FleetDatabase {
     if (needsMigration) {
       this.migrateToV2();
     }
+
+    // Add max_active_teams column if missing (for existing v2 databases)
+    this.addMaxActiveTeamsColumn();
 
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
@@ -290,6 +295,23 @@ export class FleetDatabase {
   }
 
   /**
+   * Add max_active_teams column to projects table if it doesn't exist.
+   * Handles upgrade of existing databases that lack this column.
+   */
+  private addMaxActiveTeamsColumn(): void {
+    try {
+      // Check if column exists by querying table info
+      const columns = this.db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+      const hasColumn = columns.some((c) => c.name === 'max_active_teams');
+      if (!hasColumn) {
+        this.db.exec('ALTER TABLE projects ADD COLUMN max_active_teams INTEGER NOT NULL DEFAULT 5');
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
+  /**
    * Get the current schema version.
    */
   getSchemaVersion(): number {
@@ -310,14 +332,15 @@ export class FleetDatabase {
   insertProject(data: ProjectInsert): Project {
     const now = new Date().toISOString();
     const stmt = this.db.prepare(`
-      INSERT INTO projects (name, repo_path, github_repo, created_at, updated_at)
-      VALUES (@name, @repoPath, @githubRepo, @createdAt, @updatedAt)
+      INSERT INTO projects (name, repo_path, github_repo, max_active_teams, created_at, updated_at)
+      VALUES (@name, @repoPath, @githubRepo, @maxActiveTeams, @createdAt, @updatedAt)
     `);
 
     const info = stmt.run({
       name: data.name,
       repoPath: data.repoPath,
       githubRepo: data.githubRepo ?? null,
+      maxActiveTeams: data.maxActiveTeams ?? 5,
       createdAt: now,
       updatedAt: now,
     });
@@ -358,7 +381,8 @@ export class FleetDatabase {
       SELECT
         p.*,
         COUNT(t.id) AS team_count,
-        COUNT(CASE WHEN t.status IN ('launching', 'running', 'idle', 'stuck') THEN 1 END) AS active_team_count
+        COUNT(CASE WHEN t.status IN ('launching', 'running', 'idle', 'stuck') THEN 1 END) AS active_team_count,
+        COUNT(CASE WHEN t.status = 'queued' THEN 1 END) AS queued_team_count
       FROM projects p
       LEFT JOIN teams t ON t.project_id = p.id
       GROUP BY p.id
@@ -370,6 +394,7 @@ export class FleetDatabase {
       ...this.mapProjectRow(r),
       teamCount: r.team_count as number,
       activeTeamCount: r.active_team_count as number,
+      queuedTeamCount: r.queued_team_count as number,
     }));
   }
 
@@ -392,6 +417,10 @@ export class FleetDatabase {
     if (fields.hooksInstalled !== undefined) {
       setClauses.push('hooks_installed = @hooksInstalled');
       params.hooksInstalled = fields.hooksInstalled ? 1 : 0;
+    }
+    if (fields.maxActiveTeams !== undefined) {
+      setClauses.push('max_active_teams = @maxActiveTeams');
+      params.maxActiveTeams = fields.maxActiveTeams;
     }
 
     if (setClauses.length === 0) return this.getProject(id);
@@ -496,6 +525,30 @@ export class FleetDatabase {
   getActiveTeamsByProject(projectId: number): Team[] {
     const stmt = this.db.prepare(
       "SELECT * FROM teams WHERE project_id = ? AND status IN ('queued', 'launching', 'running', 'idle', 'stuck') ORDER BY created_at DESC"
+    );
+    const rows = stmt.all(projectId) as Record<string, unknown>[];
+    return rows.map((r) => this.mapTeamRow(r));
+  }
+
+  /**
+   * Count teams with active (non-queued) statuses for a project.
+   * Used for enforcing max_active_teams limit — queued teams are excluded
+   * because they haven't consumed a slot yet.
+   */
+  getActiveTeamCountByProject(projectId: number): number {
+    const stmt = this.db.prepare(
+      "SELECT COUNT(*) AS cnt FROM teams WHERE project_id = ? AND status IN ('launching', 'running', 'idle', 'stuck')"
+    );
+    const row = stmt.get(projectId) as { cnt: number };
+    return row.cnt;
+  }
+
+  /**
+   * Get queued teams for a project, ordered by creation time (FIFO).
+   */
+  getQueuedTeamsByProject(projectId: number): Team[] {
+    const stmt = this.db.prepare(
+      "SELECT * FROM teams WHERE project_id = ? AND status = 'queued' ORDER BY created_at ASC"
     );
     const rows = stmt.all(projectId) as Record<string, unknown>[];
     return rows.map((r) => this.mapTeamRow(r));
@@ -1052,6 +1105,7 @@ export class FleetDatabase {
       githubRepo: row.github_repo as string | null,
       status: row.status as ProjectStatus,
       hooksInstalled: (row.hooks_installed as number) === 1,
+      maxActiveTeams: (row.max_active_teams as number | undefined) ?? 5,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     };

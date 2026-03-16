@@ -321,7 +321,7 @@ const teamsRoutes: FastifyPluginCallback = (
   );
 
   // -------------------------------------------------------------------------
-  // GET /api/teams/:id — full team detail
+  // GET /api/teams/:id — full team detail (assembles TeamDetail shape)
   // -------------------------------------------------------------------------
   fastify.get(
     '/api/teams/:id',
@@ -347,7 +347,85 @@ const teamsRoutes: FastifyPluginCallback = (
           });
         }
 
-        return reply.code(200).send(team);
+        // Aggregate cost / session data
+        const costSummary = db.getCostByTeam(teamId);
+
+        // Compute duration & idle in minutes
+        const launchedAt = team.launchedAt ? new Date(team.launchedAt) : null;
+        const now = new Date();
+        const durationMin = launchedAt
+          ? Math.round((now.getTime() - launchedAt.getTime()) / 60_000)
+          : 0;
+
+        const lastEventAt = team.lastEventAt ? new Date(team.lastEventAt) : null;
+        const idleMin = lastEventAt
+          ? Math.round((now.getTime() - lastEventAt.getTime()) / 60_000 * 10) / 10
+          : null;
+
+        // Pull request detail (if linked)
+        let prDetail = null;
+        if (team.prNumber) {
+          const pr = db.getPullRequest(team.prNumber);
+          if (pr) {
+            // Parse CI checks from JSON
+            let checks: Array<{ name: string; status: string; conclusion: string | null }> = [];
+            if (pr.checksJson) {
+              try {
+                checks = JSON.parse(pr.checksJson);
+              } catch {
+                // Malformed JSON — leave empty
+              }
+            }
+
+            prDetail = {
+              number: pr.prNumber,
+              state: pr.state,
+              mergeStatus: pr.mergeStatus,
+              ciStatus: pr.ciStatus,
+              ciConclusion: pr.ciConclusion,
+              ciFailCount: pr.ciFailCount,
+              checks,
+              autoMerge: pr.autoMerge,
+            };
+          }
+        }
+
+        // Recent events
+        const recentEvents = db.getEventsByTeam(teamId, 20);
+
+        // Output tail
+        const manager = getTeamManager();
+        const outputLines = manager.getOutput(teamId, 50);
+        const outputTail = outputLines.length > 0 ? outputLines.join('\n') : null;
+
+        // Assemble full TeamDetail response
+        const detail = {
+          id: team.id,
+          issueNumber: team.issueNumber,
+          issueTitle: team.issueTitle,
+          status: team.status,
+          phase: team.phase,
+          pid: team.pid,
+          sessionId: team.sessionId,
+          worktreeName: team.worktreeName,
+          worktreePath: team.worktreePath,
+          branchName: team.branchName,
+          prNumber: team.prNumber,
+          launchedAt: team.launchedAt,
+          stoppedAt: team.stoppedAt,
+          lastEventAt: team.lastEventAt,
+          durationMin,
+          idleMin,
+          totalCost: costSummary.totalCostUsd,
+          totalInputTokens: costSummary.totalInputTokens,
+          totalOutputTokens: costSummary.totalOutputTokens,
+          sessionCount: costSummary.entryCount,
+          pr: prDetail,
+          recentEvents,
+          outputTail,
+        };
+
+        return reply.code(200).send(detail);
       } catch (err: unknown) {
         request.log.error(err, 'Failed to get team');
         return reply.code(500).send({

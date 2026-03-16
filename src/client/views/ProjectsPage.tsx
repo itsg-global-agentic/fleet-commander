@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
 import { AddProjectDialog } from '../components/AddProjectDialog';
 import { CleanupModal } from '../components/CleanupModal';
@@ -26,6 +26,11 @@ export function ProjectsPage() {
 
   // Cleanup modal state
   const [cleanupProjectId, setCleanupProjectId] = useState<number | null>(null);
+
+  // Inline edit state for maxActiveTeams
+  const [editingLimitId, setEditingLimitId] = useState<number | null>(null);
+  const [editLimitValue, setEditLimitValue] = useState<number>(5);
+  const limitInputRef = useRef<HTMLInputElement>(null);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -90,6 +95,30 @@ export function ProjectsPage() {
   const handleCleanupDone = useCallback(() => {
     fetchProjects();
   }, [fetchProjects]);
+
+  const handleEditLimit = useCallback((project: ProjectSummary) => {
+    setEditingLimitId(project.id);
+    setEditLimitValue(project.maxActiveTeams);
+    setTimeout(() => limitInputRef.current?.focus(), 50);
+  }, []);
+
+  const handleSaveLimit = useCallback(
+    async (projectId: number) => {
+      const clamped = Math.max(1, Math.min(50, editLimitValue));
+      try {
+        await api.put(`projects/${projectId}`, { maxActiveTeams: clamped });
+        await fetchProjects();
+      } catch {
+        // ignore
+      }
+      setEditingLimitId(null);
+    },
+    [api, editLimitValue, fetchProjects],
+  );
+
+  const handleCancelEditLimit = useCallback(() => {
+    setEditingLimitId(null);
+  }, []);
 
   // --- Render ---
 
@@ -192,9 +221,46 @@ export function ProjectsPage() {
                       {project.githubRepo && (
                         <span className="shrink-0">{project.githubRepo}</span>
                       )}
-                      <span className="shrink-0">
-                        {project.activeTeamCount} team{project.activeTeamCount !== 1 ? 's' : ''} running
-                      </span>
+                      {editingLimitId === project.id ? (
+                        <span className="shrink-0 inline-flex items-center gap-1">
+                          <span>{project.activeTeamCount}/</span>
+                          <input
+                            ref={limitInputRef}
+                            type="number"
+                            value={editLimitValue}
+                            onChange={(e) => setEditLimitValue(parseInt(e.target.value, 10) || 1)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleSaveLimit(project.id);
+                              if (e.key === 'Escape') handleCancelEditLimit();
+                            }}
+                            onBlur={() => handleSaveLimit(project.id)}
+                            min={1}
+                            max={50}
+                            className="w-12 px-1 py-0 text-xs rounded border border-dark-accent bg-dark-base text-dark-text focus:outline-none"
+                          />
+                          <span>active teams</span>
+                        </span>
+                      ) : (
+                        <span
+                          className="shrink-0 cursor-pointer hover:text-dark-text transition-colors"
+                          onClick={() => handleEditLimit(project)}
+                          title="Click to edit max active teams limit"
+                        >
+                          {project.activeTeamCount}/{project.maxActiveTeams} active teams
+                        </span>
+                      )}
+                      {(project.queuedTeamCount ?? 0) > 0 && (
+                        <span
+                          className="shrink-0 px-1.5 py-0 rounded-full text-xs font-medium"
+                          style={{
+                            backgroundColor: '#D2992220',
+                            color: '#D29922',
+                            border: '1px solid #D2992240',
+                          }}
+                        >
+                          {project.queuedTeamCount} queued
+                        </span>
+                      )}
                     </div>
                   </div>
 
