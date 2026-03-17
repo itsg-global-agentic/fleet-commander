@@ -243,6 +243,12 @@ function checkInstallStatus(repoPath: string): InstallStatus {
     'fleet-coordinator.md',
     'fleet-analyst.md',
     'fleet-reviewer.md',
+    'fleet-dev-generic.md',
+    'fleet-dev-csharp.md',
+    'fleet-dev-fsharp.md',
+    'fleet-dev-python.md',
+    'fleet-dev-typescript.md',
+    'fleet-dev-devops.md',
   ];
   const agentsDir = path.join(repoPath, '.claude', 'agents');
   const agentFiles: InstallFileStatus[] = agentNames.map((name) => ({
@@ -418,7 +424,7 @@ const projectsRoutes: FastifyPluginCallback = (
               // Create a basic default prompt inline
               fs.writeFileSync(promptAbsPath,
                 'Read the ENTIRE file `.claude/prompts/fleet-workflow.md` before taking any actions.\n' +
-                'You are the TL. Create a team and spawn the CORE team (Coordinator + analyst + dev + reviewer) as described in the workflow.\n' +
+                'You are the TL. Spawn the CORE team (Coordinator + Analyst + Reviewer) as described in the workflow. Do NOT spawn developers yet.\n' +
                 'Issue: #{{ISSUE_NUMBER}}\n',
                 'utf-8',
               );

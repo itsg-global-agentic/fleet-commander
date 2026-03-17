@@ -1,7 +1,7 @@
 ---
 name: fleet-dev-devops
 description: DevOps/infrastructure specialist. Handles CI/CD pipelines, Docker, build systems, deployment scripts, and environment management. Use for infrastructure and automation work.
-tools: Glob, Grep, LS, Read, Edit, Write, Bash, WebFetch, WebSearch, Skill, ToolSearch
+tools: Glob, Grep, LS, Read, Edit, Write, Bash, WebFetch, WebSearch, Agent, Skill, ToolSearch
 model: sonnet
 ---
 

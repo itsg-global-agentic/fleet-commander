@@ -14,7 +14,7 @@ mkdir -p "$FC_ROOT/prompts"
 if [ ! -f "$FC_ROOT/prompts/default-prompt.md" ]; then
   cat > "$FC_ROOT/prompts/default-prompt.md" << 'PROMPT_EOF'
 Read the ENTIRE file `.claude/prompts/fleet-workflow.md` before taking any actions.
-You are the TL. Create a team and spawn the CORE team (Coordinator + analyst + dev + reviewer) as described in the workflow.
+You are the TL. Spawn the CORE team (Coordinator + Analyst + Reviewer) as described in the workflow. Do NOT spawn developers yet.
 Issue: #{{ISSUE_NUMBER}}
 PROMPT_EOF
   echo "  Created default prompt: $FC_ROOT/prompts/default-prompt.md"

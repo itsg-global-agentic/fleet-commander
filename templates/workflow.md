@@ -56,12 +56,12 @@ stateDiagram-v2
     Analyzing --> Implementing : brief OK
     Analyzing --> Blocked : BLOCKED
     Implementing --> Reviewing : dev reports "done"
-    Reviewing --> Implementing : REJECT (max 2x)
+    Reviewing --> Implementing : REJECT (fix round, max 3 total)
     Reviewing --> PR : APPROVE + push
     PR --> Done : CI GREEN + merge
     PR --> Implementing : CI RED (dev fixes, pushes)
     Implementing --> Blocked : escalation
-    Reviewing --> Blocked : 2x REJECT
+    Reviewing --> Blocked : 3x REJECT
     PR --> Blocked : 3 unique CI failure types
     Done --> [*]
 ```
@@ -125,13 +125,15 @@ Verdict: **APPROVE** or **REJECT** with specific feedback.
 
 ### Branch Freshness
 
-**MANDATORY before every push**: dev must rebase on the base branch:
+**MANDATORY before every push**: the **Coordinator** checks branch freshness and instructs the dev to rebase on the base branch before pushing. The dev does NOT decide when to rebase autonomously — the Coordinator owns this gate.
+
+Coordinator instruction to dev:
 ```bash
 git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}}
 ```
 If rebase fails (conflicts) → state Blocked.
 
-Before creating PR, dev must also force-push the rebased branch:
+Before creating PR, Coordinator instructs the dev to force-push the rebased branch:
 ```bash
 git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}} && git push --force-with-lease
 ```
