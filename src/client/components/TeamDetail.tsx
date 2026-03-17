@@ -149,11 +149,14 @@ export function TeamDetail() {
   const handleAction = useCallback(
     async (action: 'stop' | 'resume' | 'restart') => {
       if (!selectedTeamId || actionLoading) return;
+      const teamId = selectedTeamId;
       setActionLoading(action);
       try {
-        await api.post(`teams/${selectedTeamId}/${action}`);
+        await api.post(`teams/${teamId}/${action}`);
+        if (selectedTeamId !== teamId) return;
         // Refresh detail after action
-        const data = await api.get<TeamDetailType>(`teams/${selectedTeamId}`);
+        const data = await api.get<TeamDetailType>(`teams/${teamId}`);
+        if (selectedTeamId !== teamId) return;
         setDetail(data);
         setRefreshKey((k) => k + 1);
       } catch {
@@ -261,22 +264,7 @@ export function TeamDetail() {
                   <span className="text-dark-muted">
                     Duration: <span className="text-dark-text">{formatDuration(detail.durationMin)}</span>
                   </span>
-                  <span className="text-dark-muted">
-                    API Cost: <span className="text-dark-text font-mono">${(detail.totalCost ?? 0).toFixed(2)}</span>
-                  </span>
-                  <span className="text-dark-muted">
-                    Sessions: <span className="text-dark-text">{detail.sessionCount ?? 0}</span>
-                  </span>
                 </div>
-
-                {/* Token usage breakdown (shown when cost > 0) */}
-                {(detail.totalCost ?? 0) > 0 && (
-                  <div className="mt-1 text-xs text-dark-muted">
-                    Input: {((detail.totalInputTokens ?? 0) / 1000).toFixed(1)}k tokens
-                    {' \u00B7 '}
-                    Output: {((detail.totalOutputTokens ?? 0) / 1000).toFixed(1)}k tokens
-                  </div>
-                )}
 
                 {/* Worktree info */}
                 <div className="mt-2 text-xs text-dark-muted">

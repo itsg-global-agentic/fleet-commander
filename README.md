@@ -108,6 +108,7 @@ stateDiagram-v2
 | **Usage** | `/usage` | Four progress bars: daily, weekly, Sonnet, and extra usage percentages. |
 | **Projects** | `/projects` | CRUD for projects. Install status, cleanup, prompt editor. |
 | **Settings** | `/settings` | Read-only viewer for current server configuration. |
+| **Lifecycle** | `/lifecycle` | Team state machine diagram + editable PM message templates |
 
 ## Configuration
 

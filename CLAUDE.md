@@ -27,7 +27,7 @@ fleet-commander/
       index.ts              # Fastify app entry, route registration, service startup
       config.ts             # Environment variable parsing and validation
       db.ts                 # SQLite connection (WAL mode), schema init, query helpers
-      schema.sql            # 6 tables: projects, teams, pull_requests, events, commands, usage_snapshots
+      schema.sql            # 8 tables: projects, teams, pull_requests, events, commands, usage_snapshots, schema_version, message_templates
       routes/               # REST API route handlers
         teams.ts            # CRUD + launch/stop/message
         projects.ts         # CRUD + install/uninstall/cleanup
@@ -36,6 +36,7 @@ fleet-commander/
         prs.ts              # Pull request operations
         stream.ts           # SSE endpoint
         usage.ts            # Usage snapshot API
+        state-machine.ts    # State machine transitions + message template CRUD
         costs.ts            # Cost tracking (legacy)
         system.ts           # Health check, config
       services/
@@ -61,6 +62,7 @@ fleet-commander/
         UsageViewPage.tsx   # Usage progress bars
         ProjectsPage.tsx    # Project CRUD, install, cleanup, prompt editor
         SettingsPage.tsx    # Read-only config viewer
+        StateMachinePage.tsx # Team lifecycle state machine diagram + message template editor
       components/
         FleetGrid.tsx       # Team table
         TeamRow.tsx         # Single team row
@@ -86,6 +88,7 @@ fleet-commander/
       hooks/                # Custom React hooks
     shared/
       types.ts              # Shared TypeScript types (Team, Project, Event, etc.)
+      message-templates.ts  # Message template type definitions and defaults
   hooks/                    # CC hook scripts (deployed to target repos)
     send_event.sh           # Fire-and-forget POST to Fleet Commander
     on_session_start.sh
@@ -121,7 +124,7 @@ fleet-commander/
 | `src/server/index.ts` | App entry point, registers routes, starts services |
 | `src/server/config.ts` | All env var parsing, validation, frozen config object |
 | `src/server/db.ts` | SQLite connection, WAL mode, schema initialization |
-| `src/server/schema.sql` | Full database schema (6 tables + 1 view) |
+| `src/server/schema.sql` | Full database schema (8 tables + 1 view) |
 | `src/server/services/team-manager.ts` | Spawns CC processes, manages stdin/stdout pipes |
 | `src/server/services/event-collector.ts` | Receives hook events, writes to DB, broadcasts SSE |
 | `src/server/services/github-poller.ts` | Polls GitHub via `gh` CLI for PR/CI/merge status |
@@ -147,7 +150,7 @@ npm run launch       # Full launch: install + build + open browser
 
 ## Database
 
-SQLite with WAL mode, 6 tables:
+SQLite with WAL mode, 8 tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -157,6 +160,8 @@ SQLite with WAL mode, 6 tables:
 | `events` | Hook events from CC sessions (type, tool name, payload JSON) |
 | `commands` | Messages sent from dashboard to running agents |
 | `usage_snapshots` | Usage percentage snapshots (daily, weekly, Sonnet, extra) |
+| `schema_version` | Migration tracking |
+| `message_templates` | Editable PM->TL message templates |
 
 Plus one view: `v_team_dashboard` (joins teams + projects + PRs for the grid).
 

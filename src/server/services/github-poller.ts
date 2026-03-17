@@ -182,7 +182,7 @@ class GitHubPoller {
     } else if (ciStatus === 'failing') {
       const currentUniqueFailures = new Set(
         checks
-          .filter((c) => c.conclusion === 'FAILURE')
+          .filter((c) => c.conclusion === 'FAILURE' || c.conclusion === 'CANCELLED')
           .map((c) => c.name || c.context || 'unknown')
       ).size;
       ciFailCount = Math.max(existing?.ciFailCount ?? 0, currentUniqueFailures);

@@ -113,7 +113,7 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
   return (
     <div className="font-mono text-xs max-h-64 overflow-y-auto bg-[#0D1117] p-2 rounded border border-dark-border custom-scrollbar">
       {events.map((e, i) => (
-        <div key={i} className="py-0.5 leading-relaxed">
+        <div key={`${e.timestamp}-${e.type}-${i}`} className="py-0.5 leading-relaxed">
           <span className="text-dark-muted">
             {e.timestamp?.substring(11, 19) ?? '--:--:--'}
           </span>

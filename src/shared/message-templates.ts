@@ -48,6 +48,6 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
       'Hey, you have been idle for a while on issue #{{ISSUE_NUMBER}}. What is the status? Do you need help?',
     description:
       'Sent to TL when team transitions to stuck to nudge them back to work',
-    placeholders: ['ISSUE_NUMBER', 'TEAM_NAME'],
+    placeholders: ['ISSUE_NUMBER'],
   },
 ];

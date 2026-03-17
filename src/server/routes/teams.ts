@@ -427,10 +427,6 @@ const teamsRoutes: FastifyPluginCallback = (
           lastEventAt: team.lastEventAt,
           durationMin,
           idleMin,
-          totalCost: 0,
-          totalInputTokens: 0,
-          totalOutputTokens: 0,
-          sessionCount: 0,
           pr: prDetail,
           recentEvents,
           outputTail,
@@ -768,7 +764,7 @@ const teamsRoutes: FastifyPluginCallback = (
         const delivered = manager.sendMessage(teamId, message.trim());
         if (delivered) {
           db.markCommandDelivered(command.id);
-          console.log(`[Teams] Message delivered to team ${teamId} via stdin`);
+          request.log.info(`[Teams] Message delivered to team ${teamId} via stdin`);
         }
 
         return reply.code(201).send({

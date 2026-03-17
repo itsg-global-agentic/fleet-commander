@@ -472,6 +472,8 @@ export class TeamManager {
       console.log(`[TeamManager] Process exited for team ${team.id} (code=${code}, signal=${signal})`);
       this.childProcesses.delete(team.id);
       this.stdinPipes.delete(team.id);
+      this.outputBuffers.delete(team.id);
+      this.parsedEvents.delete(team.id);
 
       const currentTeam = db.getTeam(team.id);
       if (!currentTeam) return;
@@ -506,6 +508,8 @@ export class TeamManager {
       console.error(`[TeamManager] ERROR: process error for team ${team.id}:`, err.message);
       this.childProcesses.delete(team.id);
       this.stdinPipes.delete(team.id);
+      this.outputBuffers.delete(team.id);
+      this.parsedEvents.delete(team.id);
 
       const currentTeam = db.getTeam(team.id);
       if (!currentTeam) return;
@@ -578,13 +582,17 @@ export class TeamManager {
     }
     this.stdinPipes.delete(teamId);
 
-    // Force kill if still running
-    if (team.pid) {
-      this.killProcess(team.pid);
+    // Force kill if still running — re-read from DB to get fresh PID
+    // (the process may have exited during the 5s grace period)
+    const freshTeam = db.getTeam(teamId);
+    if (freshTeam?.pid) {
+      this.killProcess(freshTeam.pid);
     }
 
     // Clean up child process reference
     this.childProcesses.delete(teamId);
+    this.outputBuffers.delete(teamId);
+    this.parsedEvents.delete(teamId);
 
     const updated = db.updateTeam(teamId, {
       status: 'failed',
@@ -716,6 +724,8 @@ export class TeamManager {
       console.log(`[TeamManager] Resume process exited for team ${teamId} (code=${code})`);
       this.childProcesses.delete(teamId);
       this.stdinPipes.delete(teamId);
+      this.outputBuffers.delete(teamId);
+      this.parsedEvents.delete(teamId);
 
       const currentTeam = db.getTeam(teamId);
       if (!currentTeam) return;
@@ -744,6 +754,8 @@ export class TeamManager {
       console.error(`[TeamManager] Resume process error for team ${teamId}:`, err);
       this.childProcesses.delete(teamId);
       this.stdinPipes.delete(teamId);
+      this.outputBuffers.delete(teamId);
+      this.parsedEvents.delete(teamId);
 
       const currentTeam = db.getTeam(teamId);
       if (!currentTeam) return;
@@ -1088,6 +1100,8 @@ export class TeamManager {
       console.log(`[TeamManager] Process exited for dequeued team ${team.id} (code=${code}, signal=${signal})`);
       this.childProcesses.delete(team.id);
       this.stdinPipes.delete(team.id);
+      this.outputBuffers.delete(team.id);
+      this.parsedEvents.delete(team.id);
 
       const currentTeam = db.getTeam(team.id);
       if (!currentTeam) return;
@@ -1116,6 +1130,8 @@ export class TeamManager {
       console.error(`[TeamManager] ERROR: process error for dequeued team ${team.id}:`, err.message);
       this.childProcesses.delete(team.id);
       this.stdinPipes.delete(team.id);
+      this.outputBuffers.delete(team.id);
+      this.parsedEvents.delete(team.id);
 
       const currentTeam = db.getTeam(team.id);
       if (!currentTeam) return;

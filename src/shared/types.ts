@@ -90,6 +90,7 @@ export interface Team {
   stoppedAt: string | null;
   lastEventAt: string | null;
   createdAt: string;
+  updatedAt: string;
 }
 
 /** A pull request associated with a team */
@@ -235,10 +236,6 @@ export interface TeamDetail {
   lastEventAt: string | null;
   durationMin: number;
   idleMin: number | null;
-  totalCost: number;
-  totalInputTokens: number;
-  totalOutputTokens: number;
-  sessionCount: number;
   pr: {
     number: number;
     state: string | null;

@@ -14,7 +14,6 @@ import fs from 'fs';
 
 // Route plugins
 import eventsRoutes from '../../src/server/routes/events.js';
-import costsRoutes from '../../src/server/routes/costs.js';
 import systemRoutes from '../../src/server/routes/system.js';
 import prsRoutes from '../../src/server/routes/prs.js';
 import streamRoutes from '../../src/server/routes/stream.js';
@@ -100,7 +99,6 @@ beforeAll(async () => {
   // and issueRoutes (needs gh CLI / issue-fetcher).
   // We register a subset of prsRoutes -- only the GET endpoints hit the DB.
   await server.register(eventsRoutes);
-  await server.register(costsRoutes);
   await server.register(systemRoutes);
 
   // Register a simple health endpoint (mirrors the task spec)

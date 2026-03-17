@@ -109,7 +109,8 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
       >
         {/* Expand/collapse arrow */}
         <button
-          onClick={() => hasChildren && setExpanded(!isExpanded)}
+          disabled={!hasChildren}
+          onClick={() => setExpanded(!isExpanded)}
           className={`w-4 h-4 flex items-center justify-center text-dark-muted shrink-0 transition-transform duration-150 ${
             hasChildren ? 'cursor-pointer hover:text-dark-text' : 'invisible'
           } ${isExpanded ? 'rotate-90' : ''}`}

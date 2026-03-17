@@ -340,14 +340,14 @@ export function IssueTreeView() {
 function filterTree(nodes: IssueNode[], query: string): IssueNode[] {
   if (!query.trim()) return nodes;
   const q = query.toLowerCase().trim();
-  const numMatch = q.startsWith('#') ? parseInt(q.slice(1)) : parseInt(q);
+  const isNumericQuery = /^\d+$/.test(q);
+  const numMatch = q.startsWith('#') ? parseInt(q.slice(1), 10) : (isNumericQuery ? parseInt(q, 10) : NaN);
 
   return nodes.reduce<IssueNode[]>((acc, node) => {
     // Check if this node matches
     const matches =
-      node.title.toLowerCase().includes(q) ||
-      node.number === numMatch ||
-      String(node.number).includes(q);
+      (!isNaN(numMatch) && node.number === numMatch) ||
+      node.title.toLowerCase().includes(q);
 
     // Recursively filter children
     const filteredChildren = filterTree(node.children, query);

@@ -180,6 +180,10 @@ INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
   ('ci_blocked',
    'STOP. {{FAIL_COUNT}} unique CI failure types on PR #{{PR_NUMBER}}. Wait for my instructions.',
    'Tell TL the team is blocked due to repeated CI failures');
+INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
+  ('stuck_nudge',
+   'Hey, you have been idle for a while on issue #{{ISSUE_NUMBER}}. What is the status? Do you need help?',
+   'Nudge sent to TL when team transitions to stuck');
 
 -- Insert schema version 2 (or upgrade from 1)
 INSERT OR IGNORE INTO schema_version (version) VALUES (2);

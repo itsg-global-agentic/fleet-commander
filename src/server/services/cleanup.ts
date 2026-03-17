@@ -134,7 +134,13 @@ export function getCleanupPreview(projectId: number, resetTeams: boolean = false
       if (!branch) continue;
 
       const worktreeName = branch.slice('worktree-'.length);
-      const worktreeExists = fs.existsSync(path.join(worktreeDir, worktreeName));
+
+      // Gap B: skip branches for active teams
+      if (activeWorktreeNames.has(worktreeName)) continue;
+
+      // Gap A: only flag as stale when worktreeDir exists
+      const worktreeExists = fs.existsSync(worktreeDir) &&
+        fs.existsSync(path.join(worktreeDir, worktreeName));
       if (!worktreeExists) {
         items.push({
           type: 'stale_branch',

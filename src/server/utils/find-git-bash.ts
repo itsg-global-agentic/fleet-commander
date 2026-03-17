@@ -33,9 +33,10 @@ export function findGitBash(): string | undefined {
 
   // Fallback: ask Windows where bash.exe lives
   try {
-    const result = execSync('where bash.exe 2>nul', {
+    const result = execSync('where bash.exe', {
       encoding: 'utf-8',
       timeout: 5000,
+      shell: 'cmd.exe',
     });
     const first = result.trim().split('\n')[0]?.trim();
     if (first && fs.existsSync(first)) return first;

@@ -112,6 +112,7 @@ export function ProjectsPage() {
 
   const handleSaveLimit = useCallback(
     async (projectId: number) => {
+      committedRef.current = false; // reset immediately
       const clamped = Math.max(1, Math.min(50, editLimitValue));
       try {
         await api.put(`projects/${projectId}`, { maxActiveTeams: clamped });
@@ -392,7 +393,6 @@ export function ProjectsPage() {
                               if (!committedRef.current) {
                                 handleSaveLimit(project.id);
                               }
-                              committedRef.current = false;
                             }}
                             min={1}
                             max={50}

@@ -161,6 +161,11 @@ export function processEvent(
       db.updateTeam(teamId, {
         status: 'running',
       });
+      sse.broadcast('team_status_changed' as any, {
+        team_id: teamId,
+        status: 'running',
+        previous_status: 'launching',
+      }, teamId);
     }
   }
 

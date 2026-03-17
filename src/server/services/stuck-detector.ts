@@ -91,7 +91,6 @@ class StuckDetector {
           if (newStatus === 'stuck') {
             const msg = resolveMessage('stuck_nudge', {
               ISSUE_NUMBER: String(team.issueNumber),
-              TEAM_NAME: team.worktreeName,
             });
             if (msg) {
               const manager = getTeamManager();
