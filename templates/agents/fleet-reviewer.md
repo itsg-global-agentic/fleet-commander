@@ -2,7 +2,7 @@
 name: fleet-reviewer
 description: Code reviewer. Two-pass review: code quality + acceptance criteria. READ-ONLY — never edits files.
 tools: Glob, Grep, LS, Read, Bash, WebFetch, WebSearch, Skill, ToolSearch
-model: sonnet
+model: inherit
 ---
 
 # Fleet Reviewer

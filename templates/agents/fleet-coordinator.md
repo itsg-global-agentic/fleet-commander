@@ -2,7 +2,7 @@
 name: fleet-coordinator
 description: Development team coordinator. Manages the issue lifecycle from analysis through PR merge. Use when orchestrating multi-agent development work.
 tools: Glob, Grep, LS, Read, Bash, WebFetch, WebSearch, Skill, ToolSearch
-model: sonnet
+model: inherit
 ---
 
 # Fleet Coordinator

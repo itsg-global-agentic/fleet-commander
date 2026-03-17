@@ -10,7 +10,7 @@ tools:
   - WebSearch
   - Skill
   - ToolSearch
-model: sonnet
+model: inherit
 description: "Codebase analyst. Explores code to produce structured briefs for developers. READ-ONLY — never edits files."
 ---
 

@@ -2,7 +2,7 @@
 name: fleet-dev-python
 description: Python specialist developer. Handles Django, Flask, FastAPI, SQLAlchemy, pytest, async, and type hints. Use for Python backend, scripting, and data work.
 tools: Glob, Grep, LS, Read, Edit, Write, Bash, WebFetch, WebSearch, Agent, Skill, ToolSearch
-model: sonnet
+model: inherit
 ---
 
 # Python Developer

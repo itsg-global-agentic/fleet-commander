@@ -3,7 +3,7 @@ name: fleet-dev-csharp
 description: C#/.NET specialist developer. Handles ASP.NET, Entity Framework, DDD patterns, dependency injection. Use for .NET backend and library work.
 tools: Glob, Grep, LS, Read, Edit, Write, Bash, WebFetch, WebSearch, Agent, Skill, ToolSearch
 preferred_plugins: csharp-lsp
-model: sonnet
+model: inherit
 ---
 
 # C# / .NET Developer

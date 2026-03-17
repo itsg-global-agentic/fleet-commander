@@ -2,7 +2,7 @@
 name: fleet-dev-generic
 description: Generic developer agent. Handles any language or framework. Falls back to CLAUDE.md for project conventions. Use when no specialist matches the task.
 tools: Glob, Grep, LS, Read, Edit, Write, Bash, WebFetch, WebSearch, Agent, Skill, ToolSearch
-model: sonnet
+model: inherit
 ---
 
 # Generic Developer

@@ -3,7 +3,7 @@ name: fleet-dev-fsharp
 description: F# specialist developer. Handles F# modules, computation expressions, type providers, and compilation order. Use for F# domain logic and financial calculations.
 tools: Glob, Grep, LS, Read, Edit, Write, Bash, WebFetch, WebSearch, Agent, Skill, ToolSearch
 preferred_plugins: context7
-model: sonnet
+model: inherit
 ---
 
 # F# Developer

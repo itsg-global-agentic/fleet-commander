@@ -3,7 +3,7 @@ name: fleet-dev-typescript
 description: TypeScript/JavaScript specialist developer. Handles React, Node.js, Vitest, Playwright, and modern JS tooling. Use for frontend, backend, and full-stack TS/JS work.
 tools: Glob, Grep, LS, Read, Edit, Write, Bash, WebFetch, WebSearch, Agent, Skill, ToolSearch
 preferred_plugins: playwright
-model: sonnet
+model: inherit
 ---
 
 # TypeScript / JavaScript Developer
