@@ -20,7 +20,7 @@ import { getIssueFetcher } from '../services/issue-fetcher.js';
 import { getCleanupPreview, executeCleanup } from '../services/cleanup.js';
 import { sseBroker } from '../services/sse-broker.js';
 import config from '../config.js';
-import type { ProjectStatus, InstallStatus, CleanupPreview, CleanupResult } from '../../shared/types.js';
+import type { ProjectStatus, InstallStatus, InstallFileStatus, CleanupPreview, CleanupResult } from '../../shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Request body / param / query interfaces
@@ -143,12 +143,85 @@ function uninstallHooks(repoPath: string): void {
 /**
  * Check the install status of all three artifacts deployed by install.sh:
  * hooks directory, workflow prompt, and next-issue command.
+ * Returns detailed file-level breakdown for tooltip display.
  */
 function checkInstallStatus(repoPath: string): InstallStatus {
+  // Hook scripts expected in .claude/hooks/fleet-commander/
+  const hookNames = [
+    'send_event.sh',
+    'on_session_start.sh',
+    'on_session_end.sh',
+    'on_stop.sh',
+    'on_subagent_start.sh',
+    'on_subagent_stop.sh',
+    'on_notification.sh',
+    'on_post_tool_use.sh',
+    'on_tool_error.sh',
+    'on_pre_compact.sh',
+  ];
+
+  const hooksDir = path.join(repoPath, '.claude', 'hooks', 'fleet-commander');
+  const hookFiles: InstallFileStatus[] = hookNames.map((name) => ({
+    name,
+    exists: fs.existsSync(path.join(hooksDir, name)),
+  }));
+  const hookFoundCount = hookFiles.filter((f) => f.exists).length;
+
+  // Prompt files expected in .claude/prompts/
+  const promptFiles: InstallFileStatus[] = [
+    {
+      name: 'fleet-workflow.md',
+      exists: fs.existsSync(path.join(repoPath, '.claude', 'prompts', 'fleet-workflow.md')),
+    },
+  ];
+
+  // Command files expected in .claude/commands/
+  const commandFiles: InstallFileStatus[] = [
+    {
+      name: 'next-issue.md',
+      exists: fs.existsSync(path.join(repoPath, '.claude', 'commands', 'next-issue.md')),
+    },
+  ];
+
+  // Additional config files
+  const settingsFile: InstallFileStatus = {
+    name: 'settings.json',
+    exists: fs.existsSync(path.join(repoPath, '.claude', 'settings.json')),
+  };
+
+  // Check .mcp.json for fleet-commander entry
+  let mcpHasFleetCommander = false;
+  const mcpPath = path.join(repoPath, '.mcp.json');
+  if (fs.existsSync(mcpPath)) {
+    try {
+      const mcpContent = fs.readFileSync(mcpPath, 'utf-8');
+      mcpHasFleetCommander = mcpContent.includes('fleet-commander');
+    } catch {
+      // Non-fatal: treat as not found
+    }
+  }
+  const mcpConfigFile: InstallFileStatus = {
+    name: '.mcp.json (fleet-commander entry)',
+    exists: mcpHasFleetCommander,
+  };
+
   return {
-    hooks: fs.existsSync(path.join(repoPath, '.claude', 'hooks', 'fleet-commander')),
-    prompt: fs.existsSync(path.join(repoPath, '.claude', 'prompts', 'fleet-workflow.md')),
-    command: fs.existsSync(path.join(repoPath, '.claude', 'commands', 'next-issue.md')),
+    hooks: {
+      installed: hookFoundCount === hookNames.length,
+      total: hookNames.length,
+      found: hookFoundCount,
+      files: hookFiles,
+    },
+    prompt: {
+      installed: promptFiles.every((f) => f.exists),
+      files: promptFiles,
+    },
+    command: {
+      installed: commandFiles.every((f) => f.exists),
+      files: commandFiles,
+    },
+    settings: settingsFile,
+    mcpConfig: mcpConfigFile,
   };
 }
 
@@ -319,7 +392,7 @@ const projectsRoutes: FastifyPluginCallback = (
 
         // Verify all three artifacts were actually installed
         const status = checkInstallStatus(normalizedPath);
-        const allInstalled = status.hooks && status.prompt && status.command;
+        const allInstalled = status.hooks.installed && status.prompt.installed && status.command.installed;
         if (allInstalled) {
           db.updateProject(project.id, { hooksInstalled: true });
         }

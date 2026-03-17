@@ -39,11 +39,31 @@ export interface Project {
   updatedAt: string;
 }
 
-/** Install status for the three artifacts deployed by install.sh */
+/** Detailed file-level info for a single install artifact */
+export interface InstallFileStatus {
+  name: string;
+  exists: boolean;
+}
+
+/** Detailed install status for a single category */
+export interface InstallCategoryStatus {
+  installed: boolean;
+  files: InstallFileStatus[];
+}
+
+/** Detailed install status for hooks (includes counts) */
+export interface InstallHooksStatus extends InstallCategoryStatus {
+  total: number;
+  found: number;
+}
+
+/** Detailed install status for the three artifacts deployed by install.sh */
 export interface InstallStatus {
-  hooks: boolean;
-  prompt: boolean;
-  command: boolean;
+  hooks: InstallHooksStatus;
+  prompt: InstallCategoryStatus;
+  command: InstallCategoryStatus;
+  settings: InstallFileStatus;
+  mcpConfig: InstallFileStatus;
 }
 
 /** Project with team count for list view */
