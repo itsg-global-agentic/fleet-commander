@@ -119,12 +119,14 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
 
   // Copy full log to clipboard
   const handleCopy = useCallback(() => {
-    const text = events.map((e) => {
-      const ts = e.timestamp ? formatLocalTime(e.timestamp) : '--:--';
-      const { label } = getStyle(e.type);
-      const body = getEventText(e);
-      return body ? `[${ts}] ${label}: ${body}` : `[${ts}] ${label}`;
-    }).join('\n');
+    const text = events
+      .filter((e) => getEventText(e) !== '')
+      .map((e) => {
+        const ts = e.timestamp ? formatLocalTime(e.timestamp) : '--:--';
+        const { label } = getStyle(e.type);
+        const body = getEventText(e);
+        return `[${ts}] ${label}: ${body}`;
+      }).join('\n');
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
@@ -151,7 +153,7 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
       </button>
 
       <div className="font-mono text-xs max-h-96 overflow-y-auto bg-[#0D1117] p-2 rounded border border-dark-border custom-scrollbar">
-        {events.map((e, i) => {
+        {events.filter((e) => getEventText(e) !== '').map((e, i) => {
           const { color, label } = getStyle(e.type);
           const text = getEventText(e);
           const isMultiline = text.includes('\n');
