@@ -166,28 +166,20 @@ CREATE TABLE IF NOT EXISTS message_templates (
 -- Seed default templates (INSERT OR REPLACE so defaults are refreshed on restart)
 INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
   ('ci_green',
-   'Hey team, CI passed on PR #{{PR_NUMBER}} — all checks green. Auto-merge is {{AUTO_MERGE_STATUS}}. Nice work, let''s get this merged.',
-   'PM tells TL that CI passed and advises on merge next steps');
+   'CI passed on PR #{{PR_NUMBER}}, all checks green. Auto-merge is {{AUTO_MERGE_STATUS}}.',
+   'Tell TL that CI passed on the PR');
 INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
   ('ci_red',
-   'Heads up — CI failed on PR #{{PR_NUMBER}}. Failing checks: {{FAILED_CHECKS}}. That''s {{FAIL_COUNT}}/{{MAX_FAILURES}} unique failures before I block you. Look into it and push a fix. What went wrong?',
-   'PM tells TL that CI failed and how many failures remain before blocked');
-INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
-  ('ci_pending',
-   'CI is running on PR #{{PR_NUMBER}}. Hold off on pushing more changes until we get results back.',
-   'PM tells TL that CI is running and to continue other work');
+   'CI failed on PR #{{PR_NUMBER}}. Failing checks: {{FAILED_CHECKS}}. Fix count: {{FAIL_COUNT}}/{{MAX_FAILURES}}. What went wrong?',
+   'Tell TL that CI failed and ask what went wrong');
 INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
   ('pr_merged',
-   'PR #{{PR_NUMBER}} just merged — great work! Close the issue, clean up after yourselves, and wrap things up.',
-   'PM tells TL the PR merged and to wrap up');
-INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
-  ('pr_merged_final',
-   'PR #{{PR_NUMBER}} is merged. Wrapping up this session. Thanks for the solid work, team.',
-   'PM sends final message to TL before closing the session');
+   'PR #{{PR_NUMBER}} merged. Close the issue, clean up, and finish.',
+   'Tell TL the PR merged and to wrap up');
 INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
   ('ci_blocked',
-   'STOP. You''ve hit {{FAIL_COUNT}} unique CI failure types on PR #{{PR_NUMBER}}. I''m blocking you until I review this. Do NOT push more fixes — wait for my instructions.',
-   'PM tells TL the team is blocked due to repeated CI failures');
+   'STOP. {{FAIL_COUNT}} unique CI failure types on PR #{{PR_NUMBER}}. Wait for my instructions.',
+   'Tell TL the team is blocked due to repeated CI failures');
 
 -- Insert schema version 2 (or upgrade from 1)
 INSERT OR IGNORE INTO schema_version (version) VALUES (2);

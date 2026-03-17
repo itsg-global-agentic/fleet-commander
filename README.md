@@ -72,7 +72,7 @@ stateDiagram-v2
 
 </details>
 
-**CI flow:** PR detected -> CI pending -> CI green/red -> message to team via stdin -> PR merged -> graceful close (stdin.end after 30s)
+**CI flow:** PR detected -> CI green/red -> message to team via stdin -> PR merged -> team marked done
 
 ## Features
 

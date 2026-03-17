@@ -248,10 +248,6 @@ class GitHubPoller {
                 FAIL_COUNT: String(ciFailCount),
                 MAX_FAILURES: String(config.maxUniqueCiFailures),
               });
-            } else if (ciStatus === 'pending') {
-              msg = resolveMessage('ci_pending', {
-                PR_NUMBER: String(prNumber),
-              });
             }
             if (msg) manager.sendMessage(teamId, msg);
           } catch (err) {
@@ -324,26 +320,7 @@ class GitHubPoller {
         mergedAt: new Date().toISOString(),
       });
 
-      // Send a final message, then close stdin to signal CC to exit gracefully
-      try {
-        const { getTeamManager } = await import('./team-manager.js');
-        const manager = getTeamManager();
-        const msg = resolveMessage('pr_merged_final', {
-          PR_NUMBER: String(prNumber),
-        });
-        if (msg) manager.sendMessage(teamId, msg);
-
-        // Give CC 30 seconds to finish its current turn, then close stdin
-        setTimeout(() => {
-          const stdin = manager.getStdinPipe(teamId);
-          if (stdin && !stdin.destroyed) {
-            stdin.end();
-            console.log(`[GitHubPoller] Sent graceful close to team ${teamId} after PR merge`);
-          }
-        }, 30_000);
-      } catch (err) {
-        console.error(`[GitHubPoller] Failed to send graceful close to team ${teamId}:`, err);
-      }
+      // Graceful close is handled by team-manager, not here
     }
 
     // If CI has exceeded the maximum unique failure threshold, mark team as blocked + stuck
