@@ -1,10 +1,10 @@
 // =============================================================================
 // Fleet Commander — State Machine Routes
 // =============================================================================
-// Returns the team lifecycle state machine definition with transitions
-// and associated message templates. Templates are stored in the database
-// and can be edited via the PUT endpoint. All transition definitions come
-// from the shared STATE_MACHINE_TRANSITIONS — there are no inline copies.
+// Returns the team lifecycle state machine definition with transitions.
+// Message templates are served separately via GET/PUT /api/message-templates
+// and are decoupled from transitions. Template defaults come from the shared
+// DEFAULT_MESSAGE_TEMPLATES array; the DB stores user-edited overrides.
 // =============================================================================
 
 import type {
@@ -18,6 +18,7 @@ import {
   STATES,
   STATE_MACHINE_TRANSITIONS,
 } from '../../shared/state-machine.js';
+import { DEFAULT_MESSAGE_TEMPLATES } from '../../shared/message-templates.js';
 
 // ---------------------------------------------------------------------------
 // Plugin
@@ -29,40 +30,22 @@ const stateMachineRoutes: FastifyPluginCallback = (
   done: (err?: Error) => void,
 ) => {
   // -------------------------------------------------------------------------
-  // GET /api/state-machine — full state machine definition enriched with DB templates
+  // GET /api/state-machine — state machine definition (transitions only)
   // -------------------------------------------------------------------------
   fastify.get(
     '/api/state-machine',
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const db = getDatabase();
-        const dbTemplates = db.getMessageTemplates();
-        const templateMap = new Map(dbTemplates.map((t) => [t.id, t]));
-
-        const transitions = STATE_MACHINE_TRANSITIONS.map((t) => {
-          const dbTmpl = templateMap.get(t.id);
-
-          return {
-            id: t.id,
-            from: t.from,
-            to: t.to,
-            trigger: t.trigger,
-            triggerLabel: t.triggerLabel,
-            description: t.description,
-            condition: t.condition,
-            hookEvent: t.hookEvent ?? null,
-            // Attach message template only when this transition has one
-            messageTemplate: t.message
-              ? {
-                  id: t.id,
-                  template: dbTmpl?.template ?? t.message,
-                  enabled: dbTmpl?.enabled ?? true,
-                  placeholders: t.placeholders ?? [],
-                  isDefault: !dbTmpl,
-                }
-              : null,
-          };
-        });
+        const transitions = STATE_MACHINE_TRANSITIONS.map((t) => ({
+          id: t.id,
+          from: t.from,
+          to: t.to,
+          trigger: t.trigger,
+          triggerLabel: t.triggerLabel,
+          description: t.description,
+          condition: t.condition,
+          hookEvent: t.hookEvent ?? null,
+        }));
 
         return reply.code(200).send({ states: STATES, transitions });
       } catch (err: unknown) {
@@ -76,15 +59,30 @@ const stateMachineRoutes: FastifyPluginCallback = (
   );
 
   // -------------------------------------------------------------------------
-  // GET /api/message-templates — all message templates from DB
+  // GET /api/message-templates — all PM message templates, enriched with defaults
   // -------------------------------------------------------------------------
   fastify.get(
     '/api/message-templates',
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
         const db = getDatabase();
-        const templates = db.getMessageTemplates();
-        return reply.code(200).send(templates);
+        const dbTemplates = db.getMessageTemplates();
+        const dbMap = new Map(dbTemplates.map((t) => [t.id, t]));
+
+        // Merge defaults with DB overrides so every template is always returned
+        const enriched = DEFAULT_MESSAGE_TEMPLATES.map((def) => {
+          const dbRow = dbMap.get(def.id);
+          return {
+            id: def.id,
+            template: dbRow?.template ?? def.template,
+            enabled: dbRow?.enabled ?? true,
+            description: def.description,
+            placeholders: def.placeholders,
+            isDefault: !dbRow,
+          };
+        });
+
+        return reply.code(200).send(enriched);
       } catch (err: unknown) {
         _request.log.error(err, 'Failed to get message templates');
         return reply.code(500).send({
@@ -116,30 +114,26 @@ const stateMachineRoutes: FastifyPluginCallback = (
         const existing = db.getMessageTemplate(id);
 
         if (existing) {
-          // Update the existing row
           db.updateMessageTemplate(id, {
             template: body.template,
             enabled: body.enabled,
           });
         } else {
-          // Template not yet in DB — look up the default from state machine
-          const transition = STATE_MACHINE_TRANSITIONS.find((t) => t.id === id);
-          if (!transition?.message) {
+          const defaultTmpl = DEFAULT_MESSAGE_TEMPLATES.find((t) => t.id === id);
+          if (!defaultTmpl) {
             return reply.code(404).send({
               error: 'Not Found',
-              message: `No state machine transition with message for id '${id}'`,
+              message: `No message template found for id '${id}'`,
             });
           }
 
-          // Insert a new row with the provided overrides
           db.insertMessageTemplate({
             id,
-            template: body.template ?? transition.message,
+            template: body.template ?? defaultTmpl.template,
             enabled: body.enabled ?? true,
           });
         }
 
-        // Return the updated/inserted template
         const updated = db.getMessageTemplate(id);
         return reply.code(200).send(updated);
       } catch (err: unknown) {

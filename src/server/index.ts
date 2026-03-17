@@ -22,7 +22,7 @@ import { getDatabase, closeDatabase } from './db.js';
 import { recoverOnStartup } from './services/startup-recovery.js';
 import { usagePoller } from './services/usage-tracker.js';
 import config from './config.js';
-import { STATE_MACHINE_TRANSITIONS } from '../shared/state-machine.js';
+import { DEFAULT_MESSAGE_TEMPLATES } from '../shared/message-templates.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -71,12 +71,10 @@ async function main() {
     });
   }
 
-  // Initialize default message templates from state machine transitions
+  // Initialize default message templates from the standalone template list
   const db = getDatabase();
   db.initDefaultTemplates(
-    STATE_MACHINE_TRANSITIONS
-      .filter((t) => t.message)
-      .map((t) => ({ id: t.id, template: t.message! }))
+    DEFAULT_MESSAGE_TEMPLATES.map((t) => ({ id: t.id, template: t.template }))
   );
 
   // Recover state from before restart (reconcile PIDs, detect orphan worktrees)

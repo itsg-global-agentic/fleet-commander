@@ -15,6 +15,8 @@
 import { getDatabase } from '../db.js';
 import config from '../config.js';
 import { sseBroker } from './sse-broker.js';
+import { resolveMessage } from '../utils/resolve-message.js';
+import { getTeamManager } from './team-manager.js';
 
 class StuckDetector {
   private interval: NodeJS.Timeout | null = null;
@@ -84,6 +86,19 @@ class StuckDetector {
             },
             team.id,
           );
+
+          // When a team transitions to stuck, send a nudge message to the TL
+          if (newStatus === 'stuck') {
+            const msg = resolveMessage('stuck_nudge', {
+              ISSUE_NUMBER: String(team.issueNumber),
+              TEAM_NAME: team.worktreeName,
+            });
+            if (msg) {
+              const manager = getTeamManager();
+              manager.sendMessage(team.id, msg);
+              console.log(`[StuckDetector] Nudge sent to team ${team.id}`);
+            }
+          }
         }
       }
 
