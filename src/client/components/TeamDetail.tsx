@@ -21,28 +21,6 @@ function formatDuration(minutes: number | undefined | null): string {
   return `${m}m`;
 }
 
-/** Phase labels for display */
-const PHASE_LABELS: Record<string, string> = {
-  init: 'Init',
-  analyzing: 'Analyzing',
-  implementing: 'Implementing',
-  reviewing: 'Reviewing',
-  pr: 'PR',
-  done: 'Done',
-  blocked: 'Blocked',
-};
-
-/** Phase badge colors */
-const PHASE_COLORS: Record<string, string> = {
-  init: '#8B949E',
-  analyzing: '#58A6FF',
-  implementing: '#D29922',
-  reviewing: '#A371F7',
-  pr: '#3FB950',
-  done: '#56D4DD',
-  blocked: '#F85149',
-};
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -245,18 +223,6 @@ export function TeamDetail() {
 
                 <div className="flex items-center gap-3 flex-wrap">
                   <StatusBadge status={detail.status} />
-
-                  {/* Phase badge */}
-                  <span
-                    className="text-xs font-medium px-2 py-0.5 rounded border"
-                    style={{
-                      color: PHASE_COLORS[detail.phase] ?? '#8B949E',
-                      borderColor: (PHASE_COLORS[detail.phase] ?? '#8B949E') + '40',
-                      backgroundColor: (PHASE_COLORS[detail.phase] ?? '#8B949E') + '10',
-                    }}
-                  >
-                    {PHASE_LABELS[detail.phase] ?? detail.phase}
-                  </span>
                 </div>
 
                 {/* Duration + Cost row */}
