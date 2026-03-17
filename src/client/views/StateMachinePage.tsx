@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from 'react';
+import dagre from 'dagre';
 import { useApi } from '../hooks/useApi';
 import { ZapIcon, SettingsIcon, RefreshCwIcon, UserIcon, ClockIcon } from '../components/Icons';
 
@@ -37,24 +38,16 @@ interface StateMachineResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Constants — layout positions for each state (x, y center of box)
+// Layout constants
 // ---------------------------------------------------------------------------
 
-const STATE_WIDTH = 130;
-const STATE_HEIGHT = 50;
+const NODE_WIDTH = 130;
+const NODE_HEIGHT = 50;
 
-// Main-line states on a single horizontal row; terminal states below
-const STATE_POSITIONS: Record<string, { x: number; y: number }> = {
-  queued:    { x: 80,  y: 200 },
-  launching: { x: 240, y: 200 },
-  running:   { x: 400, y: 200 },
-  idle:      { x: 560, y: 200 },
-  stuck:     { x: 720, y: 200 },
-  done:      { x: 480, y: 350 },
-  failed:    { x: 720, y: 350 },
-};
-
+// ---------------------------------------------------------------------------
 // Trigger icon components — Lucide-style SVGs replacing emoji
+// ---------------------------------------------------------------------------
+
 function TriggerIcon({ trigger, size = 14, className }: { trigger: string; size?: number; className?: string }) {
   switch (trigger) {
     case 'hook':
@@ -73,9 +66,7 @@ function TriggerIcon({ trigger, size = 14, className }: { trigger: string; size?
 }
 
 // Inline SVG paths for rendering trigger icons directly inside the diagram SVG context.
-// Each entry returns raw SVG elements (not React components) scaled to fit the given size.
 function triggerIconSvgPaths(trigger: string, x: number, y: number, size: number, color: string, opacity: number): ReactNode {
-  // Translate and scale: Lucide icons use a 24x24 viewBox — scale to target size
   const scale = size / 24;
   const tx = x - size / 2;
   const ty = y - size / 2;
@@ -139,146 +130,84 @@ const TRIGGER_LABELS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
-// Main-line state ordering (left to right) for arrow classification
-// ---------------------------------------------------------------------------
-const MAIN_LINE_STATES = ['queued', 'launching', 'running', 'idle', 'stuck'];
-const TERMINAL_STATES = ['done', 'failed'];
-
-// ---------------------------------------------------------------------------
-// SVG Arrow path helpers — clean polyline routing
+// Dagre layout computation
 // ---------------------------------------------------------------------------
 
-type ArrowKind = 'forward' | 'down' | 'recovery' | 'self';
-
-function classifyArrow(fromId: string, toId: string): ArrowKind {
-  if (fromId === toId) return 'self';
-  if (TERMINAL_STATES.includes(toId)) return 'down';
-  const fi = MAIN_LINE_STATES.indexOf(fromId);
-  const ti = MAIN_LINE_STATES.indexOf(toId);
-  if (fi >= 0 && ti >= 0 && ti < fi) return 'recovery';
-  return 'forward';
+interface LayoutNode {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-/** Sibling index for transitions sharing the same (from, to) pair */
-function siblingOffset(
-  fromId: string,
-  toId: string,
-  allTransitions: Transition[],
-  transitionId: string,
-): number {
-  const siblings = allTransitions.filter(
-    (t) => t.from === fromId && t.to === toId,
-  );
-  const idx = siblings.findIndex((t) => t.id === transitionId);
-  return siblings.length > 1 ? (idx - (siblings.length - 1) / 2) * 14 : 0;
+interface LayoutEdge {
+  from: string;
+  to: string;
+  points: Array<{ x: number; y: number }>;
+  transitions: Transition[];
 }
 
-/** Compute a polyline / arc path from one state to another */
-function computeArrowPath(
-  fromId: string,
-  toId: string,
-  allTransitions: Transition[],
-  transitionId: string,
-): string {
-  const from = STATE_POSITIONS[fromId];
-  const to = STATE_POSITIONS[toId];
-  if (!from || !to) return '';
+interface LayoutResult {
+  nodes: LayoutNode[];
+  edges: LayoutEdge[];
+  width: number;
+  height: number;
+}
 
-  const kind = classifyArrow(fromId, toId);
-  const sOff = siblingOffset(fromId, toId, allTransitions, transitionId);
+function computeLayout(states: StateNode[], transitions: Transition[]): LayoutResult {
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({
+    rankdir: 'LR',
+    nodesep: 60,
+    ranksep: 120,
+    marginx: 40,
+    marginy: 40,
+  });
+  g.setDefaultEdgeLabel(() => ({}));
 
-  const halfW = STATE_WIDTH / 2 + 4;
-  const halfH = STATE_HEIGHT / 2 + 4;
-
-  switch (kind) {
-    case 'forward': {
-      // Straight horizontal arrow from right edge to left edge
-      const y = from.y + sOff;
-      const x1 = from.x + halfW;
-      const x2 = to.x - halfW;
-      return `M ${x1} ${y} L ${x2} ${y}`;
-    }
-    case 'down': {
-      // Vertical drop then horizontal jog to terminal state
-      const x1 = from.x + sOff;
-      const y1 = from.y + halfH;
-      const x2 = to.x;
-      const y2 = to.y - halfH;
-      if (Math.abs(x1 - x2) < 2) {
-        // Straight down
-        return `M ${x1} ${y1} L ${x2} ${y2}`;
-      }
-      // 90-degree corner: go down then across
-      const midY = (y1 + y2) / 2;
-      return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
-    }
-    case 'recovery': {
-      // Arc above the main line going left (from right state back to left state)
-      const x1 = from.x;
-      const y1 = from.y - halfH;
-      const x2 = to.x;
-      const y2 = to.y - halfH;
-      // Height of arc above main line — farther states get higher arcs
-      const span = Math.abs(x1 - x2);
-      const arcY = from.y - halfH - 30 - span * 0.15 + sOff;
-      return `M ${x1} ${y1} L ${x1} ${arcY} L ${x2} ${arcY} L ${x2} ${y2}`;
-    }
-    case 'self': {
-      // Small loop above the state
-      const cx = from.x + sOff;
-      const topY = from.y - halfH;
-      const loopH = 30;
-      const loopW = 20;
-      return `M ${cx - loopW} ${topY} C ${cx - loopW} ${topY - loopH}, ${cx + loopW} ${topY - loopH}, ${cx + loopW} ${topY}`;
-    }
-    default:
-      return '';
+  // Add state nodes
+  for (const s of states) {
+    g.setNode(s.id, { label: s.id, width: NODE_WIDTH, height: NODE_HEIGHT });
   }
-}
 
-/** Get the label position for an arrow */
-function getPathMidpoint(
-  fromId: string,
-  toId: string,
-  allTransitions: Transition[],
-  transitionId: string,
-): { x: number; y: number } {
-  const from = STATE_POSITIONS[fromId];
-  const to = STATE_POSITIONS[toId];
-  if (!from || !to) return { x: 0, y: 0 };
-
-  const kind = classifyArrow(fromId, toId);
-  const sOff = siblingOffset(fromId, toId, allTransitions, transitionId);
-  const halfW = STATE_WIDTH / 2 + 4;
-  const halfH = STATE_HEIGHT / 2 + 4;
-
-  switch (kind) {
-    case 'forward': {
-      const y = from.y + sOff - 10;
-      const x = (from.x + halfW + to.x - halfW) / 2;
-      return { x, y };
-    }
-    case 'down': {
-      const x1 = from.x + sOff;
-      const x2 = to.x;
-      const y1 = from.y + halfH;
-      const y2 = to.y - halfH;
-      return { x: (x1 + x2) / 2 + 10, y: (y1 + y2) / 2 };
-    }
-    case 'recovery': {
-      const x1 = from.x;
-      const x2 = to.x;
-      const span = Math.abs(x1 - x2);
-      const arcY = from.y - halfH - 30 - span * 0.15 + sOff;
-      return { x: (x1 + x2) / 2, y: arcY - 8 };
-    }
-    case 'self': {
-      const topY = from.y - halfH - 30;
-      return { x: from.x + sOff, y: topY - 4 };
-    }
-    default:
-      return { x: 0, y: 0 };
+  // Deduplicate transitions by from->to pair
+  const edgeMap = new Map<string, Transition[]>();
+  for (const t of transitions) {
+    const key = `${t.from}->${t.to}`;
+    if (!edgeMap.has(key)) edgeMap.set(key, []);
+    edgeMap.get(key)!.push(t);
   }
+
+  edgeMap.forEach((_trans, key) => {
+    const [from, to] = key.split('->');
+    g.setEdge(from, to);
+  });
+
+  // Run layout
+  dagre.layout(g);
+
+  const nodes: LayoutNode[] = g.nodes().map((id) => {
+    const node = g.node(id);
+    return { id, x: node.x, y: node.y, width: node.width, height: node.height };
+  });
+
+  const edges: LayoutEdge[] = g.edges().map((e) => {
+    const edge = g.edge(e);
+    const key = `${e.v}->${e.w}`;
+    return {
+      from: e.v,
+      to: e.w,
+      points: edge.points || [],
+      transitions: edgeMap.get(key) || [],
+    };
+  });
+
+  const graphInfo = g.graph();
+  const width = (graphInfo.width || 800) + 80;
+  const height = (graphInfo.height || 400) + 80;
+
+  return { nodes, edges, width, height };
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +219,9 @@ export function StateMachinePage() {
   const [data, setData] = useState<StateMachineResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedTransition, setSelectedTransition] = useState<string | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<string | null>(null); // "from->to" key
+  const [selectedTransitionId, setSelectedTransitionId] = useState<string | null>(null);
+  const [hoveredEdge, setHoveredEdge] = useState<string | null>(null);
 
   // Message template editing state
   const [editTemplate, setEditTemplate] = useState('');
@@ -314,30 +245,68 @@ export function StateMachinePage() {
     fetchData();
   }, [fetchData]);
 
+  // Compute layout with dagre
+  const layout = useMemo<LayoutResult | null>(() => {
+    if (!data) return null;
+    return computeLayout(data.states, data.transitions);
+  }, [data]);
+
+  // Build state color map
+  const stateColorMap = useMemo<Record<string, string>>(() => {
+    if (!data) return {};
+    const map: Record<string, string> = {};
+    for (const s of data.states) {
+      map[s.id] = s.color;
+    }
+    return map;
+  }, [data]);
+
+  // Get the selected edge's transitions
+  const selectedEdgeTransitions = useMemo<Transition[]>(() => {
+    if (!layout || !selectedEdge) return [];
+    const edge = layout.edges.find((e) => `${e.from}->${e.to}` === selectedEdge);
+    return edge?.transitions || [];
+  }, [layout, selectedEdge]);
+
+  // Get the selected transition object
+  const selected = useMemo<Transition | null>(() => {
+    if (!data || !selectedTransitionId) return null;
+    return data.transitions.find((t) => t.id === selectedTransitionId) ?? null;
+  }, [data, selectedTransitionId]);
+
+  // When an edge is selected, auto-select the first transition
+  useEffect(() => {
+    if (selectedEdgeTransitions.length > 0 && !selectedTransitionId) {
+      setSelectedTransitionId(selectedEdgeTransitions[0].id);
+    }
+  }, [selectedEdgeTransitions, selectedTransitionId]);
+
   // When a transition is selected, populate editing state
   useEffect(() => {
-    if (!data || !selectedTransition) return;
-    const t = data.transitions.find((tr) => tr.id === selectedTransition);
-    if (t?.messageTemplate) {
-      setEditTemplate(t.messageTemplate.template);
-      setEditEnabled(t.messageTemplate.enabled);
+    if (!selected) return;
+    if (selected.messageTemplate) {
+      setEditTemplate(selected.messageTemplate.template);
+      setEditEnabled(selected.messageTemplate.enabled);
     }
     setSaveMessage(null);
-  }, [selectedTransition, data]);
+  }, [selected]);
+
+  const handleEdgeClick = useCallback((edgeKey: string, transitions: Transition[]) => {
+    setSelectedEdge(edgeKey);
+    setSelectedTransitionId(transitions.length > 0 ? transitions[0].id : null);
+  }, []);
 
   const handleSave = useCallback(async () => {
-    if (!data || !selectedTransition) return;
-    const t = data.transitions.find((tr) => tr.id === selectedTransition);
-    if (!t?.messageTemplate) return;
+    if (!data || !selected) return;
+    if (!selected.messageTemplate) return;
 
     setSaving(true);
     setSaveMessage(null);
     try {
-      await api.put(`message-templates/${t.messageTemplate.id}`, {
+      await api.put(`message-templates/${selected.messageTemplate.id}`, {
         template: editTemplate,
         enabled: editEnabled,
       });
-      // Refresh data
       await fetchData();
       setSaveMessage('Saved successfully');
     } catch (err: unknown) {
@@ -345,7 +314,7 @@ export function StateMachinePage() {
     } finally {
       setSaving(false);
     }
-  }, [api, data, selectedTransition, editTemplate, editEnabled, fetchData]);
+  }, [api, data, selected, editTemplate, editEnabled, fetchData]);
 
   // --- Render ---
 
@@ -368,16 +337,7 @@ export function StateMachinePage() {
     );
   }
 
-  if (!data) return null;
-
-  const selected = selectedTransition
-    ? data.transitions.find((t) => t.id === selectedTransition) ?? null
-    : null;
-
-  const stateColorMap: Record<string, string> = {};
-  for (const s of data.states) {
-    stateColorMap[s.id] = s.color;
-  }
+  if (!data || !layout) return null;
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -407,7 +367,7 @@ export function StateMachinePage() {
         {/* Left panel — State diagram (60%) */}
         <div className="w-[60%] min-w-0 p-4 overflow-auto border-r border-dark-border">
           <svg
-            viewBox="0 0 850 440"
+            viewBox={`0 0 ${layout.width} ${layout.height}`}
             className="w-full h-auto"
             style={{ minHeight: 400 }}
           >
@@ -432,104 +392,159 @@ export function StateMachinePage() {
               >
                 <polygon points="0 0, 10 3.5, 0 7" fill="#58A6FF" />
               </marker>
+              <marker
+                id="arrowhead-hover"
+                markerWidth="10"
+                markerHeight="7"
+                refX="10"
+                refY="3.5"
+                orient="auto"
+              >
+                <polygon points="0 0, 10 3.5, 0 7" fill="#C9D1D9" />
+              </marker>
             </defs>
 
-            {/* Transition arrows (rendered first so states draw on top) */}
-            {data.transitions.map((t) => {
-              const isSelected = t.id === selectedTransition;
-              const pathD = computeArrowPath(t.from, t.to, data.transitions, t.id);
-              const mid = getPathMidpoint(t.from, t.to, data.transitions, t.id);
+            {/* Transition edges (rendered first so nodes draw on top) */}
+            {layout.edges.map((edge) => {
+              const edgeKey = `${edge.from}->${edge.to}`;
+              const isSelected = edgeKey === selectedEdge;
+              const isHovered = edgeKey === hoveredEdge;
+              const isDimmed = selectedEdge !== null && !isSelected;
+              const points = edge.points;
+              if (points.length === 0) return null;
+
+              // Build a smooth path through dagre's control points
+              const d = points.map((p, j) => `${j === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+
+              // Midpoint for trigger icon and label
+              const midIdx = Math.floor(points.length / 2);
+              const midPt = points[midIdx];
+
+              // Determine stroke style
+              let strokeColor = '#30363D';
+              let strokeWidth = 1.5;
+              let markerEnd = 'url(#arrowhead)';
+              let opacity = 1;
+
+              if (isSelected) {
+                strokeColor = '#58A6FF';
+                strokeWidth = 2.5;
+                markerEnd = 'url(#arrowhead-selected)';
+              } else if (isHovered) {
+                strokeColor = '#C9D1D9';
+                strokeWidth = 2;
+                markerEnd = 'url(#arrowhead-hover)';
+              }
+
+              if (isDimmed && !isHovered) {
+                opacity = 0.3;
+              }
+
+              // Badge for multiple transitions on this edge
+              const transCount = edge.transitions.length;
 
               return (
                 <g
-                  key={t.id}
+                  key={edgeKey}
                   className="cursor-pointer"
-                  onClick={() => setSelectedTransition(t.id)}
+                  onClick={() => handleEdgeClick(edgeKey, edge.transitions)}
+                  onMouseEnter={() => setHoveredEdge(edgeKey)}
+                  onMouseLeave={() => setHoveredEdge(null)}
                 >
                   {/* Wider invisible hit area */}
-                  <path
-                    d={pathD}
-                    fill="none"
-                    stroke="transparent"
-                    strokeWidth="16"
-                  />
+                  <path d={d} fill="none" stroke="transparent" strokeWidth="16" />
                   {/* Visible arrow */}
                   <path
-                    d={pathD}
+                    d={d}
                     fill="none"
-                    stroke={isSelected ? '#58A6FF' : '#8B949E'}
-                    strokeWidth={isSelected ? 2.5 : 1.5}
-                    markerEnd={isSelected ? 'url(#arrowhead-selected)' : 'url(#arrowhead)'}
-                    opacity={selectedTransition && !isSelected ? 0.3 : 1}
+                    stroke={strokeColor}
+                    strokeWidth={strokeWidth}
+                    markerEnd={markerEnd}
+                    opacity={opacity}
                     strokeLinejoin="round"
                     strokeLinecap="round"
                   />
-                  {/* Trigger icon near midpoint */}
-                  {triggerIconSvgPaths(
-                    t.trigger,
-                    mid.x,
-                    mid.y,
-                    14,
-                    isSelected ? '#58A6FF' : '#8B949E',
-                    selectedTransition && !isSelected ? 0.3 : 1,
+                  {/* Trigger icon at midpoint */}
+                  {midPt && edge.transitions.length > 0 && (
+                    triggerIconSvgPaths(
+                      edge.transitions[0].trigger,
+                      midPt.x,
+                      midPt.y - 12,
+                      14,
+                      isSelected ? '#58A6FF' : isHovered ? '#C9D1D9' : '#8B949E',
+                      isDimmed && !isHovered ? 0.3 : 1,
+                    )
+                  )}
+                  {/* Count badge for multiple transitions */}
+                  {transCount > 1 && midPt && (
+                    <g opacity={isDimmed && !isHovered ? 0.3 : 1}>
+                      <rect
+                        x={midPt.x + 6}
+                        y={midPt.y - 22}
+                        width={transCount >= 10 ? 30 : 18}
+                        height={16}
+                        rx={8}
+                        fill={isSelected ? '#58A6FF' : '#30363D'}
+                      />
+                      <text
+                        x={midPt.x + 6 + (transCount >= 10 ? 15 : 9)}
+                        y={midPt.y - 22 + 12}
+                        textAnchor="middle"
+                        fontSize={10}
+                        fontWeight={600}
+                        fill={isSelected ? '#0D1117' : '#8B949E'}
+                      >
+                        {transCount}
+                      </text>
+                    </g>
                   )}
                 </g>
               );
             })}
 
             {/* State boxes */}
-            {data.states.map((state) => {
-              const pos = STATE_POSITIONS[state.id];
-              if (!pos) return null;
-
-              // Tinted background: base #0D1117 blended with ~10% of the status color
-              const tintBg = `${state.color}18`;
+            {layout.nodes.map((node) => {
+              const color = stateColorMap[node.id] || '#8B949E';
+              const tintBg = `${color}18`;
+              const x = node.x - node.width / 2;
+              const y = node.y - node.height / 2;
 
               return (
-                <g key={state.id}>
-                  {/* Box fill (tinted dark) */}
+                <g key={node.id}>
+                  {/* Box fill (dark base) */}
                   <rect
-                    x={pos.x - STATE_WIDTH / 2}
-                    y={pos.y - STATE_HEIGHT / 2}
-                    width={STATE_WIDTH}
-                    height={STATE_HEIGHT}
-                    rx="8"
-                    ry="8"
+                    x={x} y={y}
+                    width={node.width} height={node.height}
+                    rx={8} ry={8}
                     fill="#0D1117"
                   />
                   {/* Tint overlay */}
                   <rect
-                    x={pos.x - STATE_WIDTH / 2}
-                    y={pos.y - STATE_HEIGHT / 2}
-                    width={STATE_WIDTH}
-                    height={STATE_HEIGHT}
-                    rx="8"
-                    ry="8"
+                    x={x} y={y}
+                    width={node.width} height={node.height}
+                    rx={8} ry={8}
                     fill={tintBg}
                   />
                   {/* Border */}
                   <rect
-                    x={pos.x - STATE_WIDTH / 2}
-                    y={pos.y - STATE_HEIGHT / 2}
-                    width={STATE_WIDTH}
-                    height={STATE_HEIGHT}
-                    rx="8"
-                    ry="8"
+                    x={x} y={y}
+                    width={node.width} height={node.height}
+                    rx={8} ry={8}
                     fill="none"
-                    stroke={state.color}
-                    strokeWidth="2"
+                    stroke={color}
+                    strokeWidth={2}
                   />
+                  {/* Label */}
                   <text
-                    x={pos.x}
-                    y={pos.y}
+                    x={node.x} y={node.y}
                     textAnchor="middle"
                     dominantBaseline="central"
-                    fontSize="14"
-                    fontWeight="700"
-                    fill={state.color}
+                    fontSize={14}
+                    fontWeight={700}
+                    fill={color}
                     className="select-none"
                   >
-                    {state.label}
+                    {node.id}
                   </text>
                 </g>
               );
@@ -539,7 +554,7 @@ export function StateMachinePage() {
 
         {/* Right panel — Transition detail (40%) */}
         <div className="w-[40%] min-w-0 p-4 overflow-auto">
-          {!selected ? (
+          {!selectedEdge ? (
             <div className="flex items-center justify-center h-full">
               <p className="text-dark-muted text-sm text-center">
                 Click an arrow in the diagram to view transition details
@@ -547,161 +562,196 @@ export function StateMachinePage() {
             </div>
           ) : (
             <div className="space-y-5">
-              {/* From / To badges */}
-              <div className="flex items-center gap-3">
-                <span
-                  className="px-3 py-1 rounded-full text-sm font-semibold"
-                  style={{
-                    backgroundColor: `${stateColorMap[selected.from]}20`,
-                    color: stateColorMap[selected.from],
-                    border: `1px solid ${stateColorMap[selected.from]}40`,
-                  }}
-                >
-                  {selected.from}
-                </span>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8B949E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M5 12h14"/>
-                  <path d="m12 5 7 7-7 7"/>
-                </svg>
-                <span
-                  className="px-3 py-1 rounded-full text-sm font-semibold"
-                  style={{
-                    backgroundColor: `${stateColorMap[selected.to]}20`,
-                    color: stateColorMap[selected.to],
-                    border: `1px solid ${stateColorMap[selected.to]}40`,
-                  }}
-                >
-                  {selected.to}
-                </span>
-              </div>
-
-              {/* Trigger */}
-              <div>
-                <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
-                  Trigger
-                </label>
-                <div className="mt-1 flex items-center gap-2 text-sm text-dark-text">
-                  <TriggerIcon trigger={selected.trigger} size={16} className="text-[#8B949E]" />
-                  <span>{selected.triggerLabel}</span>
-                </div>
-              </div>
-
-              {/* Description */}
-              <div>
-                <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
-                  Description
-                </label>
-                <p className="mt-1 text-sm text-dark-text">{selected.description}</p>
-              </div>
-
-              {/* Condition */}
-              <div>
-                <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
-                  Condition
-                </label>
-                <p className="mt-1 text-sm text-dark-muted font-mono text-xs bg-dark-base/50 px-2 py-1 rounded">
-                  {selected.condition}
-                </p>
-              </div>
-
-              {/* Hook event */}
-              {selected.hookEvent && (
-                <div>
-                  <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
-                    Hook Event
-                  </label>
-                  <p className="mt-1">
-                    <code className="text-dark-accent font-mono text-xs bg-dark-base/50 px-1.5 py-0.5 rounded">
-                      {selected.hookEvent}
-                    </code>
-                  </p>
+              {/* Edge header: From -> To */}
+              {selectedEdgeTransitions.length > 0 && (
+                <div className="flex items-center gap-3">
+                  <span
+                    className="px-3 py-1 rounded-full text-sm font-semibold"
+                    style={{
+                      backgroundColor: `${stateColorMap[selectedEdgeTransitions[0].from]}20`,
+                      color: stateColorMap[selectedEdgeTransitions[0].from],
+                      border: `1px solid ${stateColorMap[selectedEdgeTransitions[0].from]}40`,
+                    }}
+                  >
+                    {selectedEdgeTransitions[0].from}
+                  </span>
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8B949E" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M5 12h14"/>
+                    <path d="m12 5 7 7-7 7"/>
+                  </svg>
+                  <span
+                    className="px-3 py-1 rounded-full text-sm font-semibold"
+                    style={{
+                      backgroundColor: `${stateColorMap[selectedEdgeTransitions[0].to]}20`,
+                      color: stateColorMap[selectedEdgeTransitions[0].to],
+                      border: `1px solid ${stateColorMap[selectedEdgeTransitions[0].to]}40`,
+                    }}
+                  >
+                    {selectedEdgeTransitions[0].to}
+                  </span>
+                  {selectedEdgeTransitions.length > 1 && (
+                    <span className="text-xs text-dark-muted ml-2">
+                      {selectedEdgeTransitions.length} transitions
+                    </span>
+                  )}
                 </div>
               )}
 
-              {/* Divider */}
-              <hr className="border-dark-border" />
-
-              {/* Message template */}
-              {!selected.messageTemplate ? (
-                <div className="bg-dark-base/50 rounded-lg p-4 text-center">
-                  <p className="text-dark-muted text-sm">
-                    No message template for this transition
-                  </p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
-                      Message Template
-                    </label>
+              {/* Transition selector tabs (when multiple transitions on same edge) */}
+              {selectedEdgeTransitions.length > 1 && (
+                <div className="flex gap-1 flex-wrap">
+                  {selectedEdgeTransitions.map((t) => (
                     <button
+                      key={t.id}
                       type="button"
-                      onClick={() => setEditEnabled(!editEnabled)}
-                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                        editEnabled ? 'bg-[#3FB950]' : 'bg-dark-border'
+                      onClick={() => setSelectedTransitionId(t.id)}
+                      className={`px-3 py-1 text-xs rounded-md font-medium transition-colors ${
+                        t.id === selectedTransitionId
+                          ? 'bg-dark-accent text-white'
+                          : 'bg-dark-base text-dark-muted hover:text-dark-text border border-dark-border'
                       }`}
                     >
-                      <span
-                        className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
-                          editEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
-                        }`}
-                      />
+                      <span className="flex items-center gap-1.5">
+                        <TriggerIcon trigger={t.trigger} size={12} />
+                        {t.triggerLabel}
+                      </span>
                     </button>
-                  </div>
+                  ))}
+                </div>
+              )}
 
-                  <textarea
-                    value={editTemplate}
-                    onChange={(e) => setEditTemplate(e.target.value)}
-                    rows={4}
-                    className={`w-full text-sm font-mono rounded-lg px-3 py-2 resize-y bg-dark-base border ${
-                      editEnabled
-                        ? 'border-[#3FB950]/50 text-dark-text'
-                        : 'border-dark-border text-dark-muted'
-                    } focus:outline-none focus:ring-1 ${
-                      editEnabled ? 'focus:ring-[#3FB950]/50' : 'focus:ring-dark-border'
-                    }`}
-                  />
-
-                  {/* Placeholders */}
+              {/* Selected transition detail */}
+              {selected && (
+                <>
+                  {/* Trigger */}
                   <div>
                     <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
-                      Available Placeholders
+                      Trigger
                     </label>
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {selected.messageTemplate.placeholders.map((p) => (
-                        <code
-                          key={p}
-                          className="text-xs font-mono px-1.5 py-0.5 rounded bg-dark-accent/10 text-dark-accent border border-dark-accent/20"
-                        >
-                          {`{{${p}}}`}
-                        </code>
-                      ))}
+                    <div className="mt-1 flex items-center gap-2 text-sm text-dark-text">
+                      <TriggerIcon trigger={selected.trigger} size={16} className="text-[#8B949E]" />
+                      <span>{selected.triggerLabel}</span>
                     </div>
                   </div>
 
-                  {/* Save button */}
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={handleSave}
-                      disabled={saving}
-                      className="px-4 py-1.5 text-sm font-medium rounded-md bg-dark-accent text-white hover:bg-dark-accent/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      {saving ? 'Saving...' : 'Save'}
-                    </button>
-                    {saveMessage && (
-                      <span
-                        className={`text-xs ${
-                          saveMessage.includes('success')
-                            ? 'text-[#3FB950]'
-                            : 'text-[#F85149]'
-                        }`}
-                      >
-                        {saveMessage}
-                      </span>
-                    )}
+                  {/* Description */}
+                  <div>
+                    <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
+                      Description
+                    </label>
+                    <p className="mt-1 text-sm text-dark-text">{selected.description}</p>
                   </div>
-                </div>
+
+                  {/* Condition */}
+                  <div>
+                    <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
+                      Condition
+                    </label>
+                    <p className="mt-1 text-sm text-dark-muted font-mono text-xs bg-dark-base/50 px-2 py-1 rounded">
+                      {selected.condition}
+                    </p>
+                  </div>
+
+                  {/* Hook event */}
+                  {selected.hookEvent && (
+                    <div>
+                      <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
+                        Hook Event
+                      </label>
+                      <p className="mt-1">
+                        <code className="text-dark-accent font-mono text-xs bg-dark-base/50 px-1.5 py-0.5 rounded">
+                          {selected.hookEvent}
+                        </code>
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Divider */}
+                  <hr className="border-dark-border" />
+
+                  {/* Message template */}
+                  {!selected.messageTemplate ? (
+                    <div className="bg-dark-base/50 rounded-lg p-4 text-center">
+                      <p className="text-dark-muted text-sm">
+                        No message template for this transition
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
+                          Message Template
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setEditEnabled(!editEnabled)}
+                          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                            editEnabled ? 'bg-[#3FB950]' : 'bg-dark-border'
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-3.5 w-3.5 rounded-full bg-white transition-transform ${
+                              editEnabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                            }`}
+                          />
+                        </button>
+                      </div>
+
+                      <textarea
+                        value={editTemplate}
+                        onChange={(e) => setEditTemplate(e.target.value)}
+                        rows={4}
+                        className={`w-full text-sm font-mono rounded-lg px-3 py-2 resize-y bg-dark-base border ${
+                          editEnabled
+                            ? 'border-[#3FB950]/50 text-dark-text'
+                            : 'border-dark-border text-dark-muted'
+                        } focus:outline-none focus:ring-1 ${
+                          editEnabled ? 'focus:ring-[#3FB950]/50' : 'focus:ring-dark-border'
+                        }`}
+                      />
+
+                      {/* Placeholders */}
+                      <div>
+                        <label className="text-xs font-medium text-dark-muted uppercase tracking-wider">
+                          Available Placeholders
+                        </label>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5">
+                          {selected.messageTemplate.placeholders.map((p) => (
+                            <code
+                              key={p}
+                              className="text-xs font-mono px-1.5 py-0.5 rounded bg-dark-accent/10 text-dark-accent border border-dark-accent/20"
+                            >
+                              {`{{${p}}}`}
+                            </code>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Save button */}
+                      <div className="flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={handleSave}
+                          disabled={saving}
+                          className="px-4 py-1.5 text-sm font-medium rounded-md bg-dark-accent text-white hover:bg-dark-accent/80 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {saving ? 'Saving...' : 'Save'}
+                        </button>
+                        {saveMessage && (
+                          <span
+                            className={`text-xs ${
+                              saveMessage.includes('success')
+                                ? 'text-[#3FB950]'
+                                : 'text-[#F85149]'
+                            }`}
+                          >
+                            {saveMessage}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
