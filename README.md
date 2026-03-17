@@ -26,6 +26,11 @@ This installs dependencies, builds the project, starts the server on port 4680, 
 
 ## Architecture
 
+![Architecture](docs/diagrams/architecture.png)
+
+<details>
+<summary>Mermaid source</summary>
+
 ```mermaid
 graph TB
   Browser["React 19 SPA<br/>Dark Theme"] -->|"SSE + REST"| Server["Fastify :4680"]
@@ -41,7 +46,14 @@ graph TB
   GitPoller -->|"gh CLI"| GitHub["GitHub API"]
 ```
 
+</details>
+
 ## Team Lifecycle
+
+![Team Lifecycle](docs/diagrams/lifecycle.png)
+
+<details>
+<summary>Mermaid source</summary>
 
 ```mermaid
 stateDiagram-v2
@@ -57,6 +69,8 @@ stateDiagram-v2
   done --> [*]
   failed --> [*]
 ```
+
+</details>
 
 **CI flow:** PR detected -> CI pending -> CI green/red -> message to team via stdin -> PR merged -> graceful close (stdin.end after 30s)
 

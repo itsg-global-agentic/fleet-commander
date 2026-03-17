@@ -1,0 +1,12 @@
+graph TB
+  Browser["React 19 SPA<br/>Dark Theme"] -->|"SSE + REST"| Server["Fastify :4680"]
+  Server --> TeamMgr["Team Manager<br/>spawn / stdin / stdout"]
+  Server --> EventCol["Event Collector<br/>hook events"]
+  Server --> GitPoller["GitHub Poller<br/>PR / CI / merge"]
+  Server --> IssueFetch["Issue Fetcher<br/>GraphQL, 60s cache"]
+  Server --> StuckDet["Stuck Detector<br/>idle 5min / stuck 15min"]
+  Server --> SSE["SSE Broker<br/>14 event types"]
+  Server --> DB[("SQLite<br/>fleet.db, WAL")]
+  TeamMgr -->|"spawn + stdin pipe"| CC["Claude Code<br/>stream-json"]
+  CC -->|"hooks POST"| EventCol
+  GitPoller -->|"gh CLI"| GitHub["GitHub API"]
