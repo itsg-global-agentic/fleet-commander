@@ -18,6 +18,7 @@ import { getDatabase } from '../db.js';
 import { getTeamManager } from '../services/team-manager.js';
 import { sseBroker } from '../services/sse-broker.js';
 import { DEFAULT_MESSAGE_TEMPLATES } from '../../shared/message-templates.js';
+import { getIssueFetcher } from '../services/issue-fetcher.js';
 import config from '../config.js';
 
 // ---------------------------------------------------------------------------
@@ -348,10 +349,11 @@ const systemRoutes: FastifyPluginCallback = (
         );
 
         // 4. Clear in-memory caches (issue fetcher, team manager)
-        const { getIssueFetcher } = await import('../services/issue-fetcher.js');
+        //    Stop the polling timer first so it doesn't re-fetch while we clear,
+        //    then wipe the cache. Do NOT restart — there are no projects left.
         const issueFetcher = getIssueFetcher();
-        issueFetcher.clearAll?.() ?? issueFetcher.stop?.();
-        issueFetcher.start?.();
+        issueFetcher.stop();
+        issueFetcher.clearAll();
 
         // 5. Broadcast empty state to all SSE clients
         sseBroker.broadcast('snapshot', { teams: [] });

@@ -301,6 +301,15 @@ export class IssueFetcher {
   }
 
   /**
+   * Full reset: stop the polling timer and clear all cached data.
+   * Used by factory reset — does NOT restart since there are no projects.
+   */
+  reset(): void {
+    this.stop();
+    this.clearAll();
+  }
+
+  /**
    * Force a re-fetch from GitHub for a specific project.
    */
   refresh(projectId?: number): IssueNode[] {

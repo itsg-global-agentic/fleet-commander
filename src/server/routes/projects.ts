@@ -388,6 +388,12 @@ const projectsRoutes: FastifyPluginCallback = (
         // Re-fetch to get updated hooks_installed
         const finalProject = db.getProject(project.id)!;
 
+        // Ensure the issue fetcher's polling loop is running.
+        // After a factory reset the fetcher is stopped; re-start it now that
+        // there is at least one project to poll issues for.
+        const issueFetcher = getIssueFetcher();
+        issueFetcher.start(); // no-op if already running
+
         // Broadcast SSE event
         sseBroker.broadcast('project_added', {
           project_id: finalProject.id,
