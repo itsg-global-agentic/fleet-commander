@@ -53,6 +53,27 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
   const isActive = team.status === 'running' || team.status === 'stuck' || team.status === 'idle' || team.status === 'launching';
   const title = team.issueTitle ? truncate(team.issueTitle, 40) : 'Untitled';
 
+  // Last activity — minutes since last event
+  let activityLabel = '—';
+  let activityColor = 'text-dark-muted';
+  if (team.lastEventAt) {
+    const agoMs = Date.now() - new Date(team.lastEventAt).getTime();
+    const agoMin = Math.floor(agoMs / 60000);
+    if (agoMin < 1) {
+      activityLabel = 'just now';
+      activityColor = 'text-[#3FB950]';
+    } else if (agoMin < 5) {
+      activityLabel = `${agoMin}m ago`;
+      activityColor = 'text-[#3FB950]';
+    } else if (agoMin < 15) {
+      activityLabel = `${agoMin}m ago`;
+      activityColor = 'text-[#D29922]';
+    } else {
+      activityLabel = `${agoMin}m ago`;
+      activityColor = 'text-[#F85149]';
+    }
+  }
+
   return (
     <tr
       onClick={onClick}
@@ -82,10 +103,10 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
         </span>
       </td>
 
-      {/* Cost */}
+      {/* Last Activity */}
       <td className="px-4 whitespace-nowrap">
-        <span className="text-sm text-dark-muted">
-          ${(team.totalCost ?? 0).toFixed(2)}
+        <span className={`text-sm ${activityColor}`} title={team.lastEventAt ?? undefined}>
+          {activityLabel}
         </span>
       </td>
 

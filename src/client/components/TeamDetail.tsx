@@ -225,11 +225,22 @@ export function TeamDetail() {
                   <StatusBadge status={detail.status} />
                 </div>
 
-                {/* Duration + Cost row */}
+                {/* Duration + Last Activity row */}
                 <div className="flex items-center gap-4 mt-3 text-sm">
                   <span className="text-dark-muted">
                     Duration: <span className="text-dark-text">{formatDuration(detail.durationMin)}</span>
                   </span>
+                  {detail.lastEventAt && (
+                    <span className="text-dark-muted">
+                      Last activity: <span className="text-dark-text">
+                        {(() => {
+                          const agoMin = Math.floor((Date.now() - new Date(detail.lastEventAt).getTime()) / 60000);
+                          if (agoMin < 1) return 'just now';
+                          return `${agoMin}m ago`;
+                        })()}
+                      </span>
+                    </span>
+                  )}
                 </div>
 
                 {/* Worktree info */}
