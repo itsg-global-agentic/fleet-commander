@@ -32,6 +32,7 @@ export function TeamDetail() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [quickActionLoading, setQuickActionLoading] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -146,6 +147,34 @@ export function TeamDetail() {
     [selectedTeamId, actionLoading, api],
   );
 
+  // Quick action handler — send a pre-defined message template to the team
+  const handleQuickAction = useCallback(
+    async (templateId: string) => {
+      if (!selectedTeamId || !detail || quickActionLoading) return;
+      setQuickActionLoading(templateId);
+      try {
+        // Fetch template
+        const templates = await api.get<Array<{ id: string; template: string; enabled: boolean }>>('message-templates');
+        const tmpl = templates.find(t => t.id === templateId);
+        if (!tmpl || !tmpl.enabled) return;
+
+        // Replace placeholders
+        let message = tmpl.template;
+        message = message.replace(/\{\{ISSUE_NUMBER\}\}/g, String(detail.issueNumber));
+        if (detail.prNumber) {
+          message = message.replace(/\{\{PR_NUMBER\}\}/g, String(detail.prNumber));
+        }
+
+        await api.post(`teams/${selectedTeamId}/send-message`, { message });
+      } catch {
+        // Silent — message will appear in session log if delivered
+      } finally {
+        setQuickActionLoading(null);
+      }
+    },
+    [selectedTeamId, detail, quickActionLoading, api],
+  );
+
   // Determine which action buttons to show
   const isActive =
     detail?.status === 'running' ||
@@ -174,7 +203,7 @@ export function TeamDetail() {
       {/* Slide-over panel */}
       <div
         ref={panelRef}
-        className={`fixed top-0 right-0 h-full w-[520px] max-w-full bg-dark-surface border-l border-dark-border z-50 flex flex-col shadow-2xl transition-transform duration-300 ease-in-out ${
+        className={`fixed top-0 right-0 h-full w-[960px] max-w-full bg-dark-surface border-l border-dark-border z-50 flex flex-col shadow-2xl transition-transform duration-300 ease-in-out ${
           isOpen ? 'translate-x-0' : 'translate-x-full'
         }`}
       >
@@ -198,8 +227,8 @@ export function TeamDetail() {
           </button>
         </div>
 
-        {/* Scrollable content */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar">
+        {/* Content area */}
+        <div className="flex-1 flex flex-col min-h-0">
           {loading && !detail && (
             <div className="flex items-center justify-center py-16">
               <span className="text-dark-muted">Loading...</span>
@@ -213,135 +242,161 @@ export function TeamDetail() {
           )}
 
           {detail && (
-            <div className="p-5 space-y-6">
-              {/* ---- Header Section ---- */}
-              <section>
-                <h3 className="text-base font-semibold text-dark-text mb-2">
-                  <span className="text-dark-muted mr-1.5">#{detail.issueNumber}</span>
-                  {detail.issueTitle ?? 'Untitled'}
-                </h3>
+            <>
+              {/* TOP: Metadata — scrollable if needed */}
+              <div className="shrink-0 overflow-y-auto max-h-[40%] custom-scrollbar">
+                <div className="p-5 space-y-4">
+                  {/* ---- Header Section ---- */}
+                  <section>
+                    <h3 className="text-base font-semibold text-dark-text mb-2">
+                      <span className="text-dark-muted mr-1.5">#{detail.issueNumber}</span>
+                      {detail.issueTitle ?? 'Untitled'}
+                    </h3>
 
-                <div className="flex items-center gap-3 flex-wrap">
-                  <StatusBadge status={detail.status} />
-                </div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <StatusBadge status={detail.status} />
+                    </div>
 
-                {/* Duration + Last Activity row */}
-                <div className="flex items-center gap-4 mt-3 text-sm">
-                  <span className="text-dark-muted">
-                    Duration: <span className="text-dark-text">{formatDuration(detail.durationMin)}</span>
-                  </span>
-                  {detail.lastEventAt && (
-                    <span className="text-dark-muted">
-                      Last activity: <span className="text-dark-text">
-                        {(() => {
-                          const agoMin = Math.floor((Date.now() - new Date(detail.lastEventAt).getTime()) / 60000);
-                          if (agoMin < 1) return 'just now';
-                          return `${agoMin}m ago`;
-                        })()}
+                    {/* Duration + Last Activity row */}
+                    <div className="flex items-center gap-4 mt-3 text-sm">
+                      <span className="text-dark-muted">
+                        Duration: <span className="text-dark-text">{formatDuration(detail.durationMin)}</span>
                       </span>
-                    </span>
+                      {detail.lastEventAt && (
+                        <span className="text-dark-muted">
+                          Last activity: <span className="text-dark-text">
+                            {(() => {
+                              const agoMin = Math.floor((Date.now() - new Date(detail.lastEventAt).getTime()) / 60000);
+                              if (agoMin < 1) return 'just now';
+                              return `${agoMin}m ago`;
+                            })()}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Worktree info */}
+                    <div className="mt-2 text-xs text-dark-muted">
+                      <span>Worktree: {detail.worktreeName}</span>
+                      {detail.branchName && (
+                        <span className="ml-3">Branch: {detail.branchName}</span>
+                      )}
+                    </div>
+                  </section>
+
+                  {/* ---- PR Section ---- */}
+                  {detail.pr && (
+                    <section>
+                      <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
+                        Pull Request
+                      </h4>
+
+                      <div className="flex items-center gap-3 mb-3 text-sm">
+                        <span className="text-dark-accent font-medium">
+                          PR #{detail.pr.number}
+                        </span>
+                        <span
+                          className="text-xs px-1.5 py-0.5 rounded border"
+                          style={{
+                            color:
+                              detail.pr.state === 'merged'
+                                ? '#A371F7'
+                                : detail.pr.state === 'open'
+                                  ? '#3FB950'
+                                  : detail.pr.state === 'closed'
+                                    ? '#F85149'
+                                    : '#8B949E',
+                            borderColor:
+                              (detail.pr.state === 'merged'
+                                ? '#A371F7'
+                                : detail.pr.state === 'open'
+                                  ? '#3FB950'
+                                  : detail.pr.state === 'closed'
+                                    ? '#F85149'
+                                    : '#8B949E') + '40',
+                          }}
+                        >
+                          {detail.pr.state?.toUpperCase() ?? 'UNKNOWN'}
+                        </span>
+                        {mergeStatusLabel && (
+                          <span className="text-xs text-dark-muted">
+                            Merge: {mergeStatusLabel}
+                          </span>
+                        )}
+                        {detail.pr.autoMerge && (
+                          <span className="text-xs text-[#3FB950]">Auto-merge</span>
+                        )}
+                      </div>
+
+                      {/* CI Checks */}
+                      <div className="ml-1">
+                        <p className="text-xs text-dark-muted mb-1.5 uppercase tracking-wide">CI Checks</p>
+                        <CIChecks checks={detail.pr.checks ?? []} />
+                      </div>
+                    </section>
+                  )}
+
+                  {!detail.pr && detail.prNumber && (
+                    <section>
+                      <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
+                        Pull Request
+                      </h4>
+                      <p className="text-sm text-dark-muted">PR #{detail.prNumber} (details loading...)</p>
+                    </section>
                   )}
                 </div>
+              </div>
 
-                {/* Worktree info */}
-                <div className="mt-2 text-xs text-dark-muted">
-                  <span>Worktree: {detail.worktreeName}</span>
-                  {detail.branchName && (
-                    <span className="ml-3">Branch: {detail.branchName}</span>
-                  )}
+              {/* MIDDLE: Two columns — Events | Session Log */}
+              <div className="flex-1 min-h-0 flex gap-4 px-5 py-3">
+                {/* Left: Events */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1 shrink-0">
+                    Recent Events
+                  </h4>
+                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                    <EventTimeline teamId={detail.id} refreshKey={refreshKey} />
+                  </div>
                 </div>
-              </section>
 
-              {/* ---- PR Section ---- */}
-              {detail.pr && (
-                <section>
-                  <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                    Pull Request
+                {/* Right: Session Log */}
+                <div className="flex-1 min-w-0 flex flex-col">
+                  <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1 shrink-0">
+                    Session Log
                   </h4>
-
-                  <div className="flex items-center gap-3 mb-3 text-sm">
-                    <span className="text-dark-accent font-medium">
-                      PR #{detail.pr.number}
-                    </span>
-                    <span
-                      className="text-xs px-1.5 py-0.5 rounded border"
-                      style={{
-                        color:
-                          detail.pr.state === 'merged'
-                            ? '#A371F7'
-                            : detail.pr.state === 'open'
-                              ? '#3FB950'
-                              : detail.pr.state === 'closed'
-                                ? '#F85149'
-                                : '#8B949E',
-                        borderColor:
-                          (detail.pr.state === 'merged'
-                            ? '#A371F7'
-                            : detail.pr.state === 'open'
-                              ? '#3FB950'
-                              : detail.pr.state === 'closed'
-                                ? '#F85149'
-                                : '#8B949E') + '40',
-                      }}
-                    >
-                      {detail.pr.state?.toUpperCase() ?? 'UNKNOWN'}
-                    </span>
-                    {mergeStatusLabel && (
-                      <span className="text-xs text-dark-muted">
-                        Merge: {mergeStatusLabel}
-                      </span>
-                    )}
-                    {detail.pr.autoMerge && (
-                      <span className="text-xs text-[#3FB950]">Auto-merge</span>
-                    )}
+                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                    <TeamOutput teamId={detail.id} teamStatus={detail.status} />
                   </div>
+                </div>
+              </div>
 
-                  {/* CI Checks */}
-                  <div className="ml-1">
-                    <p className="text-xs text-dark-muted mb-1.5 uppercase tracking-wide">CI Checks</p>
-                    <CIChecks checks={detail.pr.checks ?? []} />
-                  </div>
-                </section>
-              )}
-
-              {!detail.pr && detail.prNumber && (
-                <section>
-                  <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                    Pull Request
-                  </h4>
-                  <p className="text-sm text-dark-muted">PR #{detail.prNumber} (details loading...)</p>
-                </section>
-              )}
-
-              {/* ---- Event Timeline ---- */}
-              <section>
-                <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                  Recent Events
-                </h4>
-                <EventTimeline teamId={detail.id} refreshKey={refreshKey} />
-              </section>
-
-              {/* ---- Session Log (CC output + sent messages) ---- */}
-              <section>
-                <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                  Session Log
-                </h4>
-                <TeamOutput teamId={detail.id} teamStatus={detail.status} />
-              </section>
-
-              {/* ---- Command Input ---- */}
-              <section>
-                <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                  Send Command
-                </h4>
+              {/* BOTTOM: Command + Actions footer */}
+              <div className="shrink-0 border-t border-dark-border px-5 py-4 space-y-4">
                 <CommandInput teamId={detail.id} />
-              </section>
-
-              {/* ---- Action Buttons ---- */}
-              <section>
-                <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                  Actions
-                </h4>
+                {/* Quick Actions */}
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <span className="text-xs text-dark-muted mr-1">Quick:</span>
+                  {[
+                    { id: 'nudge_progress', label: 'Status?', color: '#58A6FF' },
+                    { id: 'ask_for_pr', label: 'Open PR', color: '#3FB950' },
+                    { id: 'check_ci', label: 'Fix CI', color: '#F85149', show: !!detail?.prNumber },
+                    { id: 'wrap_up', label: 'Wrap Up', color: '#D29922' },
+                  ].filter(a => a.show !== false).map((action) => (
+                    <button
+                      key={action.id}
+                      onClick={() => handleQuickAction(action.id)}
+                      disabled={quickActionLoading !== null}
+                      className="px-2.5 py-1 text-xs rounded-full border transition-colors disabled:opacity-40"
+                      style={{
+                        color: action.color,
+                        borderColor: action.color + '40',
+                      }}
+                      title={`Send "${action.label}" message to TL`}
+                    >
+                      {quickActionLoading === action.id ? '...' : action.label}
+                    </button>
+                  ))}
+                </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   {isActive && (
                     <button
@@ -385,8 +440,8 @@ export function TeamDetail() {
                     Export Log
                   </button>
                 </div>
-              </section>
-            </div>
+              </div>
+            </>
           )}
         </div>
       </div>

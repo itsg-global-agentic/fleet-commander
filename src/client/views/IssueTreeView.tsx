@@ -5,6 +5,20 @@ import { TreeNode, type IssueNode } from '../components/TreeNode';
 import type { ProjectSummary } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
+// Status filter pill definitions
+// ---------------------------------------------------------------------------
+
+const STATUS_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'no-team', label: 'No Team' },
+  { key: 'running', label: 'Running', color: '#3FB950' },
+  { key: 'idle', label: 'Idle', color: '#D29922' },
+  { key: 'stuck', label: 'Stuck', color: '#F85149' },
+  { key: 'done', label: 'Done', color: '#56D4DD' },
+  { key: 'failed', label: 'Failed', color: '#F85149' },
+] as const;
+
+// ---------------------------------------------------------------------------
 // API response shape from GET /api/issues
 // ---------------------------------------------------------------------------
 
@@ -38,6 +52,7 @@ export function IssueTreeView() {
   const [launchErrors, setLaunchErrors] = useState<Map<number, string>>(new Map());
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
 
   // Fetch the project list so we can auto-resolve a project for launches
   // when "All Projects" is selected (selectedProjectId === null).
@@ -178,7 +193,7 @@ export function IssueTreeView() {
   // Filter tree by search query
   // -------------------------------------------------------------------------
 
-  const filteredTree = useMemo(() => filterTree(tree, search), [tree, search]);
+  const filteredTree = useMemo(() => filterTree(tree, search, statusFilter), [tree, search, statusFilter]);
 
   // -------------------------------------------------------------------------
   // Loading state
@@ -224,7 +239,7 @@ export function IssueTreeView() {
         <div className="flex items-center gap-3 shrink-0">
           <h2 className="text-sm font-semibold text-dark-text">Issue Tree</h2>
           <span className="text-xs text-dark-muted">
-            {search
+            {search || statusFilter !== 'all'
               ? `${countNodes(filteredTree)} of ${issueCount} issues`
               : `${issueCount} issue${issueCount !== 1 ? 's' : ''}`}
           </span>
@@ -255,6 +270,24 @@ export function IssueTreeView() {
               </svg>
             </button>
           )}
+        </div>
+
+        {/* Status filter pills */}
+        <div className="flex items-center gap-1 flex-wrap">
+          {STATUS_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              onClick={() => setStatusFilter(f.key)}
+              className={`px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                statusFilter === f.key
+                  ? 'border-dark-accent/50 bg-dark-accent/20 text-dark-accent'
+                  : 'border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted'
+              }`}
+              style={statusFilter === f.key && 'color' in f ? { color: f.color, borderColor: f.color + '50', backgroundColor: f.color + '15' } : undefined}
+            >
+              {f.label}
+            </button>
+          ))}
         </div>
 
         <button
@@ -304,12 +337,18 @@ export function IssueTreeView() {
           </div>
         ) : filteredTree.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3">
-            <p className="text-dark-muted text-sm">No issues match &ldquo;{search}&rdquo;</p>
+            <p className="text-dark-muted text-sm">
+              {search && statusFilter !== 'all'
+                ? <>No issues match &ldquo;{search}&rdquo; with filter &ldquo;{STATUS_FILTERS.find(f => f.key === statusFilter)?.label}&rdquo;</>
+                : search
+                  ? <>No issues match &ldquo;{search}&rdquo;</>
+                  : <>No issues match filter &ldquo;{STATUS_FILTERS.find(f => f.key === statusFilter)?.label}&rdquo;</>}
+            </p>
             <button
-              onClick={() => setSearch('')}
+              onClick={() => { setSearch(''); setStatusFilter('all'); }}
               className="text-xs text-dark-accent hover:underline"
             >
-              Clear search
+              Clear filters
             </button>
           </div>
         ) : (
@@ -322,7 +361,7 @@ export function IssueTreeView() {
                 onLaunch={handleLaunch}
                 launchingIssues={launchingIssues}
                 launchErrors={launchErrors}
-                forceExpand={!!search}
+                forceExpand={!!search || statusFilter !== 'all'}
               />
             ))}
           </div>
@@ -336,24 +375,42 @@ export function IssueTreeView() {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Filter tree nodes by search query, keeping parents of matching children */
-function filterTree(nodes: IssueNode[], query: string): IssueNode[] {
-  if (!query.trim()) return nodes;
+/** Check if a node matches the status filter */
+function matchesStatusFilter(node: IssueNode, filter: string): boolean {
+  if (filter === 'all') return true;
+  if (filter === 'no-team') return !node.activeTeam;
+  return node.activeTeam?.status === filter;
+}
+
+/** Filter tree nodes by search query and status filter, keeping parents of matching children */
+function filterTree(nodes: IssueNode[], query: string, statusFilter: string): IssueNode[] {
+  const hasQuery = query.trim().length > 0;
+  const hasStatusFilter = statusFilter !== 'all';
+
+  // No filters active — return as-is
+  if (!hasQuery && !hasStatusFilter) return nodes;
+
   const q = query.toLowerCase().trim();
   const isNumericQuery = /^\d+$/.test(q);
   const numMatch = q.startsWith('#') ? parseInt(q.slice(1), 10) : (isNumericQuery ? parseInt(q, 10) : NaN);
 
   return nodes.reduce<IssueNode[]>((acc, node) => {
-    // Check if this node matches
-    const matches =
+    // Check if this node matches the text search
+    const matchesSearch = !hasQuery ||
       (!isNaN(numMatch) && node.number === numMatch) ||
       node.title.toLowerCase().includes(q);
 
-    // Recursively filter children
-    const filteredChildren = filterTree(node.children, query);
+    // Check if this node matches the status filter
+    const matchesStatus = matchesStatusFilter(node, statusFilter);
 
-    // Include node if it matches OR has matching children
-    if (matches || filteredChildren.length > 0) {
+    // A node directly matches if it passes BOTH filters
+    const directMatch = matchesSearch && matchesStatus;
+
+    // Recursively filter children
+    const filteredChildren = filterTree(node.children, query, statusFilter);
+
+    // Include node if it directly matches OR has matching children
+    if (directMatch || filteredChildren.length > 0) {
       acc.push({ ...node, children: filteredChildren });
     }
     return acc;

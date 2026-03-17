@@ -119,7 +119,7 @@ export function EventTimeline({ teamId, refreshKey }: EventTimelineProps) {
   }
 
   return (
-    <div className="max-h-64 overflow-y-auto custom-scrollbar">
+    <div className="overflow-y-auto custom-scrollbar">
       <ul className="space-y-0">
         {events.map((evt) => (
           <li

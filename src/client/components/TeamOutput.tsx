@@ -143,7 +143,7 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
         {copied ? 'Copied!' : 'Copy'}
       </button>
 
-      <div className="font-mono text-xs max-h-96 overflow-y-auto bg-[#0D1117] p-2 rounded border border-dark-border custom-scrollbar">
+      <div className="font-mono text-xs overflow-y-auto bg-[#0D1117] p-2 rounded border border-dark-border custom-scrollbar">
         {events.filter((e) => getEventText(e) !== '').map((e, i) => {
           const { color, label } = getStyle(e.type);
           const text = getEventText(e);

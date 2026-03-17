@@ -50,4 +50,28 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
       'Sent to TL when team transitions to stuck to nudge them back to work',
     placeholders: ['ISSUE_NUMBER'],
   },
+  {
+    id: 'nudge_progress',
+    template: "What's your current progress on issue #{{ISSUE_NUMBER}}? Give me a brief status update.",
+    description: 'Ask TL for a status update on the issue',
+    placeholders: ['ISSUE_NUMBER'],
+  },
+  {
+    id: 'ask_for_pr',
+    template: 'Please open a PR with your current changes for issue #{{ISSUE_NUMBER}}. Push what you have.',
+    description: 'Ask TL to create a pull request',
+    placeholders: ['ISSUE_NUMBER'],
+  },
+  {
+    id: 'check_ci',
+    template: 'CI is failing on PR #{{PR_NUMBER}}. Check the failing tests and fix them.',
+    description: 'Tell TL to investigate CI failures',
+    placeholders: ['PR_NUMBER'],
+  },
+  {
+    id: 'wrap_up',
+    template: 'Wrap up your work on issue #{{ISSUE_NUMBER}}. Commit all changes, push, and open a PR if not already done.',
+    description: 'Tell TL to finish up and create PR',
+    placeholders: ['ISSUE_NUMBER'],
+  },
 ];
