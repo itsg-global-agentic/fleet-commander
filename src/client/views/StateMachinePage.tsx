@@ -183,12 +183,30 @@ function computeLayout(states: StateNode[], transitions: Transition[]): LayoutRe
   });
   g.setDefaultEdgeLabel(() => ({}));
 
+  const stateIds = new Set(states.map((s) => s.id));
+
   for (const s of states) {
     g.setNode(s.id, { label: s.id, width: NODE_WIDTH, height: NODE_HEIGHT });
   }
 
-  const edgeMap = new Map<string, Transition[]>();
+  // Expand wildcard transitions: "*" means "from every state"
+  const expandedTransitions: Transition[] = [];
   for (const t of transitions) {
+    if (t.from === '*') {
+      for (const s of states) {
+        if (s.id !== t.to) {
+          expandedTransitions.push({ ...t, from: s.id });
+        }
+      }
+    } else {
+      expandedTransitions.push(t);
+    }
+  }
+
+  const edgeMap = new Map<string, Transition[]>();
+  for (const t of expandedTransitions) {
+    // Skip edges referencing unknown states
+    if (!stateIds.has(t.from) || !stateIds.has(t.to)) continue;
     const key = `${t.from}->${t.to}`;
     if (!edgeMap.has(key)) edgeMap.set(key, []);
     edgeMap.get(key)!.push(t);
