@@ -27,8 +27,6 @@ const config = Object.freeze({
   maxUniqueCiFailures: parseInt(process.env['FLEET_MAX_CI_FAILURES'] || '3', 10),
 
   claudeCmd: process.env['FLEET_CLAUDE_CMD'] || 'claude',
-  /** @deprecated Prompt content now comes from prompt files (prompts/default-prompt.md) */
-  defaultPrompt: process.env['FLEET_DEFAULT_PROMPT'] || '',
   skipPermissions: process.env['FLEET_SKIP_PERMISSIONS'] !== 'false',
 
   dbPath: process.env['FLEET_DB_PATH'] || path.join(fleetCommanderRoot, 'fleet.db'),

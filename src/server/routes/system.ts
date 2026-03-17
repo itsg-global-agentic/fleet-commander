@@ -287,7 +287,6 @@ const systemRoutes: FastifyPluginCallback = (
           sseHeartbeatMs: config.sseHeartbeatMs,
           outputBufferLines: config.outputBufferLines,
           claudeCmd: config.claudeCmd,
-          defaultPrompt: config.defaultPrompt,
           fleetCommanderRoot: config.fleetCommanderRoot,
           dbPath: config.dbPath,
         });

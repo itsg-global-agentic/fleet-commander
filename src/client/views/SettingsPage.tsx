@@ -17,7 +17,6 @@ interface SettingsResponse {
   sseHeartbeatMs: number;
   outputBufferLines: number;
   claudeCmd: string;
-  defaultPrompt: string;
   fleetCommanderRoot: string;
   dbPath: string;
 }
@@ -61,12 +60,6 @@ const SETTING_GROUPS: SettingGroup[] = [
         label: 'Claude Command',
         envVar: 'FLEET_CLAUDE_CMD',
         description: 'CLI command used to invoke Claude',
-      },
-      {
-        key: 'defaultPrompt',
-        label: 'Default Prompt',
-        envVar: 'FLEET_DEFAULT_PROMPT',
-        description: 'Default prompt sent to new teams',
       },
       {
         key: 'outputBufferLines',
@@ -285,6 +278,19 @@ export function SettingsPage() {
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Prompt files note */}
+      <div className="mt-6 bg-dark-surface border border-dark-border rounded-lg px-4 py-3">
+        <h2 className="text-sm font-semibold text-dark-muted uppercase tracking-wider mb-1">
+          Launch Prompt
+        </h2>
+        <p className="text-dark-muted text-sm">
+          Configured per-project via prompt files:{' '}
+          <code className="text-dark-accent font-mono text-xs bg-dark-base/50 px-1.5 py-0.5 rounded">
+            {'prompts/{slug}-prompt.md'}
+          </code>
+        </p>
       </div>
     </div>
   );

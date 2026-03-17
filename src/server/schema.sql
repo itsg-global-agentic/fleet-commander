@@ -166,27 +166,27 @@ CREATE TABLE IF NOT EXISTS message_templates (
 -- Seed default templates (INSERT OR IGNORE so user overrides are preserved)
 INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('ci_green',
-   'PM here. CI is green on PR #{{PR_NUMBER}} — all checks passed. Auto-merge is {{AUTO_MERGE_STATUS}}. If auto-merge is enabled, the PR should merge automatically. If not, you may want to enable it or merge manually. Good work.',
+   'Hej, CI przeszlo na PR #{{PR_NUMBER}} — wszystkie checki zielone. Auto-merge jest {{AUTO_MERGE_STATUS}}. Dobra robota, czekamy na merge.',
    'PM tells TL that CI passed and advises on merge next steps');
 INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('ci_red',
-   'PM here. CI failed on PR #{{PR_NUMBER}}. Failed checks: {{FAILED_CHECKS}}. This is failure {{FAIL_COUNT}} of {{MAX_FAILURES}} unique types before I mark you as blocked. Please investigate and push a fix. Focus on the failing checks first.',
+   'CI padlo na PR #{{PR_NUMBER}}. Failujace checki: {{FAILED_CHECKS}}. To {{FAIL_COUNT}}/{{MAX_FAILURES}} unikalnych bledow — poprawcie to. Co poszlo nie tak?',
    'PM tells TL that CI failed and how many failures remain before blocked');
 INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('ci_pending',
-   'PM here. CI is now running on PR #{{PR_NUMBER}}. I''ll let you know when results come in. Continue working on other tasks if you have any, or wait for the results.',
+   'CI sie odpala na PR #{{PR_NUMBER}}. Czekajcie na wyniki zanim pushniecie kolejne zmiany.',
    'PM tells TL that CI is running and to continue other work');
 INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('pr_merged',
-   'PM here. Great news — PR #{{PR_NUMBER}} has been merged successfully. Your work on this issue is complete. Please wrap up any remaining tasks, update the issue status, and prepare to shut down. I''ll close this session shortly.',
+   'PR #{{PR_NUMBER}} zmergowany. Dobra robota! Zamknijcie issue, posprzatajcie po sobie i konczczcie prace.',
    'PM tells TL the PR merged and to wrap up');
 INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('pr_merged_final',
-   'PM here. PR #{{PR_NUMBER}} is merged and your work is done. Finishing up this session now. Well done, team.',
+   'PR #{{PR_NUMBER}} jest zmergowany. Konczymy sesje. Dzieki za prace, zespole.',
    'PM sends final message to TL before closing the session');
 INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('ci_blocked',
-   'PM here. I''m marking your team as BLOCKED. You''ve hit {{FAIL_COUNT}} unique CI failure types on PR #{{PR_NUMBER}}, which exceeds our threshold. I need to review this situation before you continue. Stop pushing fixes and wait for my instructions.',
+   'STOP. Macie {{FAIL_COUNT}} unikalnych typow bledow CI na PR #{{PR_NUMBER}}. Blokuje was do mojej decyzji. Nie pushujcie wiecej fixow — czekajcie na moje instrukcje.',
    'PM tells TL the team is blocked due to repeated CI failures');
 
 -- Insert schema version 2 (or upgrade from 1)
