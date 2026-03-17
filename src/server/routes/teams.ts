@@ -761,7 +761,7 @@ const teamsRoutes: FastifyPluginCallback = (
 
         // Try to deliver via stdin pipe (direct delivery to running process)
         const manager = getTeamManager();
-        const delivered = manager.sendMessage(teamId, message.trim());
+        const delivered = manager.sendMessage(teamId, message.trim(), 'user');
         if (delivered) {
           db.markCommandDelivered(command.id);
           request.log.info(`[Teams] Message delivered to team ${teamId} via stdin`);

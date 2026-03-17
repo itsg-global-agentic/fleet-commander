@@ -118,7 +118,7 @@ if command -v curl >/dev/null 2>&1; then
         -X POST \
         -H "Content-Type: application/json" \
         -d "$PAYLOAD" \
-        "$FLEET_URL" >/dev/null 2>&1 &
+        "$FLEET_URL" >/dev/null 2>&1
 fi
 
 # Always exit 0 — hooks must never fail

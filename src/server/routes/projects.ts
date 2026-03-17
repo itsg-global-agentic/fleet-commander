@@ -159,6 +159,21 @@ function uninstallHooks(repoPath: string): void {
 }
 
 /**
+ * Check whether a file contains CRLF line endings by reading its first 512 bytes.
+ */
+function fileHasCrlf(filePath: string): boolean {
+  try {
+    const buf = Buffer.alloc(512);
+    const fd = fs.openSync(filePath, 'r');
+    const bytesRead = fs.readSync(fd, buf, 0, 512, 0);
+    fs.closeSync(fd);
+    return buf.subarray(0, bytesRead).includes(0x0D);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Check the install status of artifacts deployed by install.sh:
  * hooks directory and workflow prompt.
  * Returns detailed file-level breakdown for tooltip display.
@@ -179,11 +194,17 @@ function checkInstallStatus(repoPath: string): InstallStatus {
   ];
 
   const hooksDir = path.join(repoPath, '.claude', 'hooks', 'fleet-commander');
-  const hookFiles: InstallFileStatus[] = hookNames.map((name) => ({
-    name,
-    exists: fs.existsSync(path.join(hooksDir, name)),
-  }));
+  const hookFiles: InstallFileStatus[] = hookNames.map((name) => {
+    const filePath = path.join(hooksDir, name);
+    const exists = fs.existsSync(filePath);
+    return {
+      name,
+      exists,
+      hasCrlf: exists ? fileHasCrlf(filePath) : false,
+    };
+  });
   const hookFoundCount = hookFiles.filter((f) => f.exists).length;
+  const hookHasCrlf = hookFiles.some((f) => f.hasCrlf);
 
   // Prompt files expected in .claude/prompts/
   const promptFiles: InstallFileStatus[] = [
@@ -217,7 +238,7 @@ function checkInstallStatus(repoPath: string): InstallStatus {
 
   return {
     hooks: {
-      installed: hookFoundCount === hookNames.length,
+      installed: hookFoundCount === hookNames.length && !hookHasCrlf,
       total: hookNames.length,
       found: hookFoundCount,
       files: hookFiles,
@@ -633,6 +654,14 @@ const projectsRoutes: FastifyPluginCallback = (
         // Clear cached issues for this project
         const issueFetcher = getIssueFetcher();
         issueFetcher.clearProject(projectId);
+
+        // Delete all related records before deleting project (foreign key constraints)
+        const allTeams = db.getTeams({ projectId });
+        for (const t of allTeams) {
+          db.deleteTeamEvents(t.id);
+          db.deleteTeamCommands(t.id);
+        }
+        db.deleteTeamsByProject(projectId);
 
         // Delete the project from DB
         db.deleteProject(projectId);

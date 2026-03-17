@@ -25,16 +25,9 @@ function formatDuration(minutes: number): string {
   return `${m}m`;
 }
 
-/** Format a date to a short relative label */
-function relativeLabel(date: Date, now: Date): string {
-  const diffMs = now.getTime() - date.getTime();
-  const diffMin = Math.round(diffMs / 60_000);
-  if (diffMin <= 0) return 'now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffH = Math.round(diffMin / 60);
-  if (diffH < 24) return `${diffH}h ago`;
-  const diffD = Math.round(diffH / 24);
-  return `${diffD}d ago`;
+/** Format a date to HH:MM local time */
+function relativeLabel(date: Date, _now: Date): string {
+  return date.toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' });
 }
 
 /** Truncate a string */

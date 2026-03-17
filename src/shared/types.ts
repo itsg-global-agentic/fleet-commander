@@ -43,6 +43,7 @@ export interface Project {
 export interface InstallFileStatus {
   name: string;
   exists: boolean;
+  hasCrlf?: boolean;
 }
 
 /** Detailed install status for a single category */

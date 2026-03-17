@@ -194,13 +194,14 @@ export function executeCleanup(
   // Re-scan to get the current preview (ensures we only remove items that
   // still exist AND were in the original preview — prevents stale requests)
   const preview = getCleanupPreview(projectId, resetTeams);
-  const allowedPaths = new Set(itemPaths);
+  const normalizePath = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+  const allowedPaths = new Set(itemPaths.map(normalizePath));
 
   const removed: string[] = [];
   const failed: { name: string; error: string }[] = [];
 
   for (const item of preview.items) {
-    if (!allowedPaths.has(item.path)) continue; // User didn't select this one
+    if (!allowedPaths.has(normalizePath(item.path))) continue; // User didn't select this one
 
     try {
       if (item.type === 'worktree') {

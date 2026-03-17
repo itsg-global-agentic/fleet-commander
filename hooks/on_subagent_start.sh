@@ -5,4 +5,4 @@
 
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 input=$(cat)
-echo "$input" | "$HOOK_DIR/send_event.sh" "subagent_start" &
+echo "$input" | "$HOOK_DIR/send_event.sh" "subagent_start"

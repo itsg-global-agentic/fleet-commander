@@ -80,8 +80,8 @@ export function ProjectsPage() {
       try {
         await api.del(`projects/${project.id}`);
         await fetchProjects();
-      } catch {
-        // ignore
+      } catch (err) {
+        window.alert(`Failed to delete project: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
     [api, fetchProjects],
@@ -268,14 +268,16 @@ export function ProjectsPage() {
                           key: string;
                           label: string;
                           installed: boolean;
+                          hasCrlf: boolean;
                           somePresent: boolean;
-                          files: { name: string; exists: boolean }[];
+                          files: { name: string; exists: boolean; hasCrlf?: boolean }[];
                           summary: string;
                         }[] = [
                           {
                             key: 'hooks',
                             label: 'hooks',
                             installed: s.hooks?.installed ?? false,
+                            hasCrlf: s.hooks?.files?.some((f: any) => f.hasCrlf) ?? false,
                             somePresent: (s.hooks?.found ?? 0) > 0,
                             files: s.hooks?.files ?? [],
                             summary: `Hook Scripts (${s.hooks?.found ?? 0}/${s.hooks?.total ?? 0})`,
@@ -284,6 +286,7 @@ export function ProjectsPage() {
                             key: 'prompt',
                             label: 'prompt',
                             installed: s.prompt?.installed ?? false,
+                            hasCrlf: false,
                             somePresent: s.prompt?.files?.some((f) => f.exists) ?? false,
                             files: s.prompt?.files ?? [],
                             summary: 'Prompt Files',
@@ -316,16 +319,20 @@ export function ProjectsPage() {
                         return (
                           <div className="flex items-center gap-2 text-xs">
                             {detailedCategories.map((cat) => {
-                              const color = cat.installed
+                              const color = cat.installed && !cat.hasCrlf
                                 ? '#3FB950'
-                                : cat.somePresent
+                                : cat.hasCrlf
                                   ? '#D29922'
-                                  : '#F85149';
-                              const icon = cat.installed
+                                  : cat.somePresent
+                                    ? '#D29922'
+                                    : '#F85149';
+                              const icon = cat.installed && !cat.hasCrlf
                                 ? '\u2713'
-                                : cat.somePresent
+                                : cat.hasCrlf
                                   ? '\u26A0'
-                                  : '\u2717';
+                                  : cat.somePresent
+                                    ? '\u26A0'
+                                    : '\u2717';
 
                               return (
                                 <div key={cat.key} className="relative group shrink-0">
@@ -341,23 +348,27 @@ export function ProjectsPage() {
                                     <div className="font-medium mb-1 text-[#C9D1D9]">
                                       {cat.summary}
                                     </div>
-                                    {cat.files.map((f) => (
-                                      <div
-                                        key={f.name}
-                                        className="flex items-center gap-1.5 py-0.5"
-                                      >
-                                        <span
-                                          style={{
-                                            color: f.exists ? '#3FB950' : '#F85149',
-                                          }}
+                                    {cat.files.map((f) => {
+                                      const fileColor = f.exists
+                                        ? f.hasCrlf ? '#D29922' : '#3FB950'
+                                        : '#F85149';
+                                      const fileIcon = f.exists
+                                        ? f.hasCrlf ? '\u26A0' : '\u2713'
+                                        : '\u2717';
+                                      return (
+                                        <div
+                                          key={f.name}
+                                          className="flex items-center gap-1.5 py-0.5"
                                         >
-                                          {f.exists ? '\u2713' : '\u2717'}
-                                        </span>
-                                        <span className="text-[#8B949E] font-mono">
-                                          {f.name}
-                                        </span>
-                                      </div>
-                                    ))}
+                                          <span style={{ color: fileColor }}>
+                                            {fileIcon}
+                                          </span>
+                                          <span className="text-[#8B949E] font-mono">
+                                            {f.name}{f.hasCrlf ? ' (CRLF)' : ''}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
                                   </div>
                                 </div>
                               );
@@ -483,12 +494,13 @@ export function ProjectsPage() {
 
                   {/* Right: actions */}
                   <div className="flex items-center gap-2 shrink-0">
-                    {/* Show Install button when any component is missing */}
+                    {/* Show Install button when any component is missing or has CRLF */}
                     {project.installStatus && (
                       !project.installStatus.hooks?.installed ||
                       !project.installStatus.prompt?.installed ||
                       !project.installStatus.settings?.exists ||
-                      !project.installStatus.mcpConfig?.exists
+                      !project.installStatus.mcpConfig?.exists ||
+                      project.installStatus.hooks?.files?.some((f: any) => f.hasCrlf)
                     ) && (
                       <button
                         onClick={() => handleReinstall(project)}

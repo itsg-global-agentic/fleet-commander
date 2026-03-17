@@ -128,6 +128,94 @@ export class TeamManager {
   private _processingQueue = new Set<number>();
 
   // -------------------------------------------------------------------------
+  // syncWithOrigin — fetch + pull before creating a worktree
+  // -------------------------------------------------------------------------
+
+  /**
+   * Sync local repo with origin before creating a worktree.
+   * Returns the number of commits the local default branch was behind origin.
+   */
+  private syncWithOrigin(repoPath: string, teamId: number): number {
+    let commitsBehind = 0;
+    try {
+      // Fetch latest from origin
+      execSync('git fetch origin', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        stdio: 'pipe',
+        timeout: 30000,
+      });
+
+      // Detect default branch
+      let defaultBranch = 'main';
+      try {
+        const ref = execSync('git symbolic-ref refs/remotes/origin/HEAD', {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+          timeout: 5000,
+        }).trim();
+        defaultBranch = ref.replace(/^refs\/remotes\/origin\//, '');
+      } catch {
+        // Fallback to 'main'
+      }
+
+      // Count commits behind
+      try {
+        const count = execSync(`git rev-list --count HEAD..origin/${defaultBranch}`, {
+          cwd: repoPath,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+          timeout: 5000,
+        }).trim();
+        commitsBehind = parseInt(count, 10) || 0;
+      } catch {
+        // Non-fatal
+      }
+
+      // Pull to sync local default branch
+      if (commitsBehind > 0) {
+        console.log(`[TeamManager] Local is ${commitsBehind} commits behind origin/${defaultBranch}, pulling...`);
+        try {
+          execSync(`git pull origin ${defaultBranch} --ff-only`, {
+            cwd: repoPath,
+            encoding: 'utf-8',
+            stdio: 'pipe',
+            timeout: 30000,
+          });
+          console.log(`[TeamManager] Pulled ${commitsBehind} commits from origin/${defaultBranch}`);
+        } catch (pullErr) {
+          console.warn(`[TeamManager] Fast-forward pull failed, trying merge:`, pullErr instanceof Error ? pullErr.message : String(pullErr));
+          // If ff-only fails, don't force — just warn
+        }
+      } else {
+        console.log(`[TeamManager] Repo is up to date with origin/${defaultBranch}`);
+      }
+
+      // Inject a log event into the team's session log
+      const syncEvent: StreamEvent = {
+        type: 'fc',
+        timestamp: new Date().toISOString(),
+        message: {
+          content: [{
+            type: 'text',
+            text: commitsBehind > 0
+              ? `Synced with origin/${defaultBranch}: pulled ${commitsBehind} commit(s)`
+              : `Up to date with origin/${defaultBranch}`,
+          }],
+        },
+      };
+      const events = this.parsedEvents.get(teamId);
+      if (events) events.push(syncEvent);
+      sseBroker.broadcast('team_output', { team_id: teamId, event: syncEvent }, teamId);
+
+    } catch (err) {
+      console.error(`[TeamManager] Failed to sync with origin:`, err instanceof Error ? err.message : String(err));
+    }
+    return commitsBehind;
+  }
+
+  // -------------------------------------------------------------------------
   // launch — create worktree, copy hooks, spawn Claude Code
   // -------------------------------------------------------------------------
 
@@ -232,6 +320,9 @@ export class TeamManager {
 
     // Broadcast immediately so the team appears in the grid right away
     this.broadcastSnapshot();
+
+    // Sync with origin before creating worktree
+    this.syncWithOrigin(project.repoPath, team.id);
 
     // ── Step 2: Create git worktree in the PROJECT's repo ──
     if (!fs.existsSync(worktreeAbsPath)) {
@@ -466,6 +557,18 @@ export class TeamManager {
     // Set up output capture
     this.initOutputBuffer(team.id);
     this.captureOutput(team.id, child);
+
+    // Show initial prompt in Session Log as FC message
+    if (child.stdin) {
+      const initEvent: StreamEvent = {
+        type: 'fc',
+        timestamp: new Date().toISOString(),
+        message: { content: [{ type: 'text', text: resolvedPrompt }] },
+      };
+      const evts = this.parsedEvents.get(team.id);
+      if (evts) evts.push(initEvent);
+      sseBroker.broadcast('team_output', { team_id: team.id, event: initEvent }, team.id);
+    }
 
     // Handle process exit
     child.on('exit', (code, signal) => {
@@ -981,6 +1084,9 @@ export class TeamManager {
     const worktreeRelPath = path.posix.join(config.worktreeDir, team.worktreeName);
     const branchName = team.branchName ?? `worktree-${team.worktreeName}`;
 
+    // Sync with origin before creating worktree
+    this.syncWithOrigin(project.repoPath, team.id);
+
     // ── Step 1: Create git worktree ──
     if (!fs.existsSync(worktreeAbsPath)) {
       try {
@@ -1095,6 +1201,18 @@ export class TeamManager {
     this.initOutputBuffer(team.id);
     this.captureOutput(team.id, child);
 
+    // Show initial prompt in Session Log as FC message
+    if (child.stdin) {
+      const initEvent: StreamEvent = {
+        type: 'fc',
+        timestamp: new Date().toISOString(),
+        message: { content: [{ type: 'text', text: resolvedPrompt }] },
+      };
+      const evts = this.parsedEvents.get(team.id);
+      if (evts) evts.push(initEvent);
+      sseBroker.broadcast('team_output', { team_id: team.id, event: initEvent }, team.id);
+    }
+
     // Handle process exit — trigger queue processing
     child.on('exit', (code, signal) => {
       console.log(`[TeamManager] Process exited for dequeued team ${team.id} (code=${code}, signal=${signal})`);
@@ -1191,7 +1309,7 @@ export class TeamManager {
   // sendMessage — deliver a PM message to a running team via stdin
   // -------------------------------------------------------------------------
 
-  sendMessage(teamId: number, message: string): boolean {
+  sendMessage(teamId: number, message: string, source: 'user' | 'fc' = 'fc'): boolean {
     const stdin = this.stdinPipes.get(teamId);
     if (!stdin || stdin.destroyed) return false;
 
@@ -1199,18 +1317,19 @@ export class TeamManager {
       this.writeStdinMessage(stdin, message);
       console.log(`[TeamManager] Message sent to team ${teamId}: ${message.substring(0, 100)}`);
 
-      // Inject a synthetic "user" event into parsedEvents so it appears in the
+      // Inject a synthetic event into parsedEvents so it appears in the
       // Session Log alongside assistant responses (issue #5).
-      const userEvent: StreamEvent = {
-        type: 'user',
+      // 'user' = manual PM message, 'fc' = automated Fleet Commander message.
+      const syntheticEvent: StreamEvent = {
+        type: source,
         timestamp: new Date().toISOString(),
         message: { content: [{ type: 'text', text: message }] },
       };
       const events = this.parsedEvents.get(teamId);
       if (events) {
-        events.push(userEvent);
+        events.push(syntheticEvent);
       }
-      sseBroker.broadcast('team_output', { team_id: teamId, event: userEvent }, teamId);
+      sseBroker.broadcast('team_output', { team_id: teamId, event: syntheticEvent }, teamId);
 
       return true;
     } catch (err) {

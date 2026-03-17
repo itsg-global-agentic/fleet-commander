@@ -22,6 +22,7 @@ interface StreamEvent {
 const TYPE_STYLES: Record<string, { color: string; label: string }> = {
   assistant:    { color: '#58A6FF', label: 'TL' },
   user:         { color: '#3FB950', label: 'you' },
+  fc:           { color: '#D29922', label: 'FC' },
   system:       { color: '#8B949E', label: 'system' },
   tool_use:     { color: '#D29922', label: 'tool' },
   tool_result:  { color: '#A371F7', label: 'result' },
@@ -31,6 +32,14 @@ const TYPE_STYLES: Record<string, { color: string; label: string }> = {
 
 function getStyle(type: string) {
   return TYPE_STYLES[type] ?? { color: '#8B949E', label: type };
+}
+
+function formatLocalTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '--:--';
+  }
 }
 
 function getEventText(event: StreamEvent): string {
@@ -111,7 +120,7 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
   // Copy full log to clipboard
   const handleCopy = useCallback(() => {
     const text = events.map((e) => {
-      const ts = e.timestamp?.substring(11, 19) ?? '--:--:--';
+      const ts = e.timestamp ? formatLocalTime(e.timestamp) : '--:--';
       const { label } = getStyle(e.type);
       const body = getEventText(e);
       return body ? `[${ts}] ${label}: ${body}` : `[${ts}] ${label}`;
@@ -150,7 +159,7 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
           return (
             <div key={`${e.timestamp}-${e.type}-${i}`} className="py-0.5 leading-relaxed">
               <span className="text-dark-muted">
-                {e.timestamp?.substring(11, 19) ?? '--:--:--'}
+                {e.timestamp ? formatLocalTime(e.timestamp) : '--:--'}
               </span>
               {' '}
               <span style={{ color }} className="font-semibold">{label}</span>
