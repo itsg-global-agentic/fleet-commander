@@ -232,7 +232,7 @@ export function ProjectsPage() {
                         {project.status}
                       </span>
                       {/* Install status indicators with hover tooltips */}
-                      {project.installStatus && (() => {
+                      {project.installStatus ? (() => {
                         const s = project.installStatus;
                         const categories: {
                           key: string;
@@ -245,30 +245,32 @@ export function ProjectsPage() {
                           {
                             key: 'hooks',
                             label: 'hooks',
-                            installed: s.hooks.installed,
-                            somePresent: s.hooks.found > 0,
-                            files: s.hooks.files,
-                            summary: `Hook Scripts (${s.hooks.found}/${s.hooks.total})`,
+                            installed: s.hooks?.installed ?? false,
+                            somePresent: (s.hooks?.found ?? 0) > 0,
+                            files: s.hooks?.files ?? [],
+                            summary: `Hook Scripts (${s.hooks?.found ?? 0}/${s.hooks?.total ?? 0})`,
                           },
                           {
                             key: 'prompt',
                             label: 'prompt',
-                            installed: s.prompt.installed,
-                            somePresent: s.prompt.files.some((f) => f.exists),
-                            files: s.prompt.files,
+                            installed: s.prompt?.installed ?? false,
+                            somePresent: s.prompt?.files?.some((f) => f.exists) ?? false,
+                            files: s.prompt?.files ?? [],
                             summary: 'Prompt Files',
                           },
                           {
                             key: 'command',
                             label: 'command',
-                            installed: s.command.installed,
-                            somePresent: s.command.files.some((f) => f.exists),
-                            files: s.command.files,
+                            installed: s.command?.installed ?? false,
+                            somePresent: s.command?.files?.some((f) => f.exists) ?? false,
+                            files: s.command?.files ?? [],
                             summary: 'Command Files',
                           },
                         ];
                         // Append settings & mcp config as extra entries in command tooltip
-                        const extraFiles = [s.settings, s.mcpConfig];
+                        const extraFiles = [s.settings, s.mcpConfig].filter(
+                          (f): f is { name: string; exists: boolean } => f != null,
+                        );
 
                         return categories.map((cat) => {
                           const color = cat.installed
@@ -320,7 +322,15 @@ export function ProjectsPage() {
                             </div>
                           );
                         });
-                      })()}
+                      })() : (
+                        <span
+                          className="text-xs cursor-default shrink-0"
+                          style={{ color: '#8B949E' }}
+                          title="Install status unknown"
+                        >
+                          ? status
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-4 text-xs text-dark-muted">
                       <span className="truncate" title={project.repoPath}>
