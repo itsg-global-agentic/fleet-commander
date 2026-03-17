@@ -1075,11 +1075,13 @@ export class FleetDatabase {
    * pull requests). Used by project cleanup to purge team history.
    */
   deleteTeamAndRelated(teamId: number): void {
-    this.db.prepare('DELETE FROM events WHERE team_id = ?').run(teamId);
-    this.db.prepare('DELETE FROM commands WHERE team_id = ?').run(teamId);
-    this.db.prepare('DELETE FROM usage_snapshots WHERE team_id = ?').run(teamId);
-    this.db.prepare('DELETE FROM pull_requests WHERE team_id = ?').run(teamId);
-    this.db.prepare('DELETE FROM teams WHERE id = ?').run(teamId);
+    this.db.transaction((id: number) => {
+      this.db.prepare('DELETE FROM events WHERE team_id = ?').run(id);
+      this.db.prepare('DELETE FROM commands WHERE team_id = ?').run(id);
+      this.db.prepare('DELETE FROM usage_snapshots WHERE team_id = ?').run(id);
+      this.db.prepare('DELETE FROM pull_requests WHERE team_id = ?').run(id);
+      this.db.prepare('DELETE FROM teams WHERE id = ?').run(id);
+    })(teamId);
   }
 
   // -------------------------------------------------------------------------

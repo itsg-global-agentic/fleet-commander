@@ -85,7 +85,7 @@ export function TeamTimeline({ teams }: TeamTimelineProps) {
   // Calculate the full time range
   const { rangeStart, rangeTotal } = useMemo(() => {
     if (bars.length === 0) {
-      return { rangeStart: now - 3600_000, rangeEnd: now, rangeTotal: 3600_000 };
+      return { rangeStart: now - 3600_000, rangeTotal: 3600_000 };
     }
     const earliest = Math.min(...bars.map((b) => b.startMs));
     const latest = Math.max(...bars.map((b) => b.endMs), now);

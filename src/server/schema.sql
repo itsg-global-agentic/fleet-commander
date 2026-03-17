@@ -163,24 +163,24 @@ CREATE TABLE IF NOT EXISTS message_templates (
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Seed default templates (INSERT OR REPLACE so defaults are refreshed on restart)
-INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
+-- Seed default templates (INSERT OR IGNORE so user edits survive server restarts)
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('ci_green',
    'CI passed on PR #{{PR_NUMBER}}, all checks green. Auto-merge is {{AUTO_MERGE_STATUS}}.',
    'Tell TL that CI passed on the PR');
-INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('ci_red',
    'CI failed on PR #{{PR_NUMBER}}. Failing checks: {{FAILED_CHECKS}}. Fix count: {{FAIL_COUNT}}/{{MAX_FAILURES}}. What went wrong?',
    'Tell TL that CI failed and ask what went wrong');
-INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('pr_merged',
    'PR #{{PR_NUMBER}} merged. Close the issue, clean up, and finish.',
    'Tell TL the PR merged and to wrap up');
-INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('ci_blocked',
    'STOP. {{FAIL_COUNT}} unique CI failure types on PR #{{PR_NUMBER}}. Wait for my instructions.',
    'Tell TL the team is blocked due to repeated CI failures');
-INSERT OR REPLACE INTO message_templates (id, template, description) VALUES
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('stuck_nudge',
    'Hey, you have been idle for a while on issue #{{ISSUE_NUMBER}}. What is the status? Do you need help?',
    'Nudge sent to TL when team transitions to stuck');

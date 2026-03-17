@@ -37,6 +37,7 @@ interface GHPRViewResult {
   state: string;
   mergeStateStatus?: string;
   statusCheckRollup?: GHCheckRun[] | null;
+  mergedAt?: string | null;
   autoMergeRequest?: { enabledAt?: string } | null;
   headRefName?: string;
 }
@@ -162,7 +163,7 @@ class GitHubPoller {
     const existing = db.getPullRequest(prNumber);
 
     // Map GitHub state to our state — detect merged via mergedAt field
-    const isMerged = !!(data as any).mergedAt;
+    const isMerged = !!data.mergedAt;
     const state = isMerged ? 'merged' : (data.state?.toLowerCase() ?? 'open');
     const mergeState = data.mergeStateStatus?.toLowerCase() ?? 'unknown';
 

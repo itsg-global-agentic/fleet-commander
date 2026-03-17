@@ -237,7 +237,12 @@ export function executeCleanup(
         );
         removed.push(item.name);
       } else if (item.type === 'team_record') {
-        const teamId = parseInt(item.path.split(':')[2]);
+        const parts = item.path.split(':');
+        const teamId = parseInt(parts[2] ?? '', 10);
+        if (isNaN(teamId)) {
+          failed.push({ name: item.name, error: 'Invalid team record path' });
+          continue;
+        }
         db.deleteTeamAndRelated(teamId);
         removed.push(item.name);
       }
