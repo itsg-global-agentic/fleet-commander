@@ -182,7 +182,7 @@ const systemRoutes: FastifyPluginCallback = (
           sseConnections: sseBroker.getClientCount(),
           dbSizeBytes: db.getDbFileSize(),
           serverStartedAt: new Date(SERVER_START_TIME).toISOString(),
-          version: '0.1.0',
+          version: getPackageVersion(),
         });
       } catch (err: unknown) {
         _request.log.error(err, 'Failed to get server status');
@@ -311,6 +311,15 @@ const systemRoutes: FastifyPluginCallback = (
     '/api/system/factory-reset',
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
+        // Require explicit confirmation to prevent accidental resets
+        const body = request.body as Record<string, unknown> | null;
+        if (!body || body.confirm !== 'FACTORY_RESET') {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: 'Factory reset requires { "confirm": "FACTORY_RESET" } in body',
+          });
+        }
+
         const db = getDatabase();
         const manager = getTeamManager();
 
@@ -344,9 +353,9 @@ const systemRoutes: FastifyPluginCallback = (
               execSync(cmd, { encoding: 'utf-8', stdio: 'pipe', timeout: 30000 });
             }
           } catch (err) {
-            console.error(
-              `[System] Failed to uninstall hooks for ${project.name}:`,
-              err instanceof Error ? err.message : String(err),
+            request.log.warn(
+              { project: project.name, error: err instanceof Error ? err.message : String(err) },
+              'Failed to uninstall hooks during factory reset',
             );
           }
         }
@@ -366,7 +375,7 @@ const systemRoutes: FastifyPluginCallback = (
         // 5. Broadcast empty state to all SSE clients
         sseBroker.broadcast('snapshot', { teams: [] });
 
-        console.log('[System] Factory reset completed — all data cleared');
+        request.log.info('Factory reset completed — all data cleared');
 
         return reply.code(200).send({
           status: 'ok',
@@ -389,6 +398,20 @@ const systemRoutes: FastifyPluginCallback = (
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/** Read version from package.json (cached after first call) */
+let _cachedVersion: string | null = null;
+function getPackageVersion(): string {
+  if (_cachedVersion) return _cachedVersion;
+  try {
+    const pkgPath = path.join(config.fleetCommanderRoot, 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    _cachedVersion = pkg.version ?? '0.0.0';
+  } catch {
+    _cachedVersion = '0.0.0';
+  }
+  return _cachedVersion!;
+}
 
 function formatUptime(totalSeconds: number): string {
   const days = Math.floor(totalSeconds / 86400);

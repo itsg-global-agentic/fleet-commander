@@ -33,6 +33,11 @@ const streamRoutes: FastifyPluginCallback = (
         .filter((n) => !Number.isNaN(n));
     }
 
+    // Tell Fastify we are taking control of the response before writing headers.
+    // hijack() MUST be called before writeHead() so Fastify doesn't try to
+    // send its own response or close the socket.
+    await reply.hijack();
+
     // Set SSE headers — use raw API so Fastify doesn't close the response
     reply.raw.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -62,13 +67,6 @@ const streamRoutes: FastifyPluginCallback = (
     request.raw.on('close', () => {
       sseBroker.removeClient(clientId);
     });
-
-    // Keep the route handler "pending" — Fastify must not send a response.
-    // Returning the reply object with hijack semantics is not needed because
-    // we already wrote to reply.raw directly. We just need to ensure Fastify
-    // does not try to serialize a return value.  Using reply.hijack() tells
-    // Fastify we took control of the response.
-    await reply.hijack();
   });
 
   done();

@@ -82,7 +82,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       const projectId = parseInt(request.params.projectId, 10);
 
       if (isNaN(projectId) || projectId < 1) {
-        return reply.status(400).send({
+        return reply.code(400).send({
           error: 'Bad Request',
           message: 'projectId must be a positive integer',
         });
@@ -91,7 +91,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       const db = getDatabase();
       const project = db.getProject(projectId);
       if (!project) {
-        return reply.status(404).send({
+        return reply.code(404).send({
           error: 'Not Found',
           message: `Project ${projectId} not found`,
         });
@@ -169,7 +169,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       const issueNumber = parseInt(request.params.number, 10);
 
       if (isNaN(issueNumber) || issueNumber <= 0) {
-        return reply.status(400).send({
+        return reply.code(400).send({
           error: 'Invalid issue number',
           message: 'Issue number must be a positive integer',
         });
@@ -179,7 +179,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       const issue = fetcher.getIssue(issueNumber);
 
       if (!issue) {
-        return reply.status(404).send({
+        return reply.code(404).send({
           error: 'Issue not found',
           message: `Issue #${issueNumber} not found in cache. Try POST /api/issues/refresh first.`,
         });

@@ -39,6 +39,16 @@ function parsePRNumber(raw: string): number | null {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: validate a GitHub repo slug (owner/repo) to prevent injection
+// ---------------------------------------------------------------------------
+
+const GITHUB_REPO_RE = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
+
+function validateGithubRepo(repo: string): boolean {
+  return GITHUB_REPO_RE.test(repo);
+}
+
+// ---------------------------------------------------------------------------
 // Helper: execute a gh CLI command, returning { ok, stdout?, error? }
 // ---------------------------------------------------------------------------
 
@@ -214,6 +224,13 @@ const prsRoutes: FastifyPluginCallback = (
           });
         }
 
+        if (!validateGithubRepo(githubRepo)) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: `Invalid GitHub repo slug: ${githubRepo}`,
+          });
+        }
+
         const result = execGH(
           `gh pr merge ${prNumber} --auto --squash --repo ${githubRepo}`,
         );
@@ -291,6 +308,13 @@ const prsRoutes: FastifyPluginCallback = (
           });
         }
 
+        if (!validateGithubRepo(githubRepo)) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: `Invalid GitHub repo slug: ${githubRepo}`,
+          });
+        }
+
         const result = execGH(
           `gh pr merge ${prNumber} --disable-auto --repo ${githubRepo}`,
         );
@@ -365,6 +389,13 @@ const prsRoutes: FastifyPluginCallback = (
           return reply.code(404).send({
             error: 'Not Found',
             message: `Cannot resolve GitHub repo for PR #${prNumber} — team or project not found`,
+          });
+        }
+
+        if (!validateGithubRepo(githubRepo)) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: `Invalid GitHub repo slug: ${githubRepo}`,
           });
         }
 

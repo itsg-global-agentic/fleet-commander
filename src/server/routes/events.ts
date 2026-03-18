@@ -60,8 +60,9 @@ const eventsRoutes: FastifyPluginCallback = (
         return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof EventCollectorError) {
-          return reply.code(400).send({
-            error: 'Bad Request',
+          const status = err.code === 'TEAM_NOT_FOUND' ? 404 : 400;
+          return reply.code(status).send({
+            error: status === 404 ? 'Not Found' : 'Bad Request',
             message: err.message,
           });
         }

@@ -90,8 +90,8 @@ function normalizeEventType(raw: string): string {
     'subagent_start': 'SubagentStart',
     'subagent_stop': 'SubagentStop',
     'notification': 'Notification',
-    'teammate_idle': 'TeammateIdle',
-    'cost_update': 'CostUpdate',
+    'tool_error': 'ToolError',
+    'pre_compact': 'PreCompact',
   };
   return map[raw.toLowerCase()] || raw;
 }
