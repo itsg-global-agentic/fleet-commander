@@ -596,7 +596,7 @@ export class FleetDatabase {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS agent_messages (
           id              INTEGER PRIMARY KEY AUTOINCREMENT,
-          team_id         TEXT NOT NULL,
+          team_id         INTEGER NOT NULL REFERENCES teams(id),
           event_id        INTEGER REFERENCES events(id),
           sender          TEXT NOT NULL,
           recipient       TEXT NOT NULL,
@@ -1140,7 +1140,7 @@ export class FleetDatabase {
     `);
 
     const info = stmt.run({
-      teamId: String(data.teamId),
+      teamId: data.teamId,
       eventId: data.eventId,
       sender: data.sender,
       recipient: data.recipient,
@@ -1161,7 +1161,7 @@ export class FleetDatabase {
       : 'SELECT * FROM agent_messages WHERE team_id = ? ORDER BY created_at DESC, id DESC';
 
     const stmt = this.db.prepare(sql);
-    const rows = (limit ? stmt.all(String(teamId), limit) : stmt.all(String(teamId))) as Record<string, unknown>[];
+    const rows = (limit ? stmt.all(teamId, limit) : stmt.all(teamId)) as Record<string, unknown>[];
     return rows.map((r) => this.mapAgentMessageRow(r));
   }
 
@@ -1173,7 +1173,7 @@ export class FleetDatabase {
       GROUP BY sender, recipient
       ORDER BY count DESC
     `;
-    const rows = this.db.prepare(sql).all(String(teamId)) as Array<{ sender: string; recipient: string; count: number }>;
+    const rows = this.db.prepare(sql).all(teamId) as Array<{ sender: string; recipient: string; count: number }>;
     return rows.map((r) => ({
       sender: r.sender,
       recipient: r.recipient,
@@ -1580,7 +1580,7 @@ export class FleetDatabase {
 
   deleteTeamsByProject(projectId: number): void {
     this.db.transaction((pid: number) => {
-      this.db.prepare('DELETE FROM agent_messages WHERE team_id IN (SELECT CAST(id AS TEXT) FROM teams WHERE project_id = ?)').run(pid);
+      this.db.prepare('DELETE FROM agent_messages WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
       this.db.prepare('DELETE FROM team_transitions WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
       this.db.prepare('DELETE FROM events WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
       this.db.prepare('DELETE FROM commands WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
@@ -1600,7 +1600,7 @@ export class FleetDatabase {
    */
   deleteTeamAndRelated(teamId: number): void {
     this.db.transaction((id: number) => {
-      this.db.prepare('DELETE FROM agent_messages WHERE team_id = ?').run(String(id));
+      this.db.prepare('DELETE FROM agent_messages WHERE team_id = ?').run(id);
       this.db.prepare('DELETE FROM team_transitions WHERE team_id = ?').run(id);
       this.db.prepare('DELETE FROM events WHERE team_id = ?').run(id);
       this.db.prepare('DELETE FROM commands WHERE team_id = ?').run(id);
@@ -1804,7 +1804,7 @@ export class FleetDatabase {
   private mapAgentMessageRow(row: Record<string, unknown>): AgentMessage {
     return {
       id: row.id as number,
-      teamId: Number(row.team_id),
+      teamId: row.team_id as number,
       eventId: row.event_id as number,
       sender: row.sender as string,
       recipient: row.recipient as string,

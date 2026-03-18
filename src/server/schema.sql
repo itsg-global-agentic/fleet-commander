@@ -233,7 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_team_transitions_team ON team_transitions(team_id
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS agent_messages (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
-  team_id         TEXT NOT NULL,
+  team_id         INTEGER NOT NULL REFERENCES teams(id),
   event_id        INTEGER REFERENCES events(id),
   sender          TEXT NOT NULL,
   recipient       TEXT NOT NULL,
