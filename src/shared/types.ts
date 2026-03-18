@@ -95,6 +95,7 @@ export interface Team {
   branchName: string | null;
   prNumber: number | null;
   customPrompt: string | null;
+  headless: boolean;
   launchedAt: string | null;
   stoppedAt: string | null;
   lastEventAt: string | null;

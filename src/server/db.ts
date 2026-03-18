@@ -79,6 +79,7 @@ export interface TeamInsert {
   sessionId?: string | null;
   prNumber?: number | null;
   customPrompt?: string | null;
+  headless?: boolean;
   launchedAt?: string | null;
 }
 
@@ -91,6 +92,7 @@ export interface TeamUpdate {
   sessionId?: string | null;
   prNumber?: number | null;
   customPrompt?: string | null;
+  headless?: boolean;
   launchedAt?: string | null;
   stoppedAt?: string | null;
   lastEventAt?: string | null;
@@ -239,6 +241,9 @@ export class FleetDatabase {
 
     // Add custom_prompt column to teams if missing (for existing databases)
     this.addCustomPromptColumn();
+
+    // Add headless column to teams if missing (for existing databases, v3 migration)
+    this.addHeadlessColumn();
 
     // Add daily_resets_at and weekly_resets_at columns to usage_snapshots if missing
     this.addUsageResetsAtColumns();
@@ -433,6 +438,18 @@ export class FleetDatabase {
     }
   }
 
+  private addHeadlessColumn(): void {
+    try {
+      const columns = this.db.prepare("PRAGMA table_info(teams)").all() as Array<{ name: string }>;
+      const hasColumn = columns.some((c) => c.name === 'headless');
+      if (!hasColumn) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN headless INTEGER NOT NULL DEFAULT 1');
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
   /**
    * Add daily_resets_at and weekly_resets_at columns to usage_snapshots if missing.
    */
@@ -611,8 +628,8 @@ export class FleetDatabase {
   insertTeam(data: TeamInsert): Team {
     const now = new Date().toISOString();
     const stmt = this.db.prepare(`
-      INSERT INTO teams (issue_number, issue_title, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, launched_at, created_at, updated_at)
-      VALUES (@issueNumber, @issueTitle, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @launchedAt, @createdAt, @updatedAt)
+      INSERT INTO teams (issue_number, issue_title, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, headless, launched_at, created_at, updated_at)
+      VALUES (@issueNumber, @issueTitle, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @headless, @launchedAt, @createdAt, @updatedAt)
     `);
 
     const info = stmt.run({
@@ -627,6 +644,7 @@ export class FleetDatabase {
       sessionId: data.sessionId ?? null,
       prNumber: data.prNumber ?? null,
       customPrompt: data.customPrompt ?? null,
+      headless: data.headless === false ? 0 : 1,
       launchedAt: data.launchedAt ?? null,
       createdAt: now,
       updatedAt: now,
@@ -750,6 +768,10 @@ export class FleetDatabase {
     if (fields.customPrompt !== undefined) {
       setClauses.push('custom_prompt = @customPrompt');
       params.customPrompt = fields.customPrompt;
+    }
+    if (fields.headless !== undefined) {
+      setClauses.push('headless = @headless');
+      params.headless = fields.headless ? 1 : 0;
     }
     if (fields.launchedAt !== undefined) {
       setClauses.push('launched_at = @launchedAt');
@@ -1356,6 +1378,7 @@ export class FleetDatabase {
       branchName: row.branch_name as string | null,
       prNumber: row.pr_number as number | null,
       customPrompt: (row.custom_prompt as string | null) ?? null,
+      headless: (row.headless as number) !== 0,
       launchedAt: utcify(row.launched_at as string | null),
       stoppedAt: utcify(row.stopped_at as string | null),
       lastEventAt: utcify(row.last_event_at as string | null),

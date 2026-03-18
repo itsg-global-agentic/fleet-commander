@@ -80,8 +80,8 @@ describe('Schema', () => {
     expect(() => db.initSchema()).not.toThrow();
   });
 
-  it('sets schema version to 2', () => {
-    expect(db.getSchemaVersion()).toBe(2);
+  it('sets schema version to 3', () => {
+    expect(db.getSchemaVersion()).toBe(3);
   });
 });
 

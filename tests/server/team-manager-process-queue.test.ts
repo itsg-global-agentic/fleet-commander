@@ -81,6 +81,8 @@ function makeTeam(overrides?: Partial<Team>): Team {
     worktreeName: 'test-project-10',
     branchName: 'feat/10-test',
     prNumber: null,
+    customPrompt: null,
+    headless: true,
     launchedAt: null,
     stoppedAt: null,
     lastEventAt: null,
@@ -183,6 +185,36 @@ describe('TeamManager.processQueue re-drain', () => {
     // Only team1 should have been launched — no re-drain needed
     expect(launchQueuedSpy).toHaveBeenCalledTimes(1);
     expect(launchQueuedSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 101 }));
+  });
+
+  it('passes headless preference from queued team to launchQueued', async () => {
+    const project = makeProject({ id: 1, maxActiveTeams: 5 });
+    const interactiveTeam = makeTeam({ id: 301, issueNumber: 30, worktreeName: 'proj-30', status: 'queued', headless: false });
+    const headlessTeam = makeTeam({ id: 302, issueNumber: 31, worktreeName: 'proj-31', status: 'queued', headless: true });
+
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getActiveTeamCountByProject
+      .mockReturnValueOnce(0)  // processQueue: 0 active
+      .mockReturnValueOnce(2); // finally: re-drain check
+    mockDb.getQueuedTeamsByProject
+      .mockReturnValueOnce([interactiveTeam, headlessTeam])  // processQueue: 2 queued
+      .mockReturnValueOnce([]);  // finally: no more queued
+    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.insertTransition.mockReturnValue(undefined);
+
+    await tm.processQueue(1);
+
+    // Allow setImmediate to fire
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Both teams should have been launched
+    expect(launchQueuedSpy).toHaveBeenCalledTimes(2);
+
+    // Verify the headless flag is preserved on each team object passed to launchQueued
+    const firstCall = launchQueuedSpy.mock.calls[0][0] as Team;
+    const secondCall = launchQueuedSpy.mock.calls[1][0] as Team;
+    expect(firstCall.headless).toBe(false);
+    expect(secondCall.headless).toBe(true);
   });
 
   it('guard blocks concurrent calls but re-drain catches up', async () => {

@@ -247,6 +247,7 @@ export class TeamManager {
         pid: null,
         sessionId: null,
         issueTitle: issueTitle ?? null,
+        headless: headless !== false,
         launchedAt: now,
         stoppedAt: null,
         lastEventAt: null,
@@ -270,6 +271,7 @@ export class TeamManager {
         branchName,
         status: 'queued',
         phase: 'init',
+        headless: headless !== false,
         launchedAt: now,
       });
     }
@@ -1054,6 +1056,7 @@ export class TeamManager {
         sessionId: null,
         issueTitle: issueTitle ?? null,
         customPrompt: prompt ?? null,
+        headless: headless !== false,
         launchedAt: now,
         stoppedAt: null,
         lastEventAt: null,
@@ -1067,7 +1070,7 @@ export class TeamManager {
       });
       const team = db.getTeam(existing.id)!;
       const activeCount = db.getActiveTeamCountByProject(projectId);
-      console.log(`[TeamManager] Team ${team.id} queued (${activeCount}/${project.maxActiveTeams} active)`);
+      console.log(`[TeamManager] Team ${team.id} queued (${activeCount}/${project.maxActiveTeams} active, headless=${team.headless})`);
       this.broadcastSnapshot();
       return team;
     }
@@ -1083,6 +1086,7 @@ export class TeamManager {
       status: 'queued',
       phase: 'init',
       customPrompt: prompt ?? null,
+      headless: headless !== false,
       launchedAt: now,
     });
     db.insertTransition({
@@ -1262,11 +1266,16 @@ export class TeamManager {
 
     // ── Step 3: Spawn Claude Code ──
     const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, team.issueNumber);
+    const isHeadless = team.headless;
+
     const args: string[] = [];
     args.push('--worktree', team.worktreeName);
-    args.push('--input-format', 'stream-json');   // Bidirectional: receive messages via stdin
-    args.push('--output-format', 'stream-json');
-    args.push('--verbose');
+
+    if (isHeadless) {
+      args.push('--input-format', 'stream-json');   // Bidirectional: receive messages via stdin
+      args.push('--output-format', 'stream-json');
+      args.push('--verbose');
+    }
 
     if (config.skipPermissions) {
       args.push('--dangerously-skip-permissions');
@@ -1276,7 +1285,10 @@ export class TeamManager {
       args.push('--model', project.model);
     }
 
-    // Initial prompt is sent via stdin, not as positional arg
+    // In headless mode, the initial prompt is sent via stdin (not as positional arg)
+    if (!isHeadless) {
+      args.push(resolvedPrompt);
+    }
 
     const spawnEnv: Record<string, string | undefined> = {
       ...process.env,
@@ -1290,8 +1302,64 @@ export class TeamManager {
     }
 
     const claudePath = resolveClaudePath();
-    console.log(`[TeamManager] Spawning dequeued team ${team.id}: ${claudePath} ${args.join(' ')}`);
+    console.log(`[TeamManager] Spawning dequeued team ${team.id}: ${claudePath} ${args.join(' ')} (headless=${isHeadless})`);
 
+    if (!isHeadless && process.platform === 'win32') {
+      // ── Interactive mode (Windows): open Claude Code in a new terminal ──
+      const fullCmd = `${config.claudeCmd} ${args.join(' ')}`;
+      const windowTitle = `Team ${team.worktreeName}`;
+      const innerCommand = `cd /d "${worktreeAbsPath}" && set CLAUDE_CODE_GIT_BASH_PATH=${gitBash || ''} && set FLEET_TEAM_ID=${team.worktreeName} && set FLEET_PROJECT_ID=${projectId} && ${fullCmd}`;
+
+      const termPref = config.terminalCmd;
+      let useWindowsTerminal = false;
+
+      if (termPref === 'wt') {
+        useWindowsTerminal = true;
+      } else if (termPref === 'auto') {
+        try {
+          await execAsync('where wt.exe', { timeout: 3000 });
+          useWindowsTerminal = true;
+        } catch {
+          useWindowsTerminal = false;
+        }
+      }
+
+      let startCommand: string;
+      if (useWindowsTerminal) {
+        startCommand = `wt.exe new-tab --title "${windowTitle}" cmd.exe /k "${innerCommand}"`;
+      } else {
+        startCommand = `start "${windowTitle}" cmd.exe /k "${innerCommand}"`;
+      }
+
+      console.log(`[TeamManager] Interactive spawn for dequeued team (terminal=${useWindowsTerminal ? 'wt' : 'cmd'}): ${startCommand}`);
+
+      const interactiveChild = spawn(startCommand, [], {
+        env: spawnEnv,
+        shell: true,
+        detached: true,
+        stdio: 'ignore',
+      });
+      interactiveChild.unref();
+
+      db.insertTransition({
+        teamId: team.id,
+        fromStatus: 'launching',
+        toStatus: 'running',
+        trigger: 'system',
+        reason: 'Interactive terminal window opened (dequeued)',
+      });
+      db.updateTeam(team.id, { status: 'running' });
+      this.broadcastSnapshot();
+
+      sseBroker.broadcast(
+        'team_launched',
+        { team_id: team.id, issue_number: team.issueNumber, project_id: projectId },
+        team.id,
+      );
+      return;
+    }
+
+    // ── Headless mode (default): spawn in background, capture output ──
     const child = spawn(claudePath, args, {
       cwd: project.repoPath,
       env: spawnEnv,

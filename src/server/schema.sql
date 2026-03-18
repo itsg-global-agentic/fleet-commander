@@ -1,5 +1,5 @@
 -- =============================================================================
--- Fleet Commander — SQLite Schema (v2, with projects entity)
+-- Fleet Commander — SQLite Schema (v3, headless column on teams)
 -- =============================================================================
 
 -- Schema version tracking for migrations
@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS teams (
   session_id      TEXT,
   pr_number       INTEGER,
   custom_prompt   TEXT,                            -- custom prompt override (persisted for queued teams)
+  headless        INTEGER NOT NULL DEFAULT 1,     -- 0=interactive terminal, 1=headless stream-json
   launched_at     TEXT,
   stopped_at      TEXT,
   last_event_at   TEXT,
@@ -205,4 +206,4 @@ CREATE TABLE IF NOT EXISTS team_transitions (
 CREATE INDEX IF NOT EXISTS idx_team_transitions_team ON team_transitions(team_id);
 
 -- Insert schema version 2 (or upgrade from 1)
-INSERT OR IGNORE INTO schema_version (version) VALUES (2);
+INSERT OR IGNORE INTO schema_version (version) VALUES (3);
