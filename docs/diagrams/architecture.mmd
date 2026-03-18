@@ -4,7 +4,7 @@ graph TB
   Server --> EventCol["Event Collector<br/>hook events"]
   Server --> GitPoller["GitHub Poller<br/>PR / CI / merge"]
   Server --> IssueFetch["Issue Fetcher<br/>GraphQL, 60s cache"]
-  Server --> StuckDet["Stuck Detector<br/>idle 5min / stuck 15min"]
+  Server --> StuckDet["Stuck Detector<br/>idle 3min / stuck 5min"]
   Server --> SSE["SSE Broker<br/>14 event types"]
   Server --> DB[("SQLite<br/>fleet.db, WAL")]
   TeamMgr -->|"spawn + stdin pipe"| CC["Claude Code<br/>stream-json"]

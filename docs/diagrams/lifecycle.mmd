@@ -2,11 +2,11 @@ stateDiagram-v2
   [*] --> queued
   queued --> launching
   launching --> running
-  running --> idle : 5 min no events
+  running --> idle : 3 min no events
   running --> done : session ends normally
   running --> failed : process crashes
   idle --> running : new event received
-  idle --> stuck : 15 min no events
+  idle --> stuck : 5 min no events
   stuck --> running : new event received
   done --> [*]
   failed --> [*]

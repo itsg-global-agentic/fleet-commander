@@ -38,7 +38,7 @@ graph TB
   Server --> EventCol["Event Collector<br/>hook events"]
   Server --> GitPoller["GitHub Poller<br/>PR / CI / merge"]
   Server --> IssueFetch["Issue Fetcher<br/>GraphQL, 60s cache"]
-  Server --> StuckDet["Stuck Detector<br/>idle 5min / stuck 15min"]
+  Server --> StuckDet["Stuck Detector<br/>idle 3min / stuck 5min"]
   Server --> SSE["SSE Broker<br/>14 event types"]
   Server --> DB[("SQLite<br/>fleet.db, WAL")]
   TeamMgr -->|"spawn + stdin pipe"| CC["Claude Code<br/>stream-json"]
@@ -60,11 +60,11 @@ stateDiagram-v2
   [*] --> queued
   queued --> launching
   launching --> running
-  running --> idle : 5 min no events
+  running --> idle : 3 min no events
   running --> done : session ends normally
   running --> failed : process crashes
   idle --> running : new event received
-  idle --> stuck : 15 min no events
+  idle --> stuck : 5 min no events
   stuck --> running : new event received
   done --> [*]
   failed --> [*]
@@ -81,7 +81,7 @@ stateDiagram-v2
 - **Real-time streaming** -- SSE pushes 14 event types to the dashboard live
 - **Bidirectional messaging** -- send commands to running agents via stdin pipe
 - **GitHub polling** -- tracks PRs, CI status, and merges every 30 seconds
-- **Stuck detection** -- flags idle teams at 5 min, stuck at 15 min
+- **Stuck detection** -- flags idle teams at 3 min, stuck at 5 min
 - **Per-project prompt files** -- configurable launch prompts with `{{ISSUE_NUMBER}}` placeholder
 - **FIFO queue** -- max active teams per project, excess teams queue automatically
 - **PR popover** -- CI check details and auto-merge actions inline
@@ -117,8 +117,8 @@ All settings have sensible defaults. Override via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `4680` | Server port |
-| `FLEET_IDLE_THRESHOLD_MIN` | `5` | Minutes before a team is marked idle |
-| `FLEET_STUCK_THRESHOLD_MIN` | `15` | Minutes before a team is marked stuck |
+| `FLEET_IDLE_THRESHOLD_MIN` | `3` | Minutes before a team is marked idle |
+| `FLEET_STUCK_THRESHOLD_MIN` | `5` | Minutes before a team is marked stuck |
 | `FLEET_MAX_CI_FAILURES` | `3` | Unique CI failure types before blocking |
 | `FLEET_GITHUB_POLL_MS` | `30000` | GitHub polling interval (ms) |
 | `FLEET_DB_PATH` | `./fleet.db` | SQLite database file path |

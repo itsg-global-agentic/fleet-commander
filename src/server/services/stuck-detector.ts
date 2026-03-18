@@ -8,8 +8,8 @@
 // (single source of truth for CI status).
 //
 // State machine transitions (from docs/state-machines.md):
-//   running -> idle   after IDLE_THRESHOLD_MIN  (5 min default)
-//   idle    -> stuck  after STUCK_THRESHOLD_MIN (15 min default)
+//   running -> idle   after IDLE_THRESHOLD_MIN  (3 min default)
+//   idle    -> stuck  after STUCK_THRESHOLD_MIN (5 min default)
 // =============================================================================
 
 import type { TeamStatus } from '../../shared/types.js';

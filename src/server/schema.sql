@@ -30,7 +30,7 @@ CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
 -- ---------------------------------------------------------------------------
 -- TEAMS — a Claude Code worktree session working on an issue
 -- ---------------------------------------------------------------------------
--- Lifecycle: queued -> launching -> running -> idle (5min) -> stuck (15min) -> done/failed
+-- Lifecycle: queued -> launching -> running -> idle (3min) -> stuck (5min) -> done/failed
 CREATE TABLE IF NOT EXISTS teams (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   issue_number    INTEGER NOT NULL,

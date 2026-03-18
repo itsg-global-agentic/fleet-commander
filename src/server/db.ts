@@ -1161,10 +1161,10 @@ export class FleetDatabase {
 
   /**
    * Get teams that may be idle or stuck based on time since last event.
-   * @param idleMinutes  - minutes of silence before considered idle (default: 5)
-   * @param stuckMinutes - minutes of silence before considered stuck (default: 15)
+   * @param idleMinutes  - minutes of silence before considered idle (default: 3)
+   * @param stuckMinutes - minutes of silence before considered stuck (default: 5)
    */
-  getStuckCandidates(idleMinutes: number = 5, stuckMinutes: number = 15): StuckCandidate[] {
+  getStuckCandidates(idleMinutes: number = 3, stuckMinutes: number = 5): StuckCandidate[] {
     const stmt = this.db.prepare(`
       SELECT
         t.id,
