@@ -45,8 +45,8 @@ export function FleetProvider({ children }: { children: ReactNode }) {
         console.log('[FleetContext] Teams loaded from SSE:', payload.teams.length, payload.teams.map(t => ({ id: t.id, status: t.status })));
         setAllTeams(payload.teams);
       }
-    } else if (type === 'usage_updated') {
-      // Usage data changed — refresh teams to pick up any related state changes.
+    } else if (type === 'usage_updated' || type === 'pr_updated') {
+      // Usage or PR data changed — refresh teams to pick up any related state changes.
       fetchTeams();
     }
     // Note: team_launched, team_stopped, team_status_changed are NOT handled here
@@ -66,19 +66,19 @@ export function FleetProvider({ children }: { children: ReactNode }) {
     return allTeams.filter((t) => t.projectId === selectedProjectId);
   }, [allTeams, selectedProjectId]);
 
+  const value = useMemo<FleetContextValue>(() => ({
+    teams,
+    allTeams,
+    selectedTeamId,
+    setSelectedTeamId,
+    selectedProjectId,
+    setSelectedProjectId,
+    connected,
+    lastEvent,
+  }), [teams, allTeams, selectedTeamId, selectedProjectId, connected, lastEvent]);
+
   return (
-    <FleetContext.Provider
-      value={{
-        teams,
-        allTeams,
-        selectedTeamId,
-        setSelectedTeamId,
-        selectedProjectId,
-        setSelectedProjectId,
-        connected,
-        lastEvent,
-      }}
-    >
+    <FleetContext.Provider value={value}>
       {children}
     </FleetContext.Provider>
   );

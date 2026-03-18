@@ -22,6 +22,7 @@ export function useSSE(options: UseSSEOptions = {}): UseSSEResult {
   const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sourceRef = useRef<EventSource | null>(null);
   const mountedRef = useRef(true);
+  const lastEventTimeRef = useRef(0);
 
   // Keep the callback ref current without causing reconnects
   onEventRef.current = options.onEvent;
@@ -50,14 +51,22 @@ export function useSSE(options: UseSSEOptions = {}): UseSSEResult {
 
     const handleSSEMessage = (event: MessageEvent) => {
       if (!mountedRef.current) return;
-      setLastEvent(new Date());
+      let eventType = 'message';
       try {
         const parsed = JSON.parse(event.data);
-        const type = parsed.type ?? event.type ?? 'message';
-        onEventRef.current?.(type, parsed);
+        eventType = parsed.type ?? event.type ?? 'message';
+        onEventRef.current?.(eventType, parsed);
       } catch {
         // Non-JSON message — still invoke callback with raw data
         onEventRef.current?.('message', event.data);
+      }
+      // Throttle lastEvent updates — skip high-frequency events and limit to once per second
+      if (eventType !== 'team_output' && eventType !== 'heartbeat') {
+        const now = Date.now();
+        if (now - lastEventTimeRef.current > 1000) {
+          lastEventTimeRef.current = now;
+          setLastEvent(new Date(now));
+        }
       }
     };
 

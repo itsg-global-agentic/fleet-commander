@@ -32,6 +32,14 @@ function getUsageBarColor(percent: number, baseColor: string): string {
   return baseColor;
 }
 
+/** Determine usage zone: green (<50%), yellow (50-80%), red (>80%) based on highest category */
+function getUsageZone(data: UsageData): 'green' | 'yellow' | 'red' {
+  const max = Math.max(data.dailyPercent, data.weeklyPercent, data.sonnetPercent, data.extraPercent);
+  if (max > 80) return 'red';
+  if (max >= 50) return 'yellow';
+  return 'green';
+}
+
 interface UsageData {
   dailyPercent: number;
   weeklyPercent: number;
@@ -144,6 +152,20 @@ export function TopBar() {
               </div>
             );
           })}
+
+          {/* PAUSED badge when usage is in red zone */}
+          {usage && getUsageZone(usage) === 'red' && (
+            <span
+              className="px-2 py-0.5 rounded-full text-xs font-bold animate-pulse"
+              style={{
+                backgroundColor: '#F8514920',
+                color: '#F85149',
+                border: '1px solid #F8514940',
+              }}
+            >
+              PAUSED
+            </span>
+          )}
 
           {/* Launch Team button */}
           <button

@@ -332,6 +332,9 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
 
+  // --- Usage zone state ---
+  const [zone, setZone] = useState<'green' | 'yellow' | 'red'>('green');
+
   // --- Launch log state ---
   const [launchedTeamId, setLaunchedTeamId] = useState<number | null>(null);
   const [launchedIssueNumber, setLaunchedIssueNumber] = useState<number | null>(null);
@@ -348,7 +351,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     }
   }, [open, batchMode, launchedTeamId]);
 
-  // Fetch projects when dialog opens
+  // Fetch projects and usage zone when dialog opens
   useEffect(() => {
     if (open) {
       api.get<ProjectSummary[]>('projects').then((data) => {
@@ -359,6 +362,16 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
         }
       }).catch(() => {
         setProjects([]);
+      });
+
+      // Fetch usage to determine zone
+      api.get<{ dailyPercent: number; weeklyPercent: number; sonnetPercent: number; extraPercent: number }>('usage').then((data) => {
+        const max = Math.max(data.dailyPercent, data.weeklyPercent, data.sonnetPercent, data.extraPercent);
+        if (max > 80) setZone('red');
+        else if (max >= 50) setZone('yellow');
+        else setZone('green');
+      }).catch(() => {
+        setZone('green');
       });
     }
   }, [open, api]);
@@ -376,6 +389,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       setSelectedProjectId('');
       setLaunchedTeamId(null);
       setLaunchedIssueNumber(null);
+      setZone('green');
     }
   }, [open]);
 
@@ -401,8 +415,8 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     [onClose],
   );
 
-  // --- Single launch ---
-  const handleLaunch = useCallback(async () => {
+  // --- Single launch (with optional force flag for red zone override) ---
+  const handleLaunch = useCallback(async (force?: boolean) => {
     setError(null);
 
     if (projects.length > 0 && !selectedProjectId) {
@@ -426,6 +440,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
         prompt: effectivePrompt,
         projectId,
         headless,
+        ...(force ? { force: true } : {}),
       });
       // Switch to launch log view instead of closing
       setLaunchedTeamId(team.id);
@@ -505,7 +520,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
         if (batchMode) {
           handleLaunchBatch();
         } else {
-          handleLaunch();
+          void handleLaunch();
         }
       }
     },
@@ -697,6 +712,13 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
                   </p>
                 </div>
 
+                {/* Red zone warning banner */}
+                {zone === 'red' && (
+                  <div className="px-3 py-2 rounded border border-[#F85149]/30 bg-[#F85149]/10 text-[#F85149] text-sm">
+                    Usage is in the red zone (&gt;80%). New launches will be queued instead of started immediately. Use "Force Launch" to override.
+                  </div>
+                )}
+
                 {/* Error message */}
                 {error && (
                   <div className="px-3 py-2 rounded border border-[#F85149]/30 bg-[#F85149]/10 text-[#F85149] text-sm">
@@ -716,17 +738,29 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
               </button>
 
               {!showingLog && (
-                <button
-                  onClick={batchMode ? handleLaunchBatch : handleLaunch}
-                  disabled={loading || projects.length === 0}
-                  className="px-4 py-1.5 text-sm font-medium rounded border border-dark-accent/40 text-dark-accent bg-dark-accent/10 hover:bg-dark-accent/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {loading
-                    ? 'Launching...'
-                    : batchMode
-                      ? 'Launch All'
-                      : 'Launch'}
-                </button>
+                <>
+                  <button
+                    onClick={() => batchMode ? handleLaunchBatch() : void handleLaunch()}
+                    disabled={loading || projects.length === 0}
+                    className="px-4 py-1.5 text-sm font-medium rounded border border-dark-accent/40 text-dark-accent bg-dark-accent/10 hover:bg-dark-accent/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {loading
+                      ? 'Launching...'
+                      : zone === 'red'
+                        ? (batchMode ? 'Queue All' : 'Queue')
+                        : (batchMode ? 'Launch All' : 'Launch')}
+                  </button>
+                  {zone === 'red' && !batchMode && (
+                    <button
+                      onClick={() => void handleLaunch(true)}
+                      disabled={loading || projects.length === 0}
+                      className="px-4 py-1.5 text-sm font-medium rounded border border-[#F85149]/40 text-[#F85149] bg-[#F85149]/10 hover:bg-[#F85149]/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      title="Force launch ignoring red zone usage limits"
+                    >
+                      Force Launch
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>

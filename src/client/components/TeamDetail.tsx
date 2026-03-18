@@ -49,8 +49,15 @@ export function TeamDetail() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [transitions, setTransitions] = useState<TeamTransition[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectedTeamIdRef = useRef(selectedTeamId);
 
   const isOpen = selectedTeamId !== null;
+
+  // Keep ref in sync with selectedTeamId for use in async callbacks
+  useEffect(() => {
+    selectedTeamIdRef.current = selectedTeamId;
+  }, [selectedTeamId]);
 
   // Fetch transitions when selectedTeamId changes or detail refreshes
   useEffect(() => {
@@ -115,27 +122,35 @@ export function TeamDetail() {
   }, [selectedTeamId, api]);
 
   // Refresh detail on SSE updates (when lastEvent changes and panel is open)
+  // Debounced to 2 seconds to avoid hammering the REST API on rapid SSE events
   useEffect(() => {
     if (selectedTeamId == null || !lastEvent) return;
 
-    let cancelled = false;
+    // Clear any pending debounce timer
+    if (refreshTimerRef.current) {
+      clearTimeout(refreshTimerRef.current);
+    }
 
-    async function refreshDetail() {
+    const teamIdAtSchedule = selectedTeamId;
+
+    refreshTimerRef.current = setTimeout(async () => {
       try {
-        const data = await api.get<TeamDetailType>(`teams/${selectedTeamId}`);
-        if (!cancelled) {
+        const data = await api.get<TeamDetailType>(`teams/${teamIdAtSchedule}`);
+        // Guard against stale response if panel switched teams
+        if (selectedTeamIdRef.current === teamIdAtSchedule) {
           setDetail(data);
           setRefreshKey((k) => k + 1);
         }
       } catch {
         // Silently ignore refresh errors — stale data is acceptable
       }
-    }
-
-    refreshDetail();
+    }, 2000);
 
     return () => {
-      cancelled = true;
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
     };
   }, [lastEvent, selectedTeamId, api]);
 
@@ -173,10 +188,10 @@ export function TeamDetail() {
       setActionLoading(action);
       try {
         await api.post(`teams/${teamId}/${action}`);
-        if (selectedTeamId !== teamId) return;
+        if (selectedTeamIdRef.current !== teamId) return;
         // Refresh detail after action
         const data = await api.get<TeamDetailType>(`teams/${teamId}`);
-        if (selectedTeamId !== teamId) return;
+        if (selectedTeamIdRef.current !== teamId) return;
         setDetail(data);
         setRefreshKey((k) => k + 1);
       } catch {
