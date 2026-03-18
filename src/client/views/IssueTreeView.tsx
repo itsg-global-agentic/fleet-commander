@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import React from 'react';
 import { useApi } from '../hooks/useApi';
+import { usePrioritization, sortTreeByPriority } from '../hooks/usePrioritization';
 import { TreeNode, type IssueNode } from '../components/TreeNode';
-import type { ProjectSummary } from '../../shared/types';
+import type { ProjectSummary, PrioritizedIssue } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Status filter pill definitions
@@ -62,6 +63,10 @@ export function IssueTreeView() {
   const [groups, setGroups] = useState<ProjectIssueGroup[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [batchLaunching, setBatchLaunching] = useState(false);
+
+  // AI prioritization state
+  const prioritization = usePrioritization();
 
   // Track pending timeouts so we can clear them on unmount
   const pendingTimeouts = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -233,6 +238,51 @@ export function IssueTreeView() {
       .filter((g) => g.tree.length > 0);
   }, [groups, search, statusFilter]);
 
+  // Apply priority sorting when prioritization data is available
+  const displayTree = useMemo(() => {
+    if (!prioritization.hasPriority) return filteredTree;
+    return sortTreeByPriority(filteredTree, prioritization.priorityMap);
+  }, [filteredTree, prioritization.hasPriority, prioritization.priorityMap]);
+
+  const displayGroups = useMemo(() => {
+    if (!prioritization.hasPriority) return filteredGroups;
+    return filteredGroups.map((g) => ({
+      ...g,
+      tree: sortTreeByPriority(g.tree, prioritization.priorityMap),
+    }));
+  }, [filteredGroups, prioritization.hasPriority, prioritization.priorityMap]);
+
+  // -------------------------------------------------------------------------
+  // Batch launch handler
+  // -------------------------------------------------------------------------
+
+  const handleBatchLaunch = useCallback(async () => {
+    const issuesToLaunch = prioritization.checkedSortedIssueNumbers;
+    if (issuesToLaunch.length === 0 || !launchProjectId) return;
+
+    setBatchLaunching(true);
+    try {
+      await api.post('teams/launch-batch', {
+        projectId: launchProjectId,
+        issues: issuesToLaunch.map((num) => {
+          const data = prioritization.priorityMap.get(num);
+          return { number: num, title: data?.title };
+        }),
+      });
+      // Refresh tree after batch launch
+      const tid = setTimeout(() => {
+        pendingTimeouts.current.delete(tid);
+        fetchTree();
+      }, 3000);
+      pendingTimeouts.current.add(tid);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+    } finally {
+      setBatchLaunching(false);
+    }
+  }, [api, prioritization.checkedSortedIssueNumbers, prioritization.priorityMap, launchProjectId, fetchTree]);
+
   // -------------------------------------------------------------------------
   // Loading state
   // -------------------------------------------------------------------------
@@ -329,6 +379,40 @@ export function IssueTreeView() {
           ))}
         </div>
 
+        {/* Prioritize button */}
+        <button
+          onClick={() => prioritization.prioritize(tree)}
+          disabled={prioritization.loading || tree.length === 0 || (activeProjects.length > 1 && !launchProjectId)}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-[#A371F7]/50 text-[#A371F7] hover:bg-[#A371F7]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title={activeProjects.length > 1 && !launchProjectId ? 'Select a single project first' : 'AI-prioritize open issues'}
+        >
+          {prioritization.loading ? (
+            <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+            </svg>
+          ) : (
+            <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M7.823.9l4.584 4.584-7.636 7.636L.187 8.536 7.823.9ZM14.2 6.1l-1.3 1.3-4.584-4.584L9.6 1.5a1.5 1.5 0 012.122 0L14.2 3.978a1.5 1.5 0 010 2.122Z" />
+            </svg>
+          )}
+          {prioritization.loading ? 'Prioritizing...' : 'Prioritize'}
+        </button>
+
+        {/* Reset button (only shown when prioritization is active) */}
+        {prioritization.hasPriority && (
+          <button
+            onClick={prioritization.reset}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-accent/50 transition-colors"
+            title="Clear prioritization"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+            Reset
+          </button>
+        )}
+
         <button
           onClick={handleRefresh}
           disabled={refreshing}
@@ -344,6 +428,50 @@ export function IssueTreeView() {
           {refreshing ? 'Refreshing...' : 'Refresh'}
         </button>
       </div>
+
+      {/* Prioritization action bar */}
+      {prioritization.hasPriority && (
+        <div className="flex items-center gap-3 px-4 py-2 border-b border-dark-border bg-[#A371F7]/5 shrink-0">
+          <span className="text-xs text-dark-muted">
+            {prioritization.checkedIssues.size} of {prioritization.priorityMap.size} selected
+          </span>
+
+          {launchProjectId && (
+            <button
+              onClick={handleBatchLaunch}
+              disabled={batchLaunching || prioritization.checkedIssues.size === 0}
+              className="inline-flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded border border-[#3FB950]/50 text-[#3FB950] hover:bg-[#3FB950]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {batchLaunching ? (
+                <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+              ) : (
+                <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .428l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z" />
+                </svg>
+              )}
+              {prioritization.checkedIssues.size === prioritization.priorityMap.size
+                ? 'Launch all in order'
+                : `Launch ${prioritization.checkedIssues.size} selected in order`}
+            </button>
+          )}
+
+          {prioritization.costUsd != null && (
+            <span className="text-xs text-dark-muted ml-auto">
+              ${prioritization.costUsd.toFixed(4)} &middot; {((prioritization.durationMs ?? 0) / 1000).toFixed(1)}s
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Prioritization error banner */}
+      {prioritization.error && (
+        <div className="mx-4 mt-3 px-3 py-2 rounded border border-[#F85149]/30 bg-[#F85149]/10 text-xs text-[#F85149]">
+          Prioritization failed: {prioritization.error}
+        </div>
+      )}
 
       {/* Error banner */}
       {error && (
@@ -374,7 +502,7 @@ export function IssueTreeView() {
               Click Refresh to fetch issues from GitHub
             </p>
           </div>
-        ) : filteredTree.length === 0 ? (
+        ) : displayTree.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-3">
             <p className="text-dark-muted text-sm">
               {search && statusFilter !== 'all'
@@ -390,10 +518,10 @@ export function IssueTreeView() {
               Clear filters
             </button>
           </div>
-        ) : filteredGroups.length > 0 ? (
+        ) : displayGroups.length > 0 ? (
           /* Grouped view — issues organized by project */
           <div className="space-y-1">
-            {filteredGroups.map((group) => (
+            {displayGroups.map((group) => (
               <ProjectGroup
                 key={group.projectId}
                 group={group}
@@ -401,12 +529,15 @@ export function IssueTreeView() {
                 launchingIssues={launchingIssues}
                 launchErrors={launchErrors}
                 forceExpand={!!search || statusFilter !== 'all'}
+                priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
+                checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
+                onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
               />
             ))}
           </div>
         ) : (
           <div className="space-y-0">
-            {filteredTree.map((node) => (
+            {displayTree.map((node) => (
               <TreeNode
                 key={node.number}
                 node={node}
@@ -415,6 +546,9 @@ export function IssueTreeView() {
                 launchingIssues={launchingIssues}
                 launchErrors={launchErrors}
                 forceExpand={!!search || statusFilter !== 'all'}
+                priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
+                checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
+                onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
               />
             ))}
           </div>
@@ -434,9 +568,12 @@ interface ProjectGroupProps {
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
   forceExpand: boolean;
+  priorityMap?: Map<number, PrioritizedIssue>;
+  checkedIssues?: Set<number>;
+  onCheckChange?: (issueNumber: number, checked: boolean) => void;
 }
 
-function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand }: ProjectGroupProps) {
+function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, priorityMap, checkedIssues, onCheckChange }: ProjectGroupProps) {
   const [expanded, setExpanded] = React.useState(true);
 
   return (
@@ -477,6 +614,9 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
               launchErrors={launchErrors}
               forceExpand={forceExpand}
               projectId={group.projectId}
+              priorityMap={priorityMap}
+              checkedIssues={checkedIssues}
+              onCheckChange={onCheckChange}
             />
           ))}
         </div>

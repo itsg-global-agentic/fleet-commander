@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
 import { PlayIcon } from './Icons';
-import type { TeamStatus } from '../../shared/types';
+import type { TeamStatus, PrioritizedIssue } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors IssueNode from the server issue-fetcher)
@@ -74,6 +74,35 @@ function IssueStateBadge({ state }: { state: 'open' | 'closed' }) {
 // TreeNode component (recursive)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Priority badge component
+// ---------------------------------------------------------------------------
+
+function PriorityBadge({ data }: { data: PrioritizedIssue }) {
+  let bgColor: string;
+  let textColor: string;
+  if (data.priority <= 3) {
+    bgColor = 'rgba(248, 81, 73, 0.15)';
+    textColor = '#F85149';
+  } else if (data.priority <= 6) {
+    bgColor = 'rgba(210, 153, 34, 0.15)';
+    textColor = '#D29922';
+  } else {
+    bgColor = 'rgba(139, 148, 158, 0.15)';
+    textColor = '#8B949E';
+  }
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded text-xs font-medium cursor-default"
+      style={{ backgroundColor: bgColor, color: textColor }}
+      title={`Priority ${data.priority}/10 (${data.category}): ${data.reason}`}
+    >
+      P{data.priority}
+    </span>
+  );
+}
+
 interface TreeNodeProps {
   node: IssueNode;
   depth: number;
@@ -83,9 +112,15 @@ interface TreeNodeProps {
   forceExpand?: boolean;
   /** When set, the play button uses this project instead of requiring the user to select one. */
   projectId?: number;
+  /** Map of issue number -> priority data from AI prioritization */
+  priorityMap?: Map<number, PrioritizedIssue>;
+  /** Set of checked issue numbers for batch launch */
+  checkedIssues?: Set<number>;
+  /** Callback when checkbox state changes */
+  onCheckChange?: (issueNumber: number, checked: boolean) => void;
 }
 
-export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, forceExpand, projectId }: TreeNodeProps) {
+export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, forceExpand, projectId, priorityMap, checkedIssues, onCheckChange }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(depth < 2);
   const isExpanded = forceExpand || expanded;
   const hasChildren = node.children.length > 0;
@@ -124,6 +159,20 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
           </svg>
         </button>
 
+        {/* Checkbox for batch launch selection */}
+        {onCheckChange && priorityMap && (
+          <input
+            type="checkbox"
+            checked={checkedIssues?.has(node.number) ?? false}
+            onChange={(e) => {
+              e.stopPropagation();
+              onCheckChange(node.number, e.target.checked);
+            }}
+            className="w-3.5 h-3.5 shrink-0 accent-dark-accent cursor-pointer"
+            aria-label={`Select issue #${node.number}`}
+          />
+        )}
+
         {/* Issue state icon */}
         <IssueStateBadge state={node.state} />
 
@@ -142,6 +191,13 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
         <span className={`text-sm truncate ${node.state === 'closed' ? 'text-dark-muted line-through' : 'text-dark-text'}`}>
           {node.title}
         </span>
+
+        {/* Priority badge from AI prioritization */}
+        {priorityMap?.get(node.number) && (
+          <span className="shrink-0 ml-1">
+            <PriorityBadge data={priorityMap.get(node.number)!} />
+          </span>
+        )}
 
         {/* "Launching..." indicator next to title */}
         {launching && (
@@ -224,6 +280,9 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
               launchErrors={launchErrors}
               forceExpand={forceExpand}
               projectId={projectId}
+              priorityMap={priorityMap}
+              checkedIssues={checkedIssues}
+              onCheckChange={onCheckChange}
             />
           ))}
         </div>

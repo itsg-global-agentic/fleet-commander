@@ -219,14 +219,15 @@ export class CCQueryService {
   ): Promise<CCQueryResult<PrioritizedIssue[]>> {
     const issueList = issues.map((i) => `#${i.number}: ${i.title}`).join('\n');
     const prompt = [
-      'You are a project manager prioritizing GitHub issues for a software team.',
-      'Analyze the following issues and assign each a priority from 1 (highest) to 5 (lowest).',
-      'Consider urgency, impact, and dependencies.',
+      'You are a senior engineering manager prioritizing a backlog.',
+      'Analyze the following issues and assign each a priority from 1 (highest/most urgent) to 10 (lowest/least urgent).',
+      'Also categorize each issue as one of: critical-bug, bug, perf, feature, refactor, cleanup.',
+      'Consider urgency, user impact, severity, and dependencies.',
       '',
       'Issues:',
       issueList,
       '',
-      'Return a JSON array of objects with: number, title, priority, reason.',
+      'Return a JSON array of objects with: number, title, priority (1-10), category, reason.',
     ].join('\n');
 
     const jsonSchema = {
@@ -240,9 +241,13 @@ export class CCQueryService {
               number: { type: 'number' },
               title: { type: 'string' },
               priority: { type: 'number' },
+              category: {
+                type: 'string',
+                enum: ['critical-bug', 'bug', 'perf', 'feature', 'refactor', 'cleanup'],
+              },
               reason: { type: 'string' },
             },
-            required: ['number', 'title', 'priority', 'reason'],
+            required: ['number', 'title', 'priority', 'category', 'reason'],
           },
         },
       },
