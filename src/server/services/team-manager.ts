@@ -213,12 +213,9 @@ export class TeamManager {
       issueTitle = `Issue #${issueNumber}`;
     }
 
-    // Derive a slug from project name (lowercase, alphanumeric + hyphens)
-    const slug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const worktreeName = `${slug}-${issueNumber}`;
-    const branchName = `worktree-${slug}-${issueNumber}`;
-    const worktreeRelPath = path.posix.join(config.worktreeDir, worktreeName);
-    const worktreeAbsPath = path.join(project.repoPath, config.worktreeDir, worktreeName);
+    // Derive worktree naming from project
+    const { worktreeName, branchName, worktreeRelPath, worktreeAbsPath } =
+      this.deriveWorktreeNames(project, issueNumber);
 
     // Check if a team already exists for this worktree name
     const existing = db.getTeamByWorktree(worktreeName);
@@ -285,32 +282,11 @@ export class TeamManager {
     await this.syncWithOrigin(project.repoPath, team.id);
 
     // ── Step 2: Create git worktree in the PROJECT's repo ──
-    if (!fs.existsSync(worktreeAbsPath)) {
-      try {
-        await execAsync(
-          `git -C "${project.repoPath}" worktree add "${worktreeRelPath}" -b "${branchName}"`,
-        );
-      } catch (err: unknown) {
-        // Branch may already exist — try without -b
-        try {
-          await execAsync(
-            `git -C "${project.repoPath}" worktree add "${worktreeRelPath}" "${branchName}"`,
-          );
-        } catch (err2: unknown) {
-          const msg = err2 instanceof Error ? err2.message : String(err2);
-          console.error(`[TeamManager] ERROR: Worktree creation failed for team ${team.id}: ${msg}`);
-          db.insertTransition({
-            teamId: team.id,
-            fromStatus: 'queued',
-            toStatus: 'failed',
-            trigger: 'system',
-            reason: `Worktree creation failed: ${msg.slice(0, 200)}`,
-          });
-          db.updateTeam(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
-          this.broadcastSnapshot();
-          throw new Error(`Failed to create worktree: ${msg}`);
-        }
-      }
+    const worktreeOk = await this.createWorktree(
+      project.repoPath, worktreeRelPath, worktreeAbsPath, branchName, team.id, 'queued',
+    );
+    if (!worktreeOk) {
+      throw new Error(`Failed to create worktree for team ${team.id}`);
     }
 
     console.log(`[TeamManager] Worktree created: ${worktreeName} at ${worktreeAbsPath}`);
@@ -326,87 +302,25 @@ export class TeamManager {
     db.updateTeam(team.id, { status: 'launching' });
     this.broadcastSnapshot();
 
-    // ── Step 3: Copy hook scripts from FC's own hooks/ directory into worktree ──
-    const hookSrcDir = config.fcHooksDir;
-    const hookDestDir = path.join(worktreeAbsPath, config.hookDir);
-
-    fs.mkdirSync(hookDestDir, { recursive: true });
-
-    if (fs.existsSync(hookSrcDir)) {
-      const hookFiles = fs.readdirSync(hookSrcDir).filter(
-        (f) => f.endsWith('.sh'),
-      );
-      for (const file of hookFiles) {
-        const src = path.join(hookSrcDir, file);
-        const dest = path.join(hookDestDir, file);
-        fs.copyFileSync(src, dest);
-        // Ensure executable on Unix
-        if (process.platform !== 'win32') {
-          fs.chmodSync(dest, 0o755);
-        }
-      }
-    }
-
-    console.log(`[TeamManager] Hooks copied to worktree`);
-
-    // Generate settings.json from example
-    const settingsExamplePath = path.join(hookSrcDir, 'settings.json.example');
-    const settingsDestDir = path.join(worktreeAbsPath, '.claude');
-    const settingsDestPath = path.join(settingsDestDir, 'settings.json');
-
-    fs.mkdirSync(settingsDestDir, { recursive: true });
-
-    if (fs.existsSync(settingsExamplePath)) {
-      fs.copyFileSync(settingsExamplePath, settingsDestPath);
-    }
+    // ── Step 3: Copy hook scripts and settings into worktree ──
+    this.copyHooksAndSettings(worktreeAbsPath);
 
     // ── Step 4: Spawn Claude Code process ──
     const resolvedPrompt = prompt || this.resolvePromptFromFile(project, issueNumber);
-
-    // Resolve headless flag — default to true if not specified
     const isHeadless = headless !== false;
 
-    // Build claude args
-    const args: string[] = [];
-    args.push('--worktree', worktreeName);
+    const args = this.buildClaudeArgs({
+      worktreeName,
+      headless,
+      model: project.model,
+    });
 
-    // Only add --output-format for headless mode; interactive terminals need
-    // normal ANSI output so the user can read the Claude Code UI.
-    if (isHeadless) {
-      args.push('--input-format', 'stream-json');   // Bidirectional: receive messages via stdin
-      args.push('--output-format', 'stream-json');  // Structured NDJSON output
-      args.push('--verbose');  // Required when using stream-json with prompt (--print mode)
-    }
-
-    if (config.skipPermissions) {
-      args.push('--dangerously-skip-permissions');
-    }
-
-    if (project.model) {
-      args.push('--model', project.model);
-    }
-
-    // In headless mode, the initial prompt is sent via stdin (not as positional arg)
-    // so that the process stays alive for follow-up messages.
+    // In interactive mode, prompt is a positional arg; in headless, sent via stdin.
     if (!isHeadless) {
       args.push(resolvedPrompt);
     }
 
-    // Build spawn environment — inherit everything from the server process
-    // and auto-detect Git Bash so Claude Code can find it on Windows.
-    const spawnEnv: Record<string, string | undefined> = {
-      ...process.env,
-      FLEET_TEAM_ID: worktreeName,
-      FLEET_PROJECT_ID: String(projectId),
-      FLEET_GITHUB_REPO: project.githubRepo ?? '',
-    };
-    const gitBash = findGitBash();
-    if (gitBash) {
-      spawnEnv['CLAUDE_CODE_GIT_BASH_PATH'] = gitBash;
-      console.log(`[TeamManager] CLAUDE_CODE_GIT_BASH_PATH=${gitBash}`);
-    }
-
-    // Resolve the full path to claude executable (needed for shell-free spawn on Windows)
+    const spawnEnv = this.buildSpawnEnv(project, worktreeName, projectId);
     const claudePath = resolveClaudePath();
     console.log(`[TeamManager] Spawning: ${claudePath} ${args.join(' ')} (headless=${isHeadless})`);
 
@@ -414,15 +328,10 @@ export class TeamManager {
       // ── Interactive mode (Windows): open Claude Code in a new terminal ──
       const fullCmd = `${config.claudeCmd} ${args.join(' ')}`;
       const windowTitle = `Team ${worktreeName}`;
+      const gitBash = findGitBash();
 
-      // The inner command sets up the environment and launches Claude Code
-      // inside the new terminal window. cmd.exe /k keeps it open after exit.
       const innerCommand = `cd /d "${worktreeAbsPath}" && set CLAUDE_CODE_GIT_BASH_PATH=${gitBash || ''} && set FLEET_TEAM_ID=${worktreeName} && set FLEET_PROJECT_ID=${projectId} && ${fullCmd}`;
 
-      // Determine which terminal to use based on config.terminalCmd:
-      //   'auto' — try wt.exe, fall back to cmd.exe
-      //   'wt'   — force Windows Terminal
-      //   'cmd'  — force classic cmd.exe
       const termPref = config.terminalCmd;
       let useWindowsTerminal = false;
 
@@ -433,29 +342,14 @@ export class TeamManager {
           await execAsync('where wt.exe', { timeout: 3000 });
           useWindowsTerminal = true;
         } catch {
-          // wt.exe not found — fall back to cmd.exe
           useWindowsTerminal = false;
         }
       }
-      // termPref === 'cmd' leaves useWindowsTerminal = false
 
       let startCommand: string;
       if (useWindowsTerminal) {
-        // Windows Terminal: open in a new tab with a descriptive title.
-        // wt.exe new-tab runs inside the existing WT instance (or launches
-        // a new one), giving users tabbed terminals, better fonts, and
-        // dark-theme support.
         startCommand = `wt.exe new-tab --title "${windowTitle}" cmd.exe /k "${innerCommand}"`;
       } else {
-        // Classic cmd.exe via `start`:
-        // CRITICAL: The first quoted string is ALWAYS interpreted as the window
-        // title by `start`. We must pass the full command as one string to
-        // cmd.exe /c, because:
-        //   1. Node's spawn() on Windows auto-quotes arguments containing spaces,
-        //      which double-quotes our already-quoted title (""Team kea-765""),
-        //      causing `start` to misparse it and try to open "kea-765" as a file.
-        //   2. The && in the inner command gets interpreted by the outer cmd.exe
-        //      as a command separator unless the whole thing is properly wrapped.
         startCommand = `start "${windowTitle}" cmd.exe /k "${innerCommand}"`;
       }
 
@@ -471,9 +365,6 @@ export class TeamManager {
 
       console.log(`[TeamManager] Interactive window opened for team ${team.id} (worktree: ${worktreeName})`);
 
-      // We can't capture output or PID in interactive mode (the `start` command
-      // creates a separate process tree), but hooks still POST to the server
-      // independently so phase transitions and events will still work.
       db.insertTransition({
         teamId: team.id,
         fromStatus: 'launching',
@@ -484,7 +375,6 @@ export class TeamManager {
       db.updateTeam(team.id, { status: 'running' });
       this.broadcastSnapshot();
 
-      // Broadcast launch event
       sseBroker.broadcast(
         'team_launched',
         { team_id: team.id, issue_number: issueNumber, project_id: projectId },
@@ -495,166 +385,20 @@ export class TeamManager {
     }
 
     // ── Headless mode (default): spawn in background, capture output ──
-    // IMPORTANT: Do NOT use shell: true here. On Windows, shell: true wraps the
-    // spawn in cmd.exe, creating node → cmd.exe → claude.exe. The stdout pipe
-    // connects to cmd.exe, not claude.exe, so Claude's NDJSON output never
-    // reaches our capture handler. Instead, we resolve the full path to the
-    // claude executable and spawn it directly.
-    //
-    // stdin is 'pipe' so we can send messages via --input-format stream-json.
-    const child = spawn(claudePath, args, {
-      cwd: project.repoPath,
-      env: spawnEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      // Detach so parent can exit without killing children (if needed)
-      detached: false,
-    });
-
-    const pid = child.pid;
-    if (pid === undefined) {
-      console.error(`[TeamManager] ERROR: spawn failed for team ${team.id}: no PID returned`);
-      db.insertTransition({
-        teamId: team.id,
-        fromStatus: 'launching',
-        toStatus: 'failed',
-        trigger: 'system',
-        reason: 'Spawn failed: no PID returned',
-      });
-      db.updateTeam(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
-      this.broadcastSnapshot();
+    const child = this.spawnAndValidate(claudePath, args, project.repoPath, spawnEnv, team.id);
+    if (!child) {
       throw new Error('Failed to spawn Claude Code process — no PID returned');
     }
 
-    console.log(`[TeamManager] Process spawned: PID ${pid}`);
+    this.setupStdinAndOutput(team.id, child, resolvedPrompt);
+    this.attachProcessHandlers(team.id, child);
 
-    // Update team with PID (status stays 'launching' until first event)
-    db.updateTeam(team.id, { pid });
-    this.broadcastSnapshot();
-
-    // Store child process reference
-    this.childProcesses.set(team.id, child);
-
-    // Store stdin pipe for bidirectional messaging
-    if (child.stdin) {
-      this.stdinPipes.set(team.id, child.stdin);
-
-      // Send the initial prompt via stdin (not as positional arg) so the
-      // process stays alive for follow-up messages from the PM.
-      this.writeStdinMessage(child.stdin, resolvedPrompt);
-      console.log(`[TeamManager] Initial prompt sent via stdin for team ${team.id}`);
-    }
-
-    // Set up output capture
-    this.initOutputBuffer(team.id);
-    this.captureOutput(team.id, child);
-
-    // Show initial prompt in Session Log as FC message
-    if (child.stdin) {
-      const initEvent: StreamEvent = {
-        type: 'fc',
-        timestamp: new Date().toISOString(),
-        message: { content: [{ type: 'text', text: resolvedPrompt }] },
-      };
-      const evts = this.parsedEvents.get(team.id);
-      if (evts) evts.push(initEvent);
-      sseBroker.broadcast('team_output', { team_id: team.id, event: initEvent }, team.id);
-    }
-
-    // Handle process exit
-    child.on('exit', (code, signal) => {
-      console.log(`[TeamManager] Process exited for team ${team.id} (code=${code}, signal=${signal})`);
-      this.childProcesses.delete(team.id);
-      this.stdinPipes.delete(team.id);
-      this.outputBuffers.delete(team.id);
-      this.parsedEvents.delete(team.id);
-
-      const currentTeam = db.getTeam(team.id);
-      if (!currentTeam) return;
-
-      // Only update status if team is still in an active state
-      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
-        const exitStatus = (code === 0) ? 'done' : 'failed';
-        db.insertTransition({
-          teamId: team.id,
-          fromStatus: currentTeam.status,
-          toStatus: exitStatus,
-          trigger: 'system',
-          reason: code === 0
-            ? 'Process exited normally (code 0)'
-            : `Process exited with code ${code}${signal ? `, signal ${signal}` : ''}`,
-        });
-        db.updateTeam(team.id, {
-          status: exitStatus,
-          pid: null,
-          stoppedAt: new Date().toISOString(),
-        });
-
-        sseBroker.broadcast(
-          'team_stopped',
-          { team_id: team.id },
-          team.id,
-        );
-
-        this.broadcastSnapshot();
-      }
-
-      // Process queue when a slot frees up
-      if (currentTeam.projectId) {
-        this.processQueue(currentTeam.projectId).catch((err) => {
-          console.error(`[TeamManager] processQueue error after team exit:`, err);
-        });
-      }
-    });
-
-    child.on('error', (err) => {
-      console.error(`[TeamManager] ERROR: process error for team ${team.id}:`, err.message);
-      this.childProcesses.delete(team.id);
-      this.stdinPipes.delete(team.id);
-      this.outputBuffers.delete(team.id);
-      this.parsedEvents.delete(team.id);
-
-      const currentTeam = db.getTeam(team.id);
-      if (!currentTeam) return;
-
-      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
-        db.insertTransition({
-          teamId: team.id,
-          fromStatus: currentTeam.status,
-          toStatus: 'failed',
-          trigger: 'system',
-          reason: `Process error: ${err.message.slice(0, 200)}`,
-        });
-        db.updateTeam(team.id, {
-          status: 'failed',
-          pid: null,
-          stoppedAt: new Date().toISOString(),
-        });
-
-        sseBroker.broadcast(
-          'team_stopped',
-          { team_id: team.id },
-          team.id,
-        );
-
-        this.broadcastSnapshot();
-      }
-
-      // Process queue when a slot frees up
-      if (currentTeam.projectId) {
-        this.processQueue(currentTeam.projectId).catch((queueErr) => {
-          console.error(`[TeamManager] processQueue error after team error:`, queueErr);
-        });
-      }
-    });
-
-    // Broadcast launch event
     sseBroker.broadcast(
       'team_launched',
       { team_id: team.id, issue_number: issueNumber, project_id: projectId },
       team.id,
     );
 
-    // Return fresh team record
     return db.getTeam(team.id)!;
   }
 
@@ -790,20 +534,12 @@ export class TeamManager {
       throw new Error(`Worktree ${team.worktreeName} no longer exists at ${worktreeAbsPath}`);
     }
 
-    // Build args with --resume and bidirectional streaming
-    const args: string[] = [];
-    args.push('--resume', '--worktree', team.worktreeName);
-    args.push('--input-format', 'stream-json');   // Bidirectional: receive messages via stdin
-    args.push('--output-format', 'stream-json');  // Structured NDJSON output
-    args.push('--verbose');  // Required when using stream-json with prompt (--print mode)
-
-    if (config.skipPermissions) {
-      args.push('--dangerously-skip-permissions');
-    }
-
-    if (project.model) {
-      args.push('--model', project.model);
-    }
+    // Build args with --resume
+    const args = this.buildClaudeArgs({
+      worktreeName: team.worktreeName,
+      resume: true,
+      model: project.model,
+    });
 
     // Update status to launching
     db.insertTransition({
@@ -819,143 +555,25 @@ export class TeamManager {
       stoppedAt: null,
     });
 
-    // Build spawn environment with Git Bash auto-detection (same as launch)
-    const resumeEnv: Record<string, string | undefined> = {
-      ...process.env,
-      FLEET_TEAM_ID: team.worktreeName,
-      FLEET_PROJECT_ID: String(project.id),
-      FLEET_GITHUB_REPO: project.githubRepo ?? '',
-    };
-    const resumeGitBash = findGitBash();
-    if (resumeGitBash) {
-      resumeEnv['CLAUDE_CODE_GIT_BASH_PATH'] = resumeGitBash;
-      console.log(`[TeamManager] Resume: CLAUDE_CODE_GIT_BASH_PATH=${resumeGitBash}`);
-    }
-
-    // Resolve full path to claude executable — do NOT use shell: true (see
-    // headless spawn comment above for why cmd.exe wrapper breaks stdout capture).
+    const spawnEnv = this.buildSpawnEnv(project, team.worktreeName, project.id);
     const claudePath = resolveClaudePath();
     console.log(`[TeamManager] Resume spawning: ${claudePath} ${args.join(' ')}`);
 
-    const child = spawn(claudePath, args, {
-      cwd: project.repoPath,
-      env: resumeEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      detached: false,
-    });
-
-    const pid = child.pid;
-    if (pid === undefined) {
-      db.insertTransition({
-        teamId,
-        fromStatus: 'launching',
-        toStatus: 'failed',
-        trigger: 'system',
-        reason: 'Resume spawn failed: no PID returned',
-      });
-      db.updateTeam(teamId, { status: 'failed', stoppedAt: new Date().toISOString() });
+    const child = this.spawnAndValidate(claudePath, args, project.repoPath, spawnEnv, teamId);
+    if (!child) {
       throw new Error('Failed to spawn Claude Code process — no PID returned');
     }
 
-    db.updateTeam(teamId, { pid });
+    // Resume: no initial prompt — just set up stdin and output capture
+    this.setupStdinAndOutput(teamId, child);
+    this.attachProcessHandlers(teamId, child);
 
-    // Store child process reference
-    this.childProcesses.set(teamId, child);
-
-    // Store stdin pipe for bidirectional messaging
-    if (child.stdin) {
-      this.stdinPipes.set(teamId, child.stdin);
-      console.log(`[TeamManager] Stdin pipe stored for resumed team ${teamId}`);
-    }
-
-    // Set up output capture
-    this.initOutputBuffer(teamId);
-    this.captureOutput(teamId, child);
-
-    // Handle process exit
-    child.on('exit', (code, _signal) => {
-      console.log(`[TeamManager] Resume process exited for team ${teamId} (code=${code})`);
-      this.childProcesses.delete(teamId);
-      this.stdinPipes.delete(teamId);
-      this.outputBuffers.delete(teamId);
-      this.parsedEvents.delete(teamId);
-
-      const currentTeam = db.getTeam(teamId);
-      if (!currentTeam) return;
-
-      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
-        const exitStatus = (code === 0) ? 'done' : 'failed';
-        db.insertTransition({
-          teamId,
-          fromStatus: currentTeam.status,
-          toStatus: exitStatus,
-          trigger: 'system',
-          reason: code === 0
-            ? 'Resumed process exited normally (code 0)'
-            : `Resumed process exited with code ${code}`,
-        });
-        db.updateTeam(teamId, {
-          status: exitStatus,
-          pid: null,
-          stoppedAt: new Date().toISOString(),
-        });
-
-        sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
-        this.broadcastSnapshot();
-      }
-
-      // Process queue when a slot frees up
-      if (currentTeam.projectId) {
-        this.processQueue(currentTeam.projectId).catch((err) => {
-          console.error(`[TeamManager] processQueue error after resume exit:`, err);
-        });
-      }
-    });
-
-    child.on('error', (err) => {
-      console.error(`[TeamManager] Resume process error for team ${teamId}:`, err);
-      this.childProcesses.delete(teamId);
-      this.stdinPipes.delete(teamId);
-      this.outputBuffers.delete(teamId);
-      this.parsedEvents.delete(teamId);
-
-      const currentTeam = db.getTeam(teamId);
-      if (!currentTeam) return;
-
-      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
-        db.insertTransition({
-          teamId,
-          fromStatus: currentTeam.status,
-          toStatus: 'failed',
-          trigger: 'system',
-          reason: `Resume process error: ${err.message.slice(0, 200)}`,
-        });
-        db.updateTeam(teamId, {
-          status: 'failed',
-          pid: null,
-          stoppedAt: new Date().toISOString(),
-        });
-
-        sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
-        this.broadcastSnapshot();
-      }
-
-      // Process queue when a slot frees up
-      if (currentTeam.projectId) {
-        this.processQueue(currentTeam.projectId).catch((queueErr) => {
-          console.error(`[TeamManager] processQueue error after resume error:`, queueErr);
-        });
-      }
-    });
-
-    // Broadcast launch event
     sseBroker.broadcast(
       'team_launched',
       { team_id: teamId, issue_number: team.issueNumber },
       teamId,
     );
 
-    // Broadcast full snapshot so all SSE clients refresh their team list
     this.broadcastSnapshot();
 
     return db.getTeam(teamId)!;
@@ -1037,9 +655,7 @@ export class TeamManager {
       issueTitle = `Issue #${issueNumber}`;
     }
 
-    const slug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const worktreeName = `${slug}-${issueNumber}`;
-    const branchName = `worktree-${slug}-${issueNumber}`;
+    const { worktreeName, branchName } = this.deriveWorktreeNames(project, issueNumber);
 
     // Check for existing team
     const existing = db.getTeamByWorktree(worktreeName);
@@ -1205,102 +821,35 @@ export class TeamManager {
     await this.syncWithOrigin(project.repoPath, team.id);
 
     // ── Step 1: Create git worktree ──
-    if (!fs.existsSync(worktreeAbsPath)) {
-      try {
-        await execAsync(
-          `git -C "${project.repoPath}" worktree add "${worktreeRelPath}" -b "${branchName}"`,
-        );
-      } catch {
-        try {
-          await execAsync(
-            `git -C "${project.repoPath}" worktree add "${worktreeRelPath}" "${branchName}"`,
-          );
-        } catch (err2: unknown) {
-          const msg = err2 instanceof Error ? err2.message : String(err2);
-          console.error(`[TeamManager] ERROR: Worktree creation failed for queued team ${team.id}: ${msg}`);
-          db.insertTransition({
-            teamId: team.id,
-            fromStatus: 'launching',
-            toStatus: 'failed',
-            trigger: 'system',
-            reason: `Worktree creation failed: ${msg.slice(0, 200)}`,
-          });
-          db.updateTeam(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
-          this.broadcastSnapshot();
-          return;
-        }
-      }
-    }
+    const worktreeOk = await this.createWorktree(
+      project.repoPath, worktreeRelPath, worktreeAbsPath, branchName, team.id, 'launching',
+    );
+    if (!worktreeOk) return;
 
     console.log(`[TeamManager] Worktree created for dequeued team: ${team.worktreeName}`);
 
-    // Update to launching
     db.updateTeam(team.id, { status: 'launching' });
     this.broadcastSnapshot();
 
-    // ── Step 2: Copy hooks ──
-    const hookSrcDir = config.fcHooksDir;
-    const hookDestDir = path.join(worktreeAbsPath, config.hookDir);
-    fs.mkdirSync(hookDestDir, { recursive: true });
-
-    if (fs.existsSync(hookSrcDir)) {
-      const hookFiles = fs.readdirSync(hookSrcDir).filter((f) => f.endsWith('.sh'));
-      for (const file of hookFiles) {
-        const src = path.join(hookSrcDir, file);
-        const dest = path.join(hookDestDir, file);
-        fs.copyFileSync(src, dest);
-        if (process.platform !== 'win32') {
-          fs.chmodSync(dest, 0o755);
-        }
-      }
-    }
-
-    // Generate settings.json from example
-    const settingsExamplePath = path.join(hookSrcDir, 'settings.json.example');
-    const settingsDestDir = path.join(worktreeAbsPath, '.claude');
-    const settingsDestPath = path.join(settingsDestDir, 'settings.json');
-    fs.mkdirSync(settingsDestDir, { recursive: true });
-    if (fs.existsSync(settingsExamplePath)) {
-      fs.copyFileSync(settingsExamplePath, settingsDestPath);
-    }
+    // ── Step 2: Copy hooks and settings ──
+    this.copyHooksAndSettings(worktreeAbsPath);
 
     // ── Step 3: Spawn Claude Code ──
     const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, team.issueNumber);
     const isHeadless = team.headless;
 
-    const args: string[] = [];
-    args.push('--worktree', team.worktreeName);
+    const args = this.buildClaudeArgs({
+      worktreeName: team.worktreeName,
+      headless: isHeadless ? true : false,
+      model: project.model,
+    });
 
-    if (isHeadless) {
-      args.push('--input-format', 'stream-json');   // Bidirectional: receive messages via stdin
-      args.push('--output-format', 'stream-json');
-      args.push('--verbose');
-    }
-
-    if (config.skipPermissions) {
-      args.push('--dangerously-skip-permissions');
-    }
-
-    if (project.model) {
-      args.push('--model', project.model);
-    }
-
-    // In headless mode, the initial prompt is sent via stdin (not as positional arg)
+    // In interactive mode, prompt is a positional arg; in headless, sent via stdin.
     if (!isHeadless) {
       args.push(resolvedPrompt);
     }
 
-    const spawnEnv: Record<string, string | undefined> = {
-      ...process.env,
-      FLEET_TEAM_ID: team.worktreeName,
-      FLEET_PROJECT_ID: String(projectId),
-      FLEET_GITHUB_REPO: project.githubRepo ?? '',
-    };
-    const gitBash = findGitBash();
-    if (gitBash) {
-      spawnEnv['CLAUDE_CODE_GIT_BASH_PATH'] = gitBash;
-    }
-
+    const spawnEnv = this.buildSpawnEnv(project, team.worktreeName, projectId);
     const claudePath = resolveClaudePath();
     console.log(`[TeamManager] Spawning dequeued team ${team.id}: ${claudePath} ${args.join(' ')} (headless=${isHeadless})`);
 
@@ -1308,6 +857,7 @@ export class TeamManager {
       // ── Interactive mode (Windows): open Claude Code in a new terminal ──
       const fullCmd = `${config.claudeCmd} ${args.join(' ')}`;
       const windowTitle = `Team ${team.worktreeName}`;
+      const gitBash = findGitBash();
       const innerCommand = `cd /d "${worktreeAbsPath}" && set CLAUDE_CODE_GIT_BASH_PATH=${gitBash || ''} && set FLEET_TEAM_ID=${team.worktreeName} && set FLEET_PROJECT_ID=${projectId} && ${fullCmd}`;
 
       const termPref = config.terminalCmd;
@@ -1360,131 +910,11 @@ export class TeamManager {
     }
 
     // ── Headless mode (default): spawn in background, capture output ──
-    const child = spawn(claudePath, args, {
-      cwd: project.repoPath,
-      env: spawnEnv,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      detached: false,
-    });
+    const child = this.spawnAndValidate(claudePath, args, project.repoPath, spawnEnv, team.id);
+    if (!child) return;
 
-    const pid = child.pid;
-    if (pid === undefined) {
-      console.error(`[TeamManager] ERROR: spawn failed for dequeued team ${team.id}: no PID returned`);
-      db.insertTransition({
-        teamId: team.id,
-        fromStatus: 'launching',
-        toStatus: 'failed',
-        trigger: 'system',
-        reason: 'Dequeued spawn failed: no PID returned',
-      });
-      db.updateTeam(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
-      this.broadcastSnapshot();
-      return;
-    }
-
-    console.log(`[TeamManager] Dequeued team ${team.id} spawned: PID ${pid}`);
-    db.updateTeam(team.id, { pid });
-    this.broadcastSnapshot();
-
-    this.childProcesses.set(team.id, child);
-
-    // Store stdin pipe and send initial prompt
-    if (child.stdin) {
-      this.stdinPipes.set(team.id, child.stdin);
-      this.writeStdinMessage(child.stdin, resolvedPrompt);
-      console.log(`[TeamManager] Initial prompt sent via stdin for dequeued team ${team.id}`);
-    }
-
-    this.initOutputBuffer(team.id);
-    this.captureOutput(team.id, child);
-
-    // Show initial prompt in Session Log as FC message
-    if (child.stdin) {
-      const initEvent: StreamEvent = {
-        type: 'fc',
-        timestamp: new Date().toISOString(),
-        message: { content: [{ type: 'text', text: resolvedPrompt }] },
-      };
-      const evts = this.parsedEvents.get(team.id);
-      if (evts) evts.push(initEvent);
-      sseBroker.broadcast('team_output', { team_id: team.id, event: initEvent }, team.id);
-    }
-
-    // Handle process exit — trigger queue processing
-    child.on('exit', (code, signal) => {
-      console.log(`[TeamManager] Process exited for dequeued team ${team.id} (code=${code}, signal=${signal})`);
-      this.childProcesses.delete(team.id);
-      this.stdinPipes.delete(team.id);
-      this.outputBuffers.delete(team.id);
-      this.parsedEvents.delete(team.id);
-
-      const currentTeam = db.getTeam(team.id);
-      if (!currentTeam) return;
-
-      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
-        const exitStatus = (code === 0) ? 'done' : 'failed';
-        db.insertTransition({
-          teamId: team.id,
-          fromStatus: currentTeam.status,
-          toStatus: exitStatus,
-          trigger: 'system',
-          reason: code === 0
-            ? 'Dequeued process exited normally (code 0)'
-            : `Dequeued process exited with code ${code}${signal ? `, signal ${signal}` : ''}`,
-        });
-        db.updateTeam(team.id, {
-          status: exitStatus,
-          pid: null,
-          stoppedAt: new Date().toISOString(),
-        });
-
-        sseBroker.broadcast('team_stopped', { team_id: team.id }, team.id);
-        this.broadcastSnapshot();
-      }
-
-      // Process queue when a slot frees up
-      if (currentTeam.projectId) {
-        this.processQueue(currentTeam.projectId).catch((err) => {
-          console.error(`[TeamManager] processQueue error after dequeued team exit:`, err);
-        });
-      }
-    });
-
-    child.on('error', (err) => {
-      console.error(`[TeamManager] ERROR: process error for dequeued team ${team.id}:`, err.message);
-      this.childProcesses.delete(team.id);
-      this.stdinPipes.delete(team.id);
-      this.outputBuffers.delete(team.id);
-      this.parsedEvents.delete(team.id);
-
-      const currentTeam = db.getTeam(team.id);
-      if (!currentTeam) return;
-
-      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
-        db.insertTransition({
-          teamId: team.id,
-          fromStatus: currentTeam.status,
-          toStatus: 'failed',
-          trigger: 'system',
-          reason: `Dequeued process error: ${err.message.slice(0, 200)}`,
-        });
-        db.updateTeam(team.id, {
-          status: 'failed',
-          pid: null,
-          stoppedAt: new Date().toISOString(),
-        });
-
-        sseBroker.broadcast('team_stopped', { team_id: team.id }, team.id);
-        this.broadcastSnapshot();
-      }
-
-      // Process queue when a slot frees up
-      if (currentTeam.projectId) {
-        this.processQueue(currentTeam.projectId).catch((queueErr) => {
-          console.error(`[TeamManager] processQueue error after dequeued team error:`, queueErr);
-        });
-      }
-    });
+    this.setupStdinAndOutput(team.id, child, resolvedPrompt);
+    this.attachProcessHandlers(team.id, child);
 
     sseBroker.broadcast(
       'team_launched',
@@ -1651,6 +1081,330 @@ export class TeamManager {
     }
 
     return results;
+  }
+
+  // -------------------------------------------------------------------------
+  // Shared spawn/lifecycle helpers (extracted from launch/resume/launchQueued)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Build the spawn environment for a Claude Code process.
+   * Inherits the server's env and adds fleet/git-bash vars.
+   */
+  private buildSpawnEnv(
+    project: Project,
+    worktreeName: string,
+    projectId: number,
+  ): Record<string, string | undefined> {
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      FLEET_TEAM_ID: worktreeName,
+      FLEET_PROJECT_ID: String(projectId),
+      FLEET_GITHUB_REPO: project.githubRepo ?? '',
+    };
+    const gitBash = findGitBash();
+    if (gitBash) {
+      env['CLAUDE_CODE_GIT_BASH_PATH'] = gitBash;
+      console.log(`[TeamManager] CLAUDE_CODE_GIT_BASH_PATH=${gitBash}`);
+    }
+    return env;
+  }
+
+  /**
+   * Build the Claude CLI args array.
+   * @param options.worktreeName — worktree name for --worktree flag
+   * @param options.resume — add --resume flag (for resume flow)
+   * @param options.headless — if false, skip stream-json flags (interactive mode)
+   * @param options.model — optional model override from project
+   */
+  private buildClaudeArgs(options: {
+    worktreeName: string;
+    resume?: boolean;
+    headless?: boolean;
+    model?: string | null;
+  }): string[] {
+    const args: string[] = [];
+    if (options.resume) {
+      args.push('--resume');
+    }
+    args.push('--worktree', options.worktreeName);
+
+    // Only add stream-json flags for headless mode
+    const isHeadless = options.headless !== false;
+    if (isHeadless) {
+      args.push('--input-format', 'stream-json');
+      args.push('--output-format', 'stream-json');
+      args.push('--verbose');
+    }
+
+    if (config.skipPermissions) {
+      args.push('--dangerously-skip-permissions');
+    }
+
+    if (options.model) {
+      args.push('--model', options.model);
+    }
+
+    return args;
+  }
+
+  /**
+   * Spawn a Claude Code process and validate it got a PID.
+   * On failure, transitions team to 'failed' and broadcasts snapshot.
+   * Returns the child process, or null if spawn failed.
+   */
+  private spawnAndValidate(
+    claudePath: string,
+    args: string[],
+    cwd: string,
+    env: Record<string, string | undefined>,
+    teamId: number,
+  ): ChildProcess | null {
+    const db = getDatabase();
+
+    const child = spawn(claudePath, args, {
+      cwd,
+      env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      detached: false,
+    });
+
+    const pid = child.pid;
+    if (pid === undefined) {
+      console.error(`[TeamManager] ERROR: spawn failed for team ${teamId}: no PID returned`);
+      db.insertTransition({
+        teamId,
+        fromStatus: 'launching',
+        toStatus: 'failed',
+        trigger: 'system',
+        reason: 'Spawn failed: no PID returned',
+      });
+      db.updateTeam(teamId, { status: 'failed', stoppedAt: new Date().toISOString() });
+      this.broadcastSnapshot();
+      return null;
+    }
+
+    console.log(`[TeamManager] Process spawned: PID ${pid}`);
+    db.updateTeam(teamId, { pid });
+    this.broadcastSnapshot();
+    this.childProcesses.set(teamId, child);
+
+    return child;
+  }
+
+  /**
+   * Attach exit and error handlers to a child process.
+   * These handlers clean up maps, transition the team to done/failed,
+   * broadcast SSE events, and trigger queue processing.
+   */
+  private attachProcessHandlers(teamId: number, child: ChildProcess): void {
+    const db = getDatabase();
+
+    child.on('exit', (code, signal) => {
+      console.log(`[TeamManager] Process exited for team ${teamId} (code=${code}, signal=${signal})`);
+      this.childProcesses.delete(teamId);
+      this.stdinPipes.delete(teamId);
+      this.outputBuffers.delete(teamId);
+      this.parsedEvents.delete(teamId);
+
+      const currentTeam = db.getTeam(teamId);
+      if (!currentTeam) return;
+
+      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
+        const exitStatus = (code === 0) ? 'done' : 'failed';
+        db.insertTransition({
+          teamId,
+          fromStatus: currentTeam.status,
+          toStatus: exitStatus,
+          trigger: 'system',
+          reason: code === 0
+            ? 'Process exited normally (code 0)'
+            : `Process exited with code ${code}${signal ? `, signal ${signal}` : ''}`,
+        });
+        db.updateTeam(teamId, {
+          status: exitStatus,
+          pid: null,
+          stoppedAt: new Date().toISOString(),
+        });
+
+        sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
+        this.broadcastSnapshot();
+      }
+
+      if (currentTeam.projectId) {
+        this.processQueue(currentTeam.projectId).catch((err) => {
+          console.error(`[TeamManager] processQueue error after team exit:`, err);
+        });
+      }
+    });
+
+    child.on('error', (err) => {
+      console.error(`[TeamManager] ERROR: process error for team ${teamId}:`, err.message);
+      this.childProcesses.delete(teamId);
+      this.stdinPipes.delete(teamId);
+      this.outputBuffers.delete(teamId);
+      this.parsedEvents.delete(teamId);
+
+      const currentTeam = db.getTeam(teamId);
+      if (!currentTeam) return;
+
+      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
+        db.insertTransition({
+          teamId,
+          fromStatus: currentTeam.status,
+          toStatus: 'failed',
+          trigger: 'system',
+          reason: `Process error: ${err.message.slice(0, 200)}`,
+        });
+        db.updateTeam(teamId, {
+          status: 'failed',
+          pid: null,
+          stoppedAt: new Date().toISOString(),
+        });
+
+        sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
+        this.broadcastSnapshot();
+      }
+
+      if (currentTeam.projectId) {
+        this.processQueue(currentTeam.projectId).catch((queueErr) => {
+          console.error(`[TeamManager] processQueue error after team error:`, queueErr);
+        });
+      }
+    });
+  }
+
+  /**
+   * Store the stdin pipe, send the initial prompt (if provided), set up
+   * output capture, and broadcast the initial FC event in the session log.
+   */
+  private setupStdinAndOutput(
+    teamId: number,
+    child: ChildProcess,
+    prompt?: string,
+  ): void {
+    if (child.stdin) {
+      this.stdinPipes.set(teamId, child.stdin);
+
+      if (prompt) {
+        this.writeStdinMessage(child.stdin, prompt);
+        console.log(`[TeamManager] Initial prompt sent via stdin for team ${teamId}`);
+      }
+    }
+
+    this.initOutputBuffer(teamId);
+    this.captureOutput(teamId, child);
+
+    if (prompt && child.stdin) {
+      const initEvent: StreamEvent = {
+        type: 'fc',
+        timestamp: new Date().toISOString(),
+        message: { content: [{ type: 'text', text: prompt }] },
+      };
+      const evts = this.parsedEvents.get(teamId);
+      if (evts) evts.push(initEvent);
+      sseBroker.broadcast('team_output', { team_id: teamId, event: initEvent }, teamId);
+    }
+  }
+
+  /**
+   * Create a git worktree with -b fallback. On failure, transitions team
+   * to 'failed' and broadcasts snapshot.
+   * Returns true on success, false on failure.
+   */
+  private async createWorktree(
+    repoPath: string,
+    worktreeRelPath: string,
+    worktreeAbsPath: string,
+    branchName: string,
+    teamId: number,
+    fromStatus: 'queued' | 'launching',
+  ): Promise<boolean> {
+    if (fs.existsSync(worktreeAbsPath)) return true;
+
+    try {
+      await execAsync(
+        `git -C "${repoPath}" worktree add "${worktreeRelPath}" -b "${branchName}"`,
+      );
+      return true;
+    } catch {
+      // Branch may already exist — try without -b
+      try {
+        await execAsync(
+          `git -C "${repoPath}" worktree add "${worktreeRelPath}" "${branchName}"`,
+        );
+        return true;
+      } catch (err2: unknown) {
+        const msg = err2 instanceof Error ? err2.message : String(err2);
+        console.error(`[TeamManager] ERROR: Worktree creation failed for team ${teamId}: ${msg}`);
+        const db = getDatabase();
+        db.insertTransition({
+          teamId,
+          fromStatus,
+          toStatus: 'failed',
+          trigger: 'system',
+          reason: `Worktree creation failed: ${msg.slice(0, 200)}`,
+        });
+        db.updateTeam(teamId, { status: 'failed', stoppedAt: new Date().toISOString() });
+        this.broadcastSnapshot();
+        return false;
+      }
+    }
+  }
+
+  /**
+   * Copy hook scripts and generate settings.json into a worktree directory.
+   */
+  private copyHooksAndSettings(worktreeAbsPath: string): void {
+    const hookSrcDir = config.fcHooksDir;
+    const hookDestDir = path.join(worktreeAbsPath, config.hookDir);
+
+    fs.mkdirSync(hookDestDir, { recursive: true });
+
+    if (fs.existsSync(hookSrcDir)) {
+      const hookFiles = fs.readdirSync(hookSrcDir).filter(
+        (f) => f.endsWith('.sh'),
+      );
+      for (const file of hookFiles) {
+        const src = path.join(hookSrcDir, file);
+        const dest = path.join(hookDestDir, file);
+        fs.copyFileSync(src, dest);
+        if (process.platform !== 'win32') {
+          fs.chmodSync(dest, 0o755);
+        }
+      }
+    }
+
+    console.log(`[TeamManager] Hooks copied to worktree`);
+
+    // Generate settings.json from example
+    const settingsExamplePath = path.join(hookSrcDir, 'settings.json.example');
+    const settingsDestDir = path.join(worktreeAbsPath, '.claude');
+    const settingsDestPath = path.join(settingsDestDir, 'settings.json');
+
+    fs.mkdirSync(settingsDestDir, { recursive: true });
+
+    if (fs.existsSync(settingsExamplePath)) {
+      fs.copyFileSync(settingsExamplePath, settingsDestPath);
+    }
+  }
+
+  /**
+   * Derive worktree naming from a project and issue number.
+   */
+  private deriveWorktreeNames(project: Project, issueNumber: number): {
+    slug: string;
+    worktreeName: string;
+    branchName: string;
+    worktreeRelPath: string;
+    worktreeAbsPath: string;
+  } {
+    const slug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const worktreeName = `${slug}-${issueNumber}`;
+    const branchName = `worktree-${slug}-${issueNumber}`;
+    const worktreeRelPath = path.posix.join(config.worktreeDir, worktreeName);
+    const worktreeAbsPath = path.join(project.repoPath, config.worktreeDir, worktreeName);
+    return { slug, worktreeName, branchName, worktreeRelPath, worktreeAbsPath };
   }
 
   // -------------------------------------------------------------------------
