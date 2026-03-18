@@ -77,7 +77,10 @@ export function IssueTreeView() {
   const fetchTree = useCallback(async () => {
     try {
       setError(null);
-      const data = await api.get<IssueTreeResponse>('issues');
+      const endpoint = selectedProjectId
+        ? `projects/${selectedProjectId}/issues`
+        : 'issues';
+      const data = await api.get<IssueTreeResponse>(endpoint);
       setTree(data.tree);
       setCachedAt(data.cachedAt);
       setIssueCount(data.count);
@@ -87,7 +90,7 @@ export function IssueTreeView() {
     } finally {
       setLoading(false);
     }
-  }, [api]);
+  }, [api, selectedProjectId]);
 
   useEffect(() => {
     fetchTree();
@@ -102,17 +105,16 @@ export function IssueTreeView() {
     setRefreshing(true);
     try {
       setError(null);
-      const data = await api.post<IssueRefreshResponse>('issues/refresh');
-      setTree(data.tree);
-      setCachedAt(data.refreshedAt);
-      setIssueCount(data.issueCount ?? countNodes(data.tree));
+      // Refresh all projects on the server, then re-fetch with the active filter
+      await api.post<IssueRefreshResponse>('issues/refresh');
+      await fetchTree();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
     } finally {
       setRefreshing(false);
     }
-  }, [api, refreshing]);
+  }, [api, refreshing, fetchTree]);
 
   // -------------------------------------------------------------------------
   // Launch team for an issue (play button)
