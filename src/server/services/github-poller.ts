@@ -49,6 +49,15 @@ interface GHPRListItem {
 }
 
 // ---------------------------------------------------------------------------
+// Shared CI failure predicate — used by deriveCIStatus, ciFailCount, and
+// failedCheckNames so that all three agree on what counts as a "failure".
+// ---------------------------------------------------------------------------
+
+function isFailureConclusion(conclusion: string | null | undefined): boolean {
+  return conclusion === 'FAILURE' || conclusion === 'CANCELLED';
+}
+
+// ---------------------------------------------------------------------------
 // GitHub Poller
 // ---------------------------------------------------------------------------
 
@@ -252,7 +261,7 @@ class GitHubPoller {
     } else if (ciStatus === 'failing') {
       const currentUniqueFailures = new Set(
         checks
-          .filter((c) => c.conclusion === 'FAILURE' || c.conclusion === 'CANCELLED')
+          .filter((c) => isFailureConclusion(c.conclusion))
           .map((c) => c.name || c.context || 'unknown')
       ).size;
       ciFailCount = Math.max(existing?.ciFailCount ?? 0, currentUniqueFailures);
@@ -314,7 +323,7 @@ class GitHubPoller {
               });
             } else if (ciStatus === 'failing') {
               const failedCheckNames = checks
-                .filter((c) => c.conclusion === 'FAILURE')
+                .filter((c) => isFailureConclusion(c.conclusion))
                 .map((c) => c.name || c.context || 'unknown')
                 .join(', ');
               msg = resolveMessage('ci_red', {
@@ -520,7 +529,7 @@ class GitHubPoller {
         c.conclusion === 'SKIPPED'
     );
     const anyFailed = checks.some(
-      (c) => c.conclusion === 'FAILURE' || c.conclusion === 'CANCELLED'
+      (c) => isFailureConclusion(c.conclusion)
     );
     const anyPending = checks.some(
       (c) => !c.conclusion || c.conclusion === 'PENDING' || c.status === 'IN_PROGRESS'
