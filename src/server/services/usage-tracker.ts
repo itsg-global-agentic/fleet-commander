@@ -47,7 +47,7 @@ export function processUsageSnapshot(data: {
 // Parsed usage result
 // ---------------------------------------------------------------------------
 
-export interface ParsedUsage {
+interface ParsedUsage {
   daily: number;
   weekly: number;
   sonnet: number;
