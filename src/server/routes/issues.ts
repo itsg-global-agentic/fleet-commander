@@ -52,6 +52,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       const project = db.getProject(entry.projectId);
       const cloned = structuredClone(entry.tree);
       fetcher.enrichWithTeamInfo(cloned, entry.projectId);
+      fetcher.enrichWithDependencies(cloned, entry.projectId);
       return {
         projectId: entry.projectId,
         projectName: project?.name ?? `Project #${entry.projectId}`,
@@ -103,6 +104,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       // Deep clone to avoid mutating the cache when enriching
       const cloned = structuredClone(issues);
       fetcher.enrichWithTeamInfo(cloned, projectId);
+      fetcher.enrichWithDependencies(cloned, projectId);
 
       return {
         projectId,

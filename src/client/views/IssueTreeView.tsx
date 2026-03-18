@@ -203,7 +203,9 @@ export function IssueTreeView() {
       const message = err instanceof Error ? err.message : String(err);
 
       // Check for 409 dependency block — show confirmation dialog
-      const is409 = message.includes('Blocked by Dependencies') || message.includes('blocked by');
+      // Use status code from ApiError (has a .status property) rather than fragile string matching
+      const errorStatus = (err as { status?: number }).status;
+      const is409 = errorStatus === 409;
       if (is409 && resolvedProjectId) {
         // Remove from launching state
         setLaunchingIssues(prev => {

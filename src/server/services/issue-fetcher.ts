@@ -97,6 +97,77 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String) {
 `;
 
 // ---------------------------------------------------------------------------
+// Exported utility: parse dependency patterns from issue body text
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse issue body text for dependency patterns like:
+ *   - "Blocked by #123"
+ *   - "Depends on owner/repo#456"
+ *   - "blocked by https://github.com/owner/repo/issues/789"
+ *   - "requires #42"
+ *
+ * Returns DependencyRef[] with state defaulting to 'open'.
+ * Callers should resolve actual state via GitHub API afterward.
+ */
+export function parseDependenciesFromBody(body: string, defaultOwner: string, defaultRepo: string): DependencyRef[] {
+  const deps: DependencyRef[] = [];
+  // Match "blocked by", "depends on", "requires" followed by issue references
+  const patterns = [
+    // "blocked by #123" or "depends on #456"
+    /(?:blocked\s+by|depends\s+on|requires)\s+#(\d+)/gi,
+    // "blocked by owner/repo#123"
+    /(?:blocked\s+by|depends\s+on|requires)\s+([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)#(\d+)/gi,
+    // "blocked by https://github.com/owner/repo/issues/123"
+    /(?:blocked\s+by|depends\s+on|requires)\s+https?:\/\/github\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)\/issues\/(\d+)/gi,
+  ];
+
+  // Simple #N references
+  for (const match of body.matchAll(patterns[0])) {
+    const num = parseInt(match[1], 10);
+    if (!isNaN(num) && num > 0) {
+      deps.push({
+        number: num,
+        owner: defaultOwner,
+        repo: defaultRepo,
+        state: 'open',
+        title: '',
+      });
+    }
+  }
+
+  // owner/repo#N references
+  for (const match of body.matchAll(patterns[1])) {
+    const num = parseInt(match[3], 10);
+    if (!isNaN(num) && num > 0) {
+      deps.push({
+        number: num,
+        owner: match[1],
+        repo: match[2],
+        state: 'open',
+        title: '',
+      });
+    }
+  }
+
+  // Full URL references
+  for (const match of body.matchAll(patterns[2])) {
+    const num = parseInt(match[3], 10);
+    if (!isNaN(num) && num > 0) {
+      deps.push({
+        number: num,
+        owner: match[1],
+        repo: match[2],
+        state: 'open',
+        title: '',
+      });
+    }
+  }
+
+  return deps;
+}
+
+// ---------------------------------------------------------------------------
 // Issue Fetcher class
 // ---------------------------------------------------------------------------
 
@@ -436,6 +507,42 @@ export class IssueFetcher {
     return issues;
   }
 
+  /**
+   * Enrich issue nodes with dependency info from GitHub.
+   * Only enriches leaf nodes (no children) since those are the launchable issues.
+   * Modifies nodes in place and returns the same array.
+   */
+  enrichWithDependencies(issues: IssueNode[], projectId: number): IssueNode[] {
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project?.githubRepo) return issues;
+
+    const [owner, repo] = this.parseRepo(project.githubRepo);
+
+    const enrichNode = (node: IssueNode): void => {
+      // Only enrich leaf nodes (launchable issues)
+      if (node.children.length === 0) {
+        try {
+          const deps = this.fetchDependencies(owner, repo, node.number);
+          if (deps && deps.blockedBy.length > 0) {
+            node.dependencies = deps;
+          }
+        } catch {
+          // Silently skip — dependency info is optional
+        }
+      }
+      for (const child of node.children) {
+        enrichNode(child);
+      }
+    };
+
+    for (const issue of issues) {
+      enrichNode(issue);
+    }
+
+    return issues;
+  }
+
   // -------------------------------------------------------------------------
   // Dependency fetching (GitHub Issue Dependencies API)
   // -------------------------------------------------------------------------
@@ -449,34 +556,9 @@ export class IssueFetcher {
    * fields. Returns null if the API call fails (e.g. gh CLI too old).
    */
   fetchDependencies(owner: string, repo: string, issueNumber: number): IssueDependencyInfo | null {
-    try {
-      const output = execSync(
-        `gh api "/repos/${owner}/${repo}/issues/${issueNumber}/sub_issues?per_page=100" --api-version 2026-03-10`,
-        {
-          encoding: 'utf-8',
-          timeout: 15_000,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }
-      );
-
-      // The API may return blocked_by data in timeline events.
-      // As a fallback, we also parse the issue body for "blocked by" references.
-      // For the sub_issues endpoint, we parse the response to find blockers.
-      let items: Array<{ number: number; state: string; title: string; repository: { owner: { login: string }; name: string } }>;
-      try {
-        items = JSON.parse(output);
-      } catch {
-        return this.buildEmptyDependencyInfo(issueNumber);
-      }
-
-      // If the API returned an array, treat it as sub-issues (not blockers).
-      // The actual "blocked by" relationship uses timeline events.
-      // Fall back to timeline-based approach.
-      return this.fetchDependenciesFromTimeline(owner, repo, issueNumber);
-    } catch {
-      // gh CLI error or API not available — try timeline approach
-      return this.fetchDependenciesFromTimeline(owner, repo, issueNumber);
-    }
+    // Go directly to the GraphQL/timeline approach for dependency detection.
+    // The REST sub_issues endpoint returns child issues, not blockers.
+    return this.fetchDependenciesFromTimeline(owner, repo, issueNumber);
   }
 
   /**
@@ -490,11 +572,14 @@ export class IssueFetcher {
     issueNumber: number
   ): IssueDependencyInfo | null {
     try {
-      // Use the GraphQL API to get the issue body for dependency parsing
-      const query = `query { repository(owner: "${owner}", name: "${repo}") { issue(number: ${issueNumber}) { body trackedInIssues(first: 50) { nodes { number title state repository { owner { login } name } } } trackedByIssues: trackedInIssues(first: 0) { totalCount } } } }`;
+      // Use the GraphQL API to get the issue body + tracked-in issues for dependency parsing
+      const query = `query($owner: String!, $repo: String!, $issueNumber: Int!) { repository(owner: $owner, name: $repo) { issue(number: $issueNumber) { body trackedInIssues(first: 50) { nodes { number title state repository { owner { login } name } } } } } }`;
 
       const compactQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-      const requestBody = JSON.stringify({ query: compactQuery });
+      const requestBody = JSON.stringify({
+        query: compactQuery,
+        variables: { owner, repo, issueNumber },
+      });
 
       const output = execSync('gh api graphql --input -', {
         encoding: 'utf-8',
@@ -544,7 +629,9 @@ export class IssueFetcher {
       // Parse body for "blocked by" or "depends on" patterns
       if (issue.body) {
         const bodyDeps = this.parseDependenciesFromBody(issue.body, owner, repo);
-        for (const dep of bodyDeps) {
+        // Resolve the actual state for body-parsed deps (they default to 'open')
+        const resolvedBodyDeps = this.resolveIssueStates(bodyDeps);
+        for (const dep of resolvedBodyDeps) {
           // Avoid duplicates from tracked issues
           const exists = blockedBy.some(
             (b) => b.number === dep.number && b.owner === dep.owner && b.repo === dep.repo
@@ -573,62 +660,55 @@ export class IssueFetcher {
   }
 
   /**
-   * Parse issue body text for dependency patterns like:
-   *   - "Blocked by #123"
-   *   - "Depends on owner/repo#456"
-   *   - "blocked by https://github.com/owner/repo/issues/789"
+   * Parse issue body text for dependency patterns.
+   * Delegates to the exported standalone function.
    */
   private parseDependenciesFromBody(body: string, defaultOwner: string, defaultRepo: string): DependencyRef[] {
-    const deps: DependencyRef[] = [];
-    // Match "blocked by", "depends on", "requires" followed by issue references
-    const patterns = [
-      // "blocked by #123" or "depends on #456"
-      /(?:blocked\s+by|depends\s+on|requires)\s+#(\d+)/gi,
-      // "blocked by owner/repo#123"
-      /(?:blocked\s+by|depends\s+on|requires)\s+([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)#(\d+)/gi,
-      // "blocked by https://github.com/owner/repo/issues/123"
-      /(?:blocked\s+by|depends\s+on|requires)\s+https?:\/\/github\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)\/issues\/(\d+)/gi,
-    ];
+    return parseDependenciesFromBody(body, defaultOwner, defaultRepo);
+  }
 
-    // Simple #N references
-    for (const match of body.matchAll(patterns[0])) {
-      const num = parseInt(match[1], 10);
-      if (!isNaN(num) && num > 0) {
-        deps.push({
-          number: num,
-          owner: defaultOwner,
-          repo: defaultRepo,
-          state: 'open', // Will be resolved later if needed
-          title: '',
-        });
+  /**
+   * Resolve the actual open/closed state for a list of dependency refs.
+   * Queries GitHub via `gh api` for each unique owner/repo + issue number.
+   * Falls back to 'open' if the query fails (conservative: assume still blocking).
+   */
+  private resolveIssueStates(deps: DependencyRef[]): DependencyRef[] {
+    if (deps.length === 0) return deps;
+
+    // Group deps by owner/repo so we can batch queries
+    const grouped = new Map<string, DependencyRef[]>();
+    for (const dep of deps) {
+      const key = `${dep.owner}/${dep.repo}`;
+      const existing = grouped.get(key);
+      if (existing) {
+        existing.push(dep);
+      } else {
+        grouped.set(key, [dep]);
       }
     }
 
-    // owner/repo#N references
-    for (const match of body.matchAll(patterns[1])) {
-      const num = parseInt(match[3], 10);
-      if (!isNaN(num) && num > 0) {
-        deps.push({
-          number: num,
-          owner: match[1],
-          repo: match[2],
-          state: 'open',
-          title: '',
-        });
-      }
-    }
-
-    // Full URL references
-    for (const match of body.matchAll(patterns[2])) {
-      const num = parseInt(match[3], 10);
-      if (!isNaN(num) && num > 0) {
-        deps.push({
-          number: num,
-          owner: match[1],
-          repo: match[2],
-          state: 'open',
-          title: '',
-        });
+    for (const [, repoDeps] of grouped) {
+      for (const dep of repoDeps) {
+        try {
+          const output = execSync(
+            `gh api "/repos/${dep.owner}/${dep.repo}/issues/${dep.number}" --jq ".state,.title"`,
+            {
+              encoding: 'utf-8',
+              timeout: 10_000,
+              stdio: ['pipe', 'pipe', 'pipe'],
+            }
+          );
+          const lines = output.trim().split('\n');
+          if (lines.length >= 1) {
+            const state = lines[0].trim().toLowerCase();
+            dep.state = state === 'closed' ? 'closed' : 'open';
+          }
+          if (lines.length >= 2 && lines[1]) {
+            dep.title = lines[1].trim();
+          }
+        } catch {
+          // gh CLI error — leave state as default 'open' (conservative)
+        }
       }
     }
 
