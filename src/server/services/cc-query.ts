@@ -9,6 +9,7 @@
 import { spawn } from 'child_process';
 import config from '../config.js';
 import { resolveClaudePath } from '../utils/resolve-claude-path.js';
+import { findGitBash } from '../utils/find-git-bash.js';
 import type {
   CCQueryResult,
   PrioritizedIssue,
@@ -100,9 +101,16 @@ export class CCQueryService {
         '--json-schema', JSON.stringify(opts.jsonSchema),
       ];
 
+      const spawnEnv: Record<string, string> = { ...process.env as Record<string, string> };
+      const gitBash = findGitBash();
+      if (gitBash) {
+        spawnEnv['CLAUDE_CODE_GIT_BASH_PATH'] = gitBash;
+      }
+
       const child = spawn(claudePath, args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
+        env: spawnEnv,
       });
 
       let stdout = '';
