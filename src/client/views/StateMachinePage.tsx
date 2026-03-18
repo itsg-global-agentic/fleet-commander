@@ -138,6 +138,174 @@ const TRIGGER_LABELS: Record<string, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Transition preprocessing pipeline
+// ---------------------------------------------------------------------------
+
+interface PreprocessResult {
+  /** Cleaned transitions ready for chart rendering */
+  transitions: Transition[];
+  /** All transitions (expanded, deduped) for the table — "ALL" patterns show from:'*' */
+  tableTransitions: Transition[];
+}
+
+/**
+ * Preprocesses raw transitions: expand wildcards, deduplicate, re-collapse ALL patterns.
+ */
+function preprocessTransitions(
+  states: StateNode[],
+  rawTransitions: Transition[],
+): PreprocessResult {
+  const stateIds = states.map((s) => s.id);
+
+  // Step 1: Expand wildcards — replace from:'*' with one transition per state
+  const expanded: Transition[] = rawTransitions.flatMap((t) => {
+    if (t.from === '*') {
+      return stateIds.map((s) => ({
+        ...t,
+        from: s as Transition['from'],
+        id: `${t.id}-${s}`,
+      }));
+    }
+    return [t];
+  });
+
+  // Step 2: Deduplicate by (from + trigger + to).
+  // Keep the more specific one (original definition) over wildcard-expanded.
+  const seen = new Map<string, Transition>();
+  for (const t of expanded) {
+    const key = `${t.from}|${t.trigger}|${t.to}`;
+    const existing = seen.get(key);
+    if (!existing) {
+      seen.set(key, t);
+    } else {
+      // Prefer the specific (non-wildcard-expanded) transition — its id won't contain a dash suffix from expansion
+      const existingIsExpanded = existing.id.includes(`-${existing.from}`);
+      const currentIsExpanded = t.id.includes(`-${t.from}`);
+      if (existingIsExpanded && !currentIsExpanded) {
+        seen.set(key, t);
+      }
+    }
+  }
+  const unique = [...seen.values()];
+
+  // Step 3: Detect "ALL" patterns — if a (trigger, to) pair has transitions from
+  // every state, collapse back into a single from:'*' transition.
+  const groupKey = (t: Transition) => `${t.trigger}|${t.to}`;
+  const groups = new Map<string, Transition[]>();
+  for (const t of unique) {
+    const k = groupKey(t);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(t);
+  }
+
+  const collapsed: Transition[] = [];
+  for (const [, group] of groups) {
+    const fromStates = new Set(group.map((t) => t.from));
+    const coversAll = stateIds.every((s) => fromStates.has(s));
+    if (coversAll && group.length >= stateIds.length) {
+      // Use the first transition as template, restore from:'*'
+      const representative = group[0];
+      // Find the original wildcard transition id (strip the state suffix)
+      const baseId = representative.id.replace(/-[^-]+$/, '');
+      collapsed.push({
+        ...representative,
+        from: '*',
+        id: baseId,
+      });
+    } else {
+      collapsed.push(...group);
+    }
+  }
+
+  // Build table transitions: same as collapsed but sorted for readability
+  const tableTransitions = [...collapsed].sort((a, b) => {
+    // "ALL" transitions first, then alphabetical by from
+    if (a.from === '*' && b.from !== '*') return -1;
+    if (a.from !== '*' && b.from === '*') return 1;
+    if (a.from < b.from) return -1;
+    if (a.from > b.from) return 1;
+    if (a.to < b.to) return -1;
+    if (a.to > b.to) return 1;
+    return 0;
+  });
+
+  return { transitions: collapsed, tableTransitions };
+}
+
+// ---------------------------------------------------------------------------
+// Transition validation
+// ---------------------------------------------------------------------------
+
+interface ValidationWarning {
+  type: 'duplicate' | 'orphan' | 'unreachable';
+  message: string;
+}
+
+function validateTransitions(
+  states: StateNode[],
+  rawTransitions: Transition[],
+): ValidationWarning[] {
+  const warnings: ValidationWarning[] = [];
+  const stateIds = states.map((s) => s.id);
+
+  // Check for duplicate transitions (same from+to+trigger in the raw data)
+  const dupCheck = new Map<string, Transition[]>();
+  for (const t of rawTransitions) {
+    // Skip wildcards for dup check — they are by design broad
+    if (t.from === '*') continue;
+    const key = `${t.from}|${t.to}|${t.trigger}`;
+    if (!dupCheck.has(key)) dupCheck.set(key, []);
+    dupCheck.get(key)!.push(t);
+  }
+  for (const [, group] of dupCheck) {
+    if (group.length > 1) {
+      const ids = group.map((t) => t.id).join(', ');
+      warnings.push({
+        type: 'duplicate',
+        message: `Duplicate transition: ${group[0].from} -> ${group[0].to} (${group[0].trigger}) defined ${group.length} times [${ids}]`,
+      });
+    }
+  }
+
+  // Collect all froms and tos (expand wildcards for this check)
+  const hasOutgoing = new Set<string>();
+  const hasIncoming = new Set<string>();
+  for (const t of rawTransitions) {
+    if (t.from === '*') {
+      // Wildcard means every state has this outgoing
+      stateIds.forEach((s) => hasOutgoing.add(s));
+    } else {
+      hasOutgoing.add(t.from);
+    }
+    hasIncoming.add(t.to);
+  }
+
+  // Orphan states: no outgoing transitions (terminal states like 'done' are expected)
+  const terminalStates = new Set(['done', 'failed']);
+  for (const s of stateIds) {
+    if (!hasOutgoing.has(s) && !terminalStates.has(s)) {
+      warnings.push({
+        type: 'orphan',
+        message: `Orphan state: "${s}" has no outgoing transitions`,
+      });
+    }
+  }
+
+  // Unreachable states: no incoming transitions (except the initial state 'queued')
+  const initialStates = new Set(['queued']);
+  for (const s of stateIds) {
+    if (!hasIncoming.has(s) && !initialStates.has(s)) {
+      warnings.push({
+        type: 'unreachable',
+        message: `Unreachable state: "${s}" has no incoming transitions`,
+      });
+    }
+  }
+
+  return warnings;
+}
+
+// ---------------------------------------------------------------------------
 // Dagre layout computation
 // ---------------------------------------------------------------------------
 
@@ -498,11 +666,26 @@ export function StateMachinePage() {
     fetchTemplates();
   }, [fetchStateMachine, fetchTemplates]);
 
-  // Compute layout
-  const layout = useMemo<LayoutResult | null>(() => {
+  // Preprocess transitions: expand wildcards, dedup, re-collapse ALL patterns
+  const preprocessed = useMemo(() => {
     if (!smData) return null;
-    return computeLayout(smData.states, smData.transitions);
+    return preprocessTransitions(smData.states, smData.transitions);
   }, [smData]);
+
+  // Validate raw transitions for warnings
+  const validationWarnings = useMemo(() => {
+    if (!smData) return [];
+    return validateTransitions(smData.states, smData.transitions);
+  }, [smData]);
+
+  // Compute layout using preprocessed (deduplicated) transitions
+  const layout = useMemo<LayoutResult | null>(() => {
+    if (!smData || !preprocessed) return null;
+    return computeLayout(smData.states, preprocessed.transitions);
+  }, [smData, preprocessed]);
+
+  // Transition table collapsed state
+  const [tableExpanded, setTableExpanded] = useState(false);
 
   // Build state color map (includes the "All" pseudo-node)
   const stateColorMap = useMemo<Record<string, string>>(() => {
@@ -791,6 +974,107 @@ export function StateMachinePage() {
                 />
               )}
             </div>
+
+            {/* Collapsible transition table */}
+            {preprocessed && (
+              <div className="px-6 py-3 border-t border-dark-border shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setTableExpanded(!tableExpanded)}
+                  className="flex items-center gap-2 text-sm font-medium text-dark-muted hover:text-dark-text transition-colors"
+                >
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={`transition-transform ${tableExpanded ? 'rotate-90' : ''}`}
+                  >
+                    <path d="m9 18 6-6-6-6" />
+                  </svg>
+                  Transition Table ({preprocessed.tableTransitions.length} transitions)
+                </button>
+
+                {tableExpanded && (
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="w-full text-xs border-collapse">
+                      <thead>
+                        <tr className="text-left text-dark-muted border-b border-[#30363D]">
+                          <th className="py-2 pr-4 font-medium">From</th>
+                          <th className="py-2 pr-4 font-medium">To</th>
+                          <th className="py-2 pr-4 font-medium">Trigger</th>
+                          <th className="py-2 font-medium">Description</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {preprocessed.tableTransitions.map((t) => (
+                          <tr key={t.id} className="border-b border-[#30363D]/50 hover:bg-[#161B22]">
+                            <td className="py-1.5 pr-4">
+                              <span
+                                className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                                style={{
+                                  backgroundColor: `${stateColorMap[t.from] || '#8B949E'}20`,
+                                  color: stateColorMap[t.from] || '#8B949E',
+                                  border: `1px solid ${stateColorMap[t.from] || '#8B949E'}40`,
+                                }}
+                              >
+                                {t.from === '*' ? 'ALL' : t.from}
+                              </span>
+                            </td>
+                            <td className="py-1.5 pr-4">
+                              <span
+                                className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                                style={{
+                                  backgroundColor: `${stateColorMap[t.to] || '#8B949E'}20`,
+                                  color: stateColorMap[t.to] || '#8B949E',
+                                  border: `1px solid ${stateColorMap[t.to] || '#8B949E'}40`,
+                                }}
+                              >
+                                {t.to}
+                              </span>
+                            </td>
+                            <td className="py-1.5 pr-4">
+                              <div className="flex items-center gap-1.5">
+                                <TriggerIcon trigger={t.trigger} size={12} className="text-[#8B949E]" />
+                                <span className="text-dark-text">{t.triggerLabel}</span>
+                              </div>
+                            </td>
+                            <td className="py-1.5 text-dark-muted">{t.description}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Validation warnings */}
+            {validationWarnings.length > 0 && (
+              <div className="px-6 py-3 border-t border-dark-border shrink-0">
+                <h3 className="text-sm font-medium text-[#D29922] mb-2">Validation Warnings</h3>
+                <ul className="space-y-1">
+                  {validationWarnings.map((w, idx) => (
+                    <li key={idx} className="flex items-start gap-2 text-xs">
+                      <span className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                        w.type === 'duplicate'
+                          ? 'bg-[#F8514920] text-[#F85149]'
+                          : w.type === 'orphan'
+                            ? 'bg-[#D2992220] text-[#D29922]'
+                            : 'bg-[#58A6FF20] text-[#58A6FF]'
+                      }`}>
+                        {w.type}
+                      </span>
+                      <span className="text-dark-muted">{w.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
         ) : (
           /* PM Messages tab — full height message cards */
