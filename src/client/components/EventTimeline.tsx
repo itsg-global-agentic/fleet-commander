@@ -11,7 +11,6 @@ import {
   SettingsIcon,
   XCircleIcon,
   RefreshCwIcon,
-  DollarSignIcon,
   CircleDotIcon,
 } from './Icons';
 
@@ -38,11 +37,9 @@ const EVENT_ICONS: Record<string, React.ReactNode> = {
   SubagentStart: <ArrowRightIcon size={14} />,
   SubagentStop: <ArrowLeftIcon size={14} />,
   Notification: <AlertTriangleIcon size={14} />,
-  PostToolUse: <SettingsIcon size={14} />,
-  PostToolUseFailure: <XCircleIcon size={14} />,
-  PreCompact: <RefreshCwIcon size={14} />,
+  tool_error: <XCircleIcon size={14} />,
+  pre_compact: <RefreshCwIcon size={14} />,
   ToolUse: <SettingsIcon size={14} />,
-  CostUpdate: <DollarSignIcon size={14} />,
 };
 
 function getEventIcon(eventType: string): React.ReactNode {

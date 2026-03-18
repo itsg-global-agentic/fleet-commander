@@ -285,6 +285,7 @@ export function IssueTreeView() {
             placeholder="Search issues... (#number or title)"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            aria-label="Search issues"
             className="w-full px-3 py-1 text-xs bg-[#0D1117] border border-[#30363D] rounded text-[#E6EDF3] placeholder-[#8B949E] focus:outline-none focus:border-[#58A6FF]"
           />
           {search && (
