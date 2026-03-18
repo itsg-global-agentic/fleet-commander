@@ -26,6 +26,7 @@ import type {
   TeamTransition,
   TeamMember,
   AgentMessage,
+  MessageEdge,
 } from '../shared/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1165,19 +1166,36 @@ export class FleetDatabase {
     return rows.map((r) => this.mapAgentMessageRow(r));
   }
 
-  getAgentMessageSummary(teamId: number): Array<{ sender: string; recipient: string; count: number }> {
+  getAgentMessageSummary(teamId: number): MessageEdge[] {
     const sql = `
-      SELECT sender, recipient, COUNT(*) AS count
-      FROM agent_messages
+      SELECT
+        sender,
+        recipient,
+        COUNT(*) AS count,
+        (
+          SELECT summary FROM agent_messages AS am2
+          WHERE am2.team_id = am.team_id
+            AND am2.sender = am.sender
+            AND am2.recipient = am.recipient
+          ORDER BY am2.created_at DESC, am2.id DESC
+          LIMIT 1
+        ) AS last_summary
+      FROM agent_messages AS am
       WHERE team_id = ?
       GROUP BY sender, recipient
       ORDER BY count DESC
     `;
-    const rows = this.db.prepare(sql).all(teamId) as Array<{ sender: string; recipient: string; count: number }>;
+    const rows = this.db.prepare(sql).all(teamId) as Array<{
+      sender: string;
+      recipient: string;
+      count: number;
+      last_summary: string | null;
+    }>;
     return rows.map((r) => ({
       sender: r.sender,
       recipient: r.recipient,
       count: r.count,
+      lastSummary: r.last_summary ?? null,
     }));
   }
 

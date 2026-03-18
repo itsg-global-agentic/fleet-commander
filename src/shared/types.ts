@@ -306,6 +306,14 @@ export interface AgentMessage {
   createdAt: string;
 }
 
+/** Aggregated edge for the communication graph (sender -> recipient) */
+export interface MessageEdge {
+  sender: string;
+  recipient: string;
+  count: number;
+  lastSummary: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard View (v_team_dashboard)
 // ---------------------------------------------------------------------------

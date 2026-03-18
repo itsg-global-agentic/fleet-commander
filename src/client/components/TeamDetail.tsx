@@ -6,7 +6,8 @@ import { CIChecks } from './CIChecks';
 import { EventTimeline } from './EventTimeline';
 import { TeamOutput } from './TeamOutput';
 import { CommandInput } from './CommandInput';
-import type { TeamDetail as TeamDetailType, TeamTransition, TeamMember } from '../../shared/types';
+import { CommGraph } from './CommGraph';
+import type { TeamDetail as TeamDetailType, TeamTransition, TeamMember, MessageEdge } from '../../shared/types';
 import { STATUS_COLORS } from '../utils/constants';
 
 // ---------------------------------------------------------------------------
@@ -68,6 +69,8 @@ export function TeamDetail() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [transitions, setTransitions] = useState<TeamTransition[]>([]);
   const [roster, setRoster] = useState<TeamMember[]>([]);
+  const [activeTab, setActiveTab] = useState<'activity' | 'communication'>('activity');
+  const [messageEdges, setMessageEdges] = useState<MessageEdge[]>([]);
   const templateCacheRef = useRef<{ data: Array<{ id: string; template: string; enabled: boolean }>; fetchedAt: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -133,6 +136,38 @@ export function TeamDetail() {
       cancelled = true;
     };
   }, [selectedTeamId, refreshKey, api]);
+
+  // Fetch message edges when selectedTeamId changes or detail refreshes
+  useEffect(() => {
+    if (selectedTeamId == null) {
+      setMessageEdges([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function fetchEdges() {
+      try {
+        const data = await api.get<MessageEdge[]>(`teams/${selectedTeamId}/messages/summary`);
+        if (!cancelled) {
+          setMessageEdges(data);
+        }
+      } catch {
+        // Non-critical — comm graph is informational
+      }
+    }
+
+    fetchEdges();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTeamId, refreshKey, api]);
+
+  // Reset active tab when team changes
+  useEffect(() => {
+    setActiveTab('activity');
+  }, [selectedTeamId]);
 
   // Fetch team detail when selectedTeamId changes
   useEffect(() => {
@@ -630,27 +665,62 @@ export function TeamDetail() {
                 </div>
               </div>
 
-              {/* MIDDLE: Two columns — Events | Session Log (stacks on narrow screens) */}
-              <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-4 px-5 py-3">
-                {/* Left: Events */}
-                <div className="flex-1 min-w-0 flex flex-col min-h-[200px] md:min-h-0">
-                  <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1 shrink-0">
-                    Recent Events
-                  </h4>
-                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-                    <EventTimeline teamId={detail.id} refreshKey={refreshKey} />
-                  </div>
+              {/* MIDDLE: Tabbed content area */}
+              <div className="flex-1 min-h-0 flex flex-col">
+                {/* Tab bar */}
+                <div className="shrink-0 flex items-center gap-0 px-5 border-b border-dark-border">
+                  <button
+                    onClick={() => setActiveTab('activity')}
+                    className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                      activeTab === 'activity'
+                        ? 'border-dark-accent text-dark-text'
+                        : 'border-transparent text-dark-muted hover:text-dark-text'
+                    }`}
+                  >
+                    Activity
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('communication')}
+                    className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                      activeTab === 'communication'
+                        ? 'border-dark-accent text-dark-text'
+                        : 'border-transparent text-dark-muted hover:text-dark-text'
+                    }`}
+                  >
+                    Communication
+                  </button>
                 </div>
 
-                {/* Right: Session Log */}
-                <div className="flex-1 min-w-0 flex flex-col min-h-[200px] md:min-h-0">
-                  <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1 shrink-0">
-                    Session Log
-                  </h4>
-                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-                    <TeamOutput teamId={detail.id} teamStatus={detail.status} />
+                {/* Tab content */}
+                {activeTab === 'activity' && (
+                  <div className="flex-1 min-h-0 flex flex-col md:flex-row gap-4 px-5 py-3">
+                    {/* Left: Events */}
+                    <div className="flex-1 min-w-0 flex flex-col min-h-[200px] md:min-h-0">
+                      <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1 shrink-0">
+                        Recent Events
+                      </h4>
+                      <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                        <EventTimeline teamId={detail.id} refreshKey={refreshKey} />
+                      </div>
+                    </div>
+
+                    {/* Right: Session Log */}
+                    <div className="flex-1 min-w-0 flex flex-col min-h-[200px] md:min-h-0">
+                      <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1 shrink-0">
+                        Session Log
+                      </h4>
+                      <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                        <TeamOutput teamId={detail.id} teamStatus={detail.status} />
+                      </div>
+                    </div>
                   </div>
-                </div>
+                )}
+
+                {activeTab === 'communication' && (
+                  <div className="flex-1 min-h-0 px-5 py-3">
+                    <CommGraph edges={messageEdges} agents={roster} />
+                  </div>
+                )}
               </div>
 
               {/* BOTTOM: Command + Actions footer */}
