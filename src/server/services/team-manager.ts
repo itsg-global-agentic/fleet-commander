@@ -424,6 +424,13 @@ export class TeamManager {
       throw new Error(`Team ${teamId} not found`);
     }
 
+    // Cancel any pending merge-shutdown timer for this team
+    const pendingTimer = this.shutdownTimers.get(teamId);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      this.shutdownTimers.delete(teamId);
+    }
+
     // Queued teams have no process — just cancel them directly
     if (team.status === 'queued') {
       db.insertTransition({
