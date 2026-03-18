@@ -391,7 +391,7 @@ class GitHubPoller {
           trigger: 'poller',
           reason: `PR #${prNumber} merged`,
         });
-        db.updateTeam(teamId, { status: 'done', phase: 'done' });
+        db.updateTeam(teamId, { status: 'done', phase: 'done', stoppedAt: new Date().toISOString() });
         sseBroker.broadcast(
           'team_status_changed',
           {
