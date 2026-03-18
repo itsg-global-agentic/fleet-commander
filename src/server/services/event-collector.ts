@@ -16,7 +16,7 @@
  */
 
 import type { TeamStatus } from '../../shared/types.js';
-import type { SSEEventType } from './sse-broker.js';
+import type { SSEEventType, SSEEventPayloads } from './sse-broker.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -60,7 +60,7 @@ export interface EventCollectorDb {
 
 /** SSE broker interface for broadcasting events */
 export interface SseBroker {
-  broadcast(event: SSEEventType, data: unknown, teamId?: number): void;
+  broadcast<T extends SSEEventType>(event: T, data: SSEEventPayloads[T], teamId?: number): void;
 }
 
 // ---------------------------------------------------------------------------

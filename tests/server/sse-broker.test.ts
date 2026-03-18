@@ -112,7 +112,7 @@ describe('Broadcast to all clients', () => {
     const reply = createMockReply();
     sseBroker.addClient(reply as any);
 
-    sseBroker.broadcast('team_event', { team_id: 1 });
+    sseBroker.broadcast('team_event', { team_id: 1, event_type: 'ToolUse', event_id: 1 });
 
     const writtenData = reply.raw.write.mock.calls[0][0] as string;
     expect(writtenData).toContain('event: team_event\n');
@@ -166,7 +166,7 @@ describe('Filtered broadcast (team filter)', () => {
     const reply = createMockReply();
     sseBroker.addClient(reply as any, [1, 2]);
 
-    sseBroker.broadcast('team_event', { team_id: 1 }, 1);
+    sseBroker.broadcast('team_event', { team_id: 1, event_type: 'ToolUse', event_id: 1 }, 1);
 
     expect(reply.raw.write).toHaveBeenCalledTimes(1);
   });
@@ -175,7 +175,7 @@ describe('Filtered broadcast (team filter)', () => {
     const reply = createMockReply();
     sseBroker.addClient(reply as any, [3, 4]);
 
-    sseBroker.broadcast('team_event', { team_id: 1 }, 1);
+    sseBroker.broadcast('team_event', { team_id: 1, event_type: 'ToolUse', event_id: 1 }, 1);
 
     expect(reply.raw.write).not.toHaveBeenCalled();
   });
@@ -184,7 +184,7 @@ describe('Filtered broadcast (team filter)', () => {
     const reply = createMockReply();
     sseBroker.addClient(reply as any); // no filter = all teams
 
-    sseBroker.broadcast('team_event', { team_id: 1 }, 1);
+    sseBroker.broadcast('team_event', { team_id: 1, event_type: 'ToolUse', event_id: 1 }, 1);
 
     expect(reply.raw.write).toHaveBeenCalledTimes(1);
   });
@@ -214,7 +214,7 @@ describe('Filtered broadcast (team filter)', () => {
     sseBroker.addClient(replyTeam2 as any, [2]);
     sseBroker.addClient(replyBoth as any, [1, 2]);
 
-    sseBroker.broadcast('team_event', { team_id: 1 }, 1);
+    sseBroker.broadcast('team_event', { team_id: 1, event_type: 'ToolUse', event_id: 1 }, 1);
 
     expect(replyAll.raw.write).toHaveBeenCalledTimes(1);    // no filter -> receives
     expect(replyTeam1.raw.write).toHaveBeenCalledTimes(1);  // [1] -> receives
@@ -226,7 +226,7 @@ describe('Filtered broadcast (team filter)', () => {
     const reply = createMockReply();
     sseBroker.addClient(reply as any, []); // empty = all teams
 
-    sseBroker.broadcast('team_event', { team_id: 999 }, 999);
+    sseBroker.broadcast('team_event', { team_id: 999, event_type: 'ToolUse', event_id: 1 }, 999);
 
     expect(reply.raw.write).toHaveBeenCalledTimes(1);
   });

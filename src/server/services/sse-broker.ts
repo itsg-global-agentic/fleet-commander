@@ -34,7 +34,7 @@ export type SSEEventType =
 
 /** Payload shapes for each event type */
 export interface SSEEventPayloads {
-  team_status_changed: { team_id: number; status: string; previous_status: string; phase?: string; reason?: string; idle_minutes?: number };
+  team_status_changed: { team_id: number; status: string; previous_status: string; phase?: string; previous_phase?: string; reason?: string; idle_minutes?: number };
   team_event: { team_id: number; event_type: string; event_id: number; session_id?: string | null; agent_name?: string | null; tool_name?: string | null; timestamp?: string };
   team_output: { team_id: number; event: StreamEvent };
   pr_updated: { pr_number: number; team_id: number; state?: string; ci_status?: string; merge_status?: string; auto_merge?: boolean; ci_fail_count?: number; action?: string };
@@ -140,7 +140,7 @@ class SSEBroker {
    *                   either have no filter OR include this team will receive
    *                   the event.
    */
-  broadcast(eventType: SSEEventType, data: unknown, teamId?: number): void {
+  broadcast<T extends SSEEventType>(eventType: T, data: SSEEventPayloads[T], teamId?: number): void {
     // Include the event type in the data payload so clients using
     // EventSource.onmessage (unnamed events) can also determine the type.
     const enrichedData = typeof data === 'object' && data !== null

@@ -852,7 +852,7 @@ const teamsRoutes: FastifyPluginCallback = (
             previous_status: team.status,
             phase,
             previous_phase: previousPhase,
-            reason: reason ?? null,
+            reason: reason ?? undefined,
           },
           teamId,
         );
