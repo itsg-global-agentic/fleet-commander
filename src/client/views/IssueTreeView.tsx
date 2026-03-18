@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import React from 'react';
 import { useApi } from '../hooks/useApi';
 import { TreeNode, type IssueNode } from '../components/TreeNode';
@@ -62,6 +62,18 @@ export function IssueTreeView() {
   const [groups, setGroups] = useState<ProjectIssueGroup[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  // Track pending timeouts so we can clear them on unmount
+  const pendingTimeouts = useRef(new Set<ReturnType<typeof setTimeout>>());
+
+  useEffect(() => {
+    return () => {
+      for (const id of pendingTimeouts.current) {
+        clearTimeout(id);
+      }
+      pendingTimeouts.current.clear();
+    };
+  }, []);
 
   // Fetch the project list so we can auto-resolve a project for launches
   // when only one project exists.
@@ -137,13 +149,15 @@ export function IssueTreeView() {
         next.set(issueNumber, message);
         return next;
       });
-      setTimeout(() => {
+      const tid = setTimeout(() => {
+        pendingTimeouts.current.delete(tid);
         setLaunchErrors(prev => {
           const next = new Map(prev);
           next.delete(issueNumber);
           return next;
         });
       }, 5000);
+      pendingTimeouts.current.add(tid);
       return;
     }
 
@@ -164,7 +178,8 @@ export function IssueTreeView() {
       });
       // Don't immediately remove from launchingIssues — let it persist
       // so the user sees feedback until the tree refreshes with the active team badge.
-      setTimeout(() => {
+      const tid = setTimeout(() => {
+        pendingTimeouts.current.delete(tid);
         setLaunchingIssues(prev => {
           const next = new Set(prev);
           next.delete(issueNumber);
@@ -172,6 +187,7 @@ export function IssueTreeView() {
         });
         fetchTree();
       }, 5000);
+      pendingTimeouts.current.add(tid);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[IssueTree] Failed to launch team for #${issueNumber}:`, message);
@@ -188,13 +204,15 @@ export function IssueTreeView() {
         return next;
       });
       // Auto-clear error after 5 seconds
-      setTimeout(() => {
+      const tid = setTimeout(() => {
+        pendingTimeouts.current.delete(tid);
         setLaunchErrors(prev => {
           const next = new Map(prev);
           next.delete(issueNumber);
           return next;
         });
       }, 5000);
+      pendingTimeouts.current.add(tid);
     }
   }, [api, fetchTree, launchProjectId, activeProjects.length]);
 
