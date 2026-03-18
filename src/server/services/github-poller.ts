@@ -58,6 +58,9 @@ class GitHubPoller {
   /** Whether any team needs fast polling (pending CI or awaiting PR detection) */
   private needsFastPoll = false;
 
+  /** Guard against concurrent poll() invocations */
+  private isPolling = false;
+
   /**
    * Start the polling loop. Uses adaptive intervals:
    * - Normal: config.githubPollIntervalMs (default 30s)
@@ -119,78 +122,88 @@ class GitHubPoller {
    * then checks teams within each project.
    */
   async poll(): Promise<void> {
-    const db = getDatabase();
-
-    // Get all active projects — skip paused/archived
-    const projects = db.getProjects({ status: 'active' });
-
-    if (projects.length === 0) {
-      // No projects configured — nothing to poll
+    if (this.isPolling) {
+      console.log('[GitHubPoller] Skipping poll — previous cycle still running');
       return;
     }
+    this.isPolling = true;
 
-    // Build maps of projectId -> githubRepo and projectId -> repoPath
-    const projectRepoMap = new Map<number, string>();
-    const projectPathMap = new Map<number, string>();
-    for (const project of projects) {
-      if (project.githubRepo) {
-        projectRepoMap.set(project.id, project.githubRepo);
+    try {
+      const db = getDatabase();
+
+      // Get all active projects — skip paused/archived
+      const projects = db.getProjects({ status: 'active' });
+
+      if (projects.length === 0) {
+        // No projects configured — nothing to poll
+        return;
       }
-      if (project.repoPath) {
-        projectPathMap.set(project.id, project.repoPath);
-      }
-    }
 
-    const teams = db.getActiveTeams();
-    let wantFast = false;
-
-    for (const team of teams) {
-      try {
-        // Resolve the github repo for this team's project
-        const githubRepo = team.projectId ? projectRepoMap.get(team.projectId) : undefined;
-        if (!githubRepo) {
-          // Team has no project or project is not active — skip
-          continue;
+      // Build maps of projectId -> githubRepo and projectId -> repoPath
+      const projectRepoMap = new Map<number, string>();
+      const projectPathMap = new Map<number, string>();
+      for (const project of projects) {
+        if (project.githubRepo) {
+          projectRepoMap.set(project.id, project.githubRepo);
         }
+        if (project.repoPath) {
+          projectPathMap.set(project.id, project.repoPath);
+        }
+      }
 
-        // Sync branch name: the agent may have renamed the branch after launch.
-        // Check the actual worktree branch and update DB if it differs.
-        if (team.projectId && !team.prNumber) {
-          const repoPath = projectPathMap.get(team.projectId);
-          if (repoPath && team.worktreeName) {
-            const actualBranch = this.detectWorktreeBranch(repoPath, team.worktreeName);
-            if (actualBranch && actualBranch !== team.branchName) {
-              console.log(
-                `[GitHubPoller] Branch name updated for team ${team.id}: "${team.branchName}" -> "${actualBranch}"`
-              );
-              db.updateTeam(team.id, { branchName: actualBranch });
-              team.branchName = actualBranch;
+      const teams = db.getActiveTeams();
+      let wantFast = false;
+
+      for (const team of teams) {
+        try {
+          // Resolve the github repo for this team's project
+          const githubRepo = team.projectId ? projectRepoMap.get(team.projectId) : undefined;
+          if (!githubRepo) {
+            // Team has no project or project is not active — skip
+            continue;
+          }
+
+          // Sync branch name: the agent may have renamed the branch after launch.
+          // Check the actual worktree branch and update DB if it differs.
+          if (team.projectId && !team.prNumber) {
+            const repoPath = projectPathMap.get(team.projectId);
+            if (repoPath && team.worktreeName) {
+              const actualBranch = this.detectWorktreeBranch(repoPath, team.worktreeName);
+              if (actualBranch && actualBranch !== team.branchName) {
+                console.log(
+                  `[GitHubPoller] Branch name updated for team ${team.id}: "${team.branchName}" -> "${actualBranch}"`
+                );
+                db.updateTeam(team.id, { branchName: actualBranch });
+                team.branchName = actualBranch;
+              }
             }
           }
-        }
 
-        if (team.prNumber) {
-          await this.pollPR(team.prNumber, team.id, githubRepo);
-          // Fast-poll when CI is pending
-          const pr = db.getPullRequest(team.prNumber);
-          if (pr && (pr.ciStatus === 'pending' || pr.state === 'open')) {
+          if (team.prNumber) {
+            await this.pollPR(team.prNumber, team.id, githubRepo);
+            // Fast-poll when CI is pending
+            const pr = db.getPullRequest(team.prNumber);
+            if (pr && (pr.ciStatus === 'pending' || pr.state === 'open')) {
+              wantFast = true;
+            }
+          } else if (team.branchName) {
+            // Fast-poll when awaiting PR detection
             wantFast = true;
+            this.detectPR(team.branchName, team.id, githubRepo);
           }
-        } else if (team.branchName) {
-          // Fast-poll when awaiting PR detection
-          wantFast = true;
-          this.detectPR(team.branchName, team.id, githubRepo);
+        } catch (err) {
+          // Log and continue — never let one team's failure stop the others
+          console.error(
+            `[GitHubPoller] Error polling team ${team.id} (issue #${team.issueNumber}, project ${team.projectId}):`,
+            err instanceof Error ? err.message : err
+          );
         }
-      } catch (err) {
-        // Log and continue — never let one team's failure stop the others
-        console.error(
-          `[GitHubPoller] Error polling team ${team.id} (issue #${team.issueNumber}, project ${team.projectId}):`,
-          err instanceof Error ? err.message : err
-        );
       }
-    }
 
-    this.needsFastPoll = wantFast;
+      this.needsFastPoll = wantFast;
+    } finally {
+      this.isPolling = false;
+    }
   }
 
   // -------------------------------------------------------------------------
