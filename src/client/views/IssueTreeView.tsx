@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import React from 'react';
 import { useApi } from '../hooks/useApi';
-import { useFleet } from '../context/FleetContext';
 import { TreeNode, type IssueNode } from '../components/TreeNode';
 import type { ProjectSummary } from '../../shared/types';
 
@@ -51,7 +50,6 @@ interface IssueRefreshResponse {
 
 export function IssueTreeView() {
   const api = useApi();
-  const { selectedProjectId } = useFleet();
   const [tree, setTree] = useState<IssueNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -66,7 +64,7 @@ export function IssueTreeView() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
   // Fetch the project list so we can auto-resolve a project for launches
-  // when "All Projects" is selected (selectedProjectId === null).
+  // when only one project exists.
   useEffect(() => {
     api.get<ProjectSummary[]>('projects').then(setProjects).catch(() => {
       // Non-fatal — projects list is only used to auto-resolve launch target
@@ -74,12 +72,9 @@ export function IssueTreeView() {
   }, [api]);
 
   // Resolve which project to use for launches:
-  // 1. If user explicitly selected a project, use it.
-  // 2. If only one project exists, auto-use it.
-  // 3. Otherwise null — user must pick a project.
+  // If only one project exists, auto-use it. Otherwise null — user must pick.
   const activeProjects = projects.filter((p) => p.status === 'active');
-  const launchProjectId = selectedProjectId
-    ?? (activeProjects.length === 1 ? activeProjects[0].id : null);
+  const launchProjectId = activeProjects.length === 1 ? activeProjects[0].id : null;
 
   // -------------------------------------------------------------------------
   // Fetch issue tree
@@ -88,10 +83,7 @@ export function IssueTreeView() {
   const fetchTree = useCallback(async () => {
     try {
       setError(null);
-      const endpoint = selectedProjectId
-        ? `projects/${selectedProjectId}/issues`
-        : 'issues';
-      const data = await api.get<IssueTreeResponse>(endpoint);
+      const data = await api.get<IssueTreeResponse>('issues');
       setTree(data.tree);
       setGroups(data.groups ?? []);
       setCachedAt(data.cachedAt);
@@ -102,7 +94,7 @@ export function IssueTreeView() {
     } finally {
       setLoading(false);
     }
-  }, [api, selectedProjectId]);
+  }, [api]);
 
   useEffect(() => {
     fetchTree();
@@ -138,8 +130,8 @@ export function IssueTreeView() {
 
     if (!resolvedProjectId) {
       const message = activeProjects.length > 1
-        ? 'Multiple projects exist — select one from the top bar first'
-        : 'Select a project first';
+        ? 'Multiple projects exist — use the Launch Team dialog to select one'
+        : 'No active project found';
       setLaunchErrors(prev => {
         const next = new Map(prev);
         next.set(issueNumber, message);
@@ -212,16 +204,16 @@ export function IssueTreeView() {
 
   const filteredTree = useMemo(() => filterTree(tree, search, statusFilter), [tree, search, statusFilter]);
 
-  // Filtered groups for the "All Projects" grouped view
+  // Filtered groups for the grouped view
   const filteredGroups = useMemo(() => {
-    if (selectedProjectId !== null || groups.length === 0) return [];
+    if (groups.length === 0) return [];
     return groups
       .map((g) => ({
         ...g,
         tree: filterTree(g.tree, search, statusFilter),
       }))
       .filter((g) => g.tree.length > 0);
-  }, [groups, search, statusFilter, selectedProjectId]);
+  }, [groups, search, statusFilter]);
 
   // -------------------------------------------------------------------------
   // Loading state
@@ -380,7 +372,7 @@ export function IssueTreeView() {
               Clear filters
             </button>
           </div>
-        ) : selectedProjectId === null && filteredGroups.length > 0 ? (
+        ) : filteredGroups.length > 0 ? (
           /* Grouped view — issues organized by project */
           <div className="space-y-1">
             {filteredGroups.map((group) => (
