@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { FleetDatabase } from '../../src/server/db.js';
+import { FleetDatabase, utcify } from '../../src/server/db.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -665,6 +665,120 @@ describe('getStuckCandidates', () => {
     expect(candidates[0].worktreeName).toBe('kea-200');
     expect(candidates[1].worktreeName).toBe('kea-300');
     expect(candidates[2].worktreeName).toBe('kea-100');
+  });
+});
+
+// =============================================================================
+// utcify helper
+// =============================================================================
+
+describe('utcify', () => {
+  it('converts SQLite datetime to ISO 8601 UTC', () => {
+    expect(utcify('2025-01-15 14:30:00')).toBe('2025-01-15T14:30:00.000Z');
+  });
+
+  it('passes through ISO 8601 strings unchanged', () => {
+    expect(utcify('2025-01-15T14:30:00.000Z')).toBe('2025-01-15T14:30:00.000Z');
+  });
+
+  it('passes through ISO 8601 without milliseconds unchanged', () => {
+    expect(utcify('2025-01-15T14:30:00Z')).toBe('2025-01-15T14:30:00Z');
+  });
+
+  it('returns null for null input', () => {
+    expect(utcify(null)).toBeNull();
+  });
+});
+
+// =============================================================================
+// Timestamp UTC normalization in row mappers
+// =============================================================================
+
+describe('Timestamp UTC normalization', () => {
+  it('team timestamps end with Z', () => {
+    const team = db.insertTeam({
+      issueNumber: 100,
+      worktreeName: 'utc-test-100',
+    });
+
+    expect(team.createdAt).toMatch(/T.*Z$/);
+    expect(team.updatedAt).toMatch(/T.*Z$/);
+  });
+
+  it('team nullable timestamps are normalized when present', () => {
+    db.insertTeam({ issueNumber: 101, worktreeName: 'utc-test-101' });
+    const updated = db.updateTeam(1, {
+      launchedAt: '2025-06-01 12:00:00',
+      lastEventAt: '2025-06-01 12:05:00',
+    });
+
+    expect(updated!.launchedAt).toBe('2025-06-01T12:00:00.000Z');
+    expect(updated!.lastEventAt).toBe('2025-06-01T12:05:00.000Z');
+  });
+
+  it('event timestamps end with Z', () => {
+    db.insertTeam({ issueNumber: 102, worktreeName: 'utc-test-102' });
+    const event = db.insertEvent({ teamId: 1, eventType: 'SessionStart' });
+
+    expect(event.createdAt).toMatch(/T.*Z$/);
+  });
+
+  it('command timestamps end with Z', () => {
+    db.insertTeam({ issueNumber: 103, worktreeName: 'utc-test-103' });
+    const cmd = db.insertCommand({ teamId: 1, message: 'test' });
+
+    expect(cmd.createdAt).toMatch(/T.*Z$/);
+  });
+
+  it('delivered command has normalized deliveredAt', () => {
+    db.insertTeam({ issueNumber: 104, worktreeName: 'utc-test-104' });
+    db.insertCommand({ teamId: 1, message: 'test' });
+    const delivered = db.markCommandDelivered(1);
+
+    expect(delivered!.deliveredAt).toMatch(/T.*Z$/);
+  });
+
+  it('pull request timestamps end with Z', () => {
+    db.insertTeam({ issueNumber: 105, worktreeName: 'utc-test-105' });
+    const pr = db.insertPullRequest({ prNumber: 999, teamId: 1, state: 'open' });
+
+    expect(pr.updatedAt).toMatch(/T.*Z$/);
+  });
+
+  it('usage snapshot timestamps end with Z', () => {
+    db.insertTeam({ issueNumber: 106, worktreeName: 'utc-test-106' });
+    const usage = db.insertUsageSnapshot({
+      teamId: 1,
+      dailyPercent: 50,
+    });
+
+    expect(usage.recordedAt).toMatch(/T.*Z$/);
+  });
+
+  it('project timestamps end with Z', () => {
+    const project = db.insertProject({
+      name: 'utc-test-proj',
+      repoPath: '/tmp/utc-test',
+    });
+
+    expect(project.createdAt).toMatch(/T.*Z$/);
+    expect(project.updatedAt).toMatch(/T.*Z$/);
+  });
+
+  it('dashboard row timestamps end with Z', () => {
+    db.insertTeam({
+      issueNumber: 107,
+      worktreeName: 'utc-test-107',
+      status: 'running',
+      phase: 'implementing',
+      launchedAt: '2025-06-01 12:00:00',
+    });
+    db.updateTeam(1, { lastEventAt: '2025-06-01 12:05:00' });
+
+    const rows = db.getTeamDashboard();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].launchedAt).toBe('2025-06-01T12:00:00.000Z');
+    expect(rows[0].lastEventAt).toBe('2025-06-01T12:05:00.000Z');
   });
 });
 

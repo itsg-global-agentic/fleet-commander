@@ -29,6 +29,28 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ---------------------------------------------------------------------------
+// UTC timestamp helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Convert a SQLite datetime string to ISO 8601 UTC format.
+ *
+ * SQLite's `datetime('now')` produces `YYYY-MM-DD HH:MM:SS` which JS Date
+ * parses as *local* time. This helper appends 'T' and 'Z' so it is correctly
+ * interpreted as UTC. Already-valid ISO strings (containing 'T') pass through
+ * unchanged. Returns null unchanged for nullable columns.
+ */
+export function utcify(value: string): string;
+export function utcify(value: string | null): string | null;
+export function utcify(value: string | null): string | null {
+  if (value == null) return null;
+  // Already ISO 8601 (has 'T') — pass through unchanged
+  if (value.includes('T')) return value;
+  // SQLite format: "YYYY-MM-DD HH:MM:SS" -> "YYYY-MM-DDTHH:MM:SS.000Z"
+  return value.replace(' ', 'T') + '.000Z';
+}
+
+// ---------------------------------------------------------------------------
 // Filter / input types
 // ---------------------------------------------------------------------------
 
@@ -1034,7 +1056,7 @@ export class FleetDatabase {
       id: r.id,
       template: r.template,
       enabled: r.enabled === 1,
-      updatedAt: r.updated_at,
+      updatedAt: utcify(r.updated_at),
     }));
   }
 
@@ -1161,7 +1183,7 @@ export class FleetDatabase {
       worktreeName: r.worktree_name as string,
       status: r.status as TeamStatus,
       phase: r.phase as TeamPhase,
-      lastEventAt: r.last_event_at as string | null,
+      lastEventAt: utcify(r.last_event_at as string | null),
       minutesSinceLastEvent: r.minutes_since_last_event as number,
     }));
   }
@@ -1207,7 +1229,7 @@ export class FleetDatabase {
       toStatus: r.to_status,
       trigger: r.trigger,
       reason: r.reason,
-      createdAt: r.created_at,
+      createdAt: utcify(r.created_at),
     }));
   }
 
@@ -1301,8 +1323,8 @@ export class FleetDatabase {
       maxActiveTeams: (row.max_active_teams as number | undefined) ?? 5,
       promptFile: (row.prompt_file as string | null) ?? null,
       model: (row.model as string | null) ?? null,
-      createdAt: row.created_at as string,
-      updatedAt: row.updated_at as string,
+      createdAt: utcify(row.created_at as string),
+      updatedAt: utcify(row.updated_at as string),
     };
   }
 
@@ -1320,11 +1342,11 @@ export class FleetDatabase {
       branchName: row.branch_name as string | null,
       prNumber: row.pr_number as number | null,
       customPrompt: (row.custom_prompt as string | null) ?? null,
-      launchedAt: (row.launched_at as string | null) ?? null,
-      stoppedAt: row.stopped_at as string | null,
-      lastEventAt: row.last_event_at as string | null,
-      createdAt: row.created_at as string,
-      updatedAt: row.updated_at as string,
+      launchedAt: utcify(row.launched_at as string | null),
+      stoppedAt: utcify(row.stopped_at as string | null),
+      lastEventAt: utcify(row.last_event_at as string | null),
+      createdAt: utcify(row.created_at as string),
+      updatedAt: utcify(row.updated_at as string),
     };
   }
 
@@ -1337,7 +1359,7 @@ export class FleetDatabase {
       toolName: row.tool_name as string | null,
       agentName: row.agent_name as string | null,
       payload: row.payload as string | null,
-      createdAt: row.created_at as string,
+      createdAt: utcify(row.created_at as string),
     };
   }
 
@@ -1352,8 +1374,8 @@ export class FleetDatabase {
       ciFailCount: row.ci_fail_count as number,
       checksJson: row.checks_json as string | null,
       autoMerge: (row.auto_merge as number) === 1,
-      mergedAt: row.merged_at as string | null,
-      updatedAt: row.updated_at as string,
+      mergedAt: utcify(row.merged_at as string | null),
+      updatedAt: utcify(row.updated_at as string),
     };
   }
 
@@ -1364,8 +1386,8 @@ export class FleetDatabase {
       targetAgent: (row.target_agent as string | null) ?? null,
       message: row.message as string,
       status: (row.status as 'pending' | 'delivered' | 'failed') ?? 'pending',
-      createdAt: row.created_at as string,
-      deliveredAt: (row.delivered_at as string | null) ?? null,
+      createdAt: utcify(row.created_at as string),
+      deliveredAt: utcify((row.delivered_at as string | null) ?? null),
     };
   }
 
@@ -1379,10 +1401,10 @@ export class FleetDatabase {
       weeklyPercent: row.weekly_percent as number,
       sonnetPercent: row.sonnet_percent as number,
       extraPercent: row.extra_percent as number,
-      dailyResetsAt: (row.daily_resets_at as string | null) ?? null,
-      weeklyResetsAt: (row.weekly_resets_at as string | null) ?? null,
+      dailyResetsAt: utcify((row.daily_resets_at as string | null) ?? null),
+      weeklyResetsAt: utcify((row.weekly_resets_at as string | null) ?? null),
       rawOutput: row.raw_output as string | null,
-      recordedAt: row.recorded_at as string,
+      recordedAt: utcify(row.recorded_at as string),
     };
   }
 
@@ -1399,8 +1421,8 @@ export class FleetDatabase {
       worktreeName: row.worktree_name as string,
       branchName: (row.branch_name as string | null) ?? null,
       prNumber: row.pr_number as number | null,
-      launchedAt: (row.launched_at as string | null) ?? null,
-      lastEventAt: row.last_event_at as string | null,
+      launchedAt: utcify((row.launched_at as string | null) ?? null),
+      lastEventAt: utcify(row.last_event_at as string | null),
       durationMin: row.duration_min as number,
       idleMin: row.idle_min as number | null,
       totalCost: row.total_cost as number,
