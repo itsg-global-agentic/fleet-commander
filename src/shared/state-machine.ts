@@ -6,12 +6,14 @@
 // about state transitions — message templates live in message-templates.ts.
 // =============================================================================
 
+import type { TeamStatus } from './types.js';
+
 export type TriggerType = 'hook' | 'timer' | 'poller' | 'pm_action' | 'system';
 
 export interface StateMachineTransition {
   id: string;
-  from: string;
-  to: string;
+  from: TeamStatus | '*';
+  to: TeamStatus;
   trigger: TriggerType;
   triggerLabel: string;
   description: string;

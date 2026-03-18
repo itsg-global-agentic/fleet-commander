@@ -12,6 +12,7 @@
 //   idle    -> stuck  after STUCK_THRESHOLD_MIN (15 min default)
 // =============================================================================
 
+import type { TeamStatus } from '../../shared/types.js';
 import { getDatabase } from '../db.js';
 import config from '../config.js';
 import { sseBroker } from './sse-broker.js';
@@ -64,7 +65,7 @@ class StuckDetector {
         const lastEventTime = new Date(team.lastEventAt).getTime();
         const idleMinutes = (now - lastEventTime) / 60_000;
 
-        let newStatus: string | null = null;
+        let newStatus: TeamStatus | null = null;
 
         if (team.status === 'running' && idleMinutes > config.idleThresholdMin) {
           newStatus = 'idle';

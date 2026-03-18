@@ -15,6 +15,7 @@
  *   Non-tool_use events are NEVER throttled.
  */
 
+import type { TeamStatus } from '../../shared/types.js';
 import type { SSEEventType } from './sse-broker.js';
 
 // ---------------------------------------------------------------------------
@@ -44,7 +45,7 @@ export interface ProcessEventResult {
 
 /** Minimal DB abstraction (subset of methods used by EventCollector) */
 export interface EventCollectorDb {
-  getTeamByWorktree(worktreeName: string): { id: number; status: string; phase: string } | undefined;
+  getTeamByWorktree(worktreeName: string): { id: number; status: TeamStatus; phase: string } | undefined;
   insertEvent(event: {
     teamId: number;
     sessionId: string | null;
@@ -54,7 +55,7 @@ export interface EventCollectorDb {
     payload: string;
   }): { id: number };
   updateTeam(teamId: number, fields: Record<string, unknown>): void;
-  insertTransition(data: { teamId: number; fromStatus: string; toStatus: string; trigger: string; reason: string }): void;
+  insertTransition(data: { teamId: number; fromStatus: TeamStatus; toStatus: TeamStatus; trigger: string; reason: string }): void;
 }
 
 /** SSE broker interface for broadcasting events */

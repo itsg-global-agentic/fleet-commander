@@ -2,27 +2,14 @@ import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } fro
 import dagre from 'dagre';
 import { useApi } from '../hooks/useApi';
 import { ZapIcon, SettingsIcon, RefreshCwIcon, UserIcon, ClockIcon } from '../components/Icons';
+import type { StateMachineTransition, StateMachineState } from '../../shared/state-machine';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-interface StateNode {
-  id: string;
-  label: string;
-  color: string;
-}
-
-interface Transition {
-  id: string;
-  from: string;
-  to: string;
-  trigger: 'hook' | 'timer' | 'poller' | 'pm_action' | 'system';
-  triggerLabel: string;
-  description: string;
-  condition: string;
-  hookEvent: string | null;
-}
+type StateNode = StateMachineState;
+type Transition = StateMachineTransition;
 
 interface StateMachineResponse {
   states: StateNode[];

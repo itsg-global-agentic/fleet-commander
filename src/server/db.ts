@@ -1197,8 +1197,8 @@ export class FleetDatabase {
    */
   insertTransition(data: {
     teamId: number;
-    fromStatus: string;
-    toStatus: string;
+    fromStatus: TeamStatus;
+    toStatus: TeamStatus;
     trigger: string;
     reason: string;
   }): void {
@@ -1225,8 +1225,8 @@ export class FleetDatabase {
     return rows.map((r) => ({
       id: r.id,
       teamId: r.team_id,
-      fromStatus: r.from_status,
-      toStatus: r.to_status,
+      fromStatus: r.from_status as TeamStatus,
+      toStatus: r.to_status as TeamStatus,
       trigger: r.trigger,
       reason: r.reason,
       createdAt: utcify(r.created_at),

@@ -133,8 +133,8 @@ export interface Event {
 export interface TeamTransition {
   id: number;
   teamId: number;
-  fromStatus: string;
-  toStatus: string;
+  fromStatus: TeamStatus;
+  toStatus: TeamStatus;
   trigger: string;
   reason: string;
   createdAt: string;
