@@ -46,7 +46,7 @@ export async function recoverOnStartup(): Promise<void> {
         trigger: 'system',
         reason: 'Server restart recovery: no PID recorded',
       });
-      db.updateTeam(team.id, { status: 'idle' });
+      db.updateTeam(team.id, { status: 'idle', lastEventAt: new Date().toISOString() });
       continue;
     }
 
@@ -73,7 +73,7 @@ export async function recoverOnStartup(): Promise<void> {
         trigger: 'system',
         reason: `Server restart recovery: process (PID ${team.pid}) no longer alive`,
       });
-      db.updateTeam(team.id, { status: newStatus, pid: null });
+      db.updateTeam(team.id, { status: newStatus, pid: null, lastEventAt: new Date().toISOString() });
     }
   }
 
