@@ -23,7 +23,7 @@ vi.mock('../../src/server/db.js', () => ({
 
 vi.mock('../../src/server/config.js', () => ({
   default: {
-    usagePollIntervalMs: 120_000,
+    usagePollIntervalMs: 900_000,
     usageRedDailyPct: 85,
     usageRedWeeklyPct: 95,
   },

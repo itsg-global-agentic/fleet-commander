@@ -146,9 +146,8 @@ class UsagePoller {
     // Poll immediately on start
     this.poll();
 
-    this.interval = setInterval(() => this.poll(), ms);
-    this.interval.unref(); // allow process to exit even if timer is active
-    console.log(`[UsagePoller] Started — polling every ${ms / 1000}s`);
+    this.scheduleNext(ms);
+    console.log(`[UsagePoller] Started — polling every ~${ms / 1000}s (±3min jitter)`);
   }
 
   /**
@@ -156,10 +155,27 @@ class UsagePoller {
    */
   stop(): void {
     if (this.interval) {
-      clearInterval(this.interval);
+      clearTimeout(this.interval);
       this.interval = null;
       console.log('[UsagePoller] Stopped');
     }
+  }
+
+  /**
+   * Schedule the next poll with random jitter (±3 minutes).
+   * Uses setTimeout chaining instead of setInterval so each
+   * poll fires at a slightly different offset, avoiding
+   * thundering-herd patterns.
+   */
+  private scheduleNext(baseMs?: number): void {
+    const base = baseMs ?? config.usagePollIntervalMs;
+    const jitter = Math.floor(Math.random() * 360000) - 180000; // ±3 minutes
+    const delay = Math.max(60000, base + jitter); // floor: 60s minimum
+    this.interval = setTimeout(() => {
+      this.poll();
+      this.scheduleNext(base);
+    }, delay);
+    this.interval.unref();
   }
 
   /**
