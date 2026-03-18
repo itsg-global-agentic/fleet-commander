@@ -11,7 +11,6 @@ import type {
   FastifyRequest,
   FastifyReply,
 } from 'fastify';
-import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { getDatabase } from '../db.js';
@@ -19,6 +18,7 @@ import { getTeamManager } from '../services/team-manager.js';
 import { sseBroker } from '../services/sse-broker.js';
 import { DEFAULT_MESSAGE_TEMPLATES } from '../../shared/message-templates.js';
 import { getIssueFetcher } from '../services/issue-fetcher.js';
+import { uninstallHooks } from '../utils/hook-installer.js';
 import config from '../config.js';
 
 // ---------------------------------------------------------------------------
@@ -337,28 +337,7 @@ const systemRoutes: FastifyPluginCallback = (
         // 2. Uninstall hooks from all projects before deleting them
         const projects = db.getProjects();
         for (const project of projects) {
-          try {
-            const scriptPath = path.join(config.fleetCommanderRoot, 'scripts', 'uninstall.sh');
-            if (fs.existsSync(scriptPath)) {
-              const toBash = (p: string) => p.replace(/\\/g, '/');
-              // Find Git Bash to avoid WSL bash on Windows
-              let gitBash = 'bash';
-              try {
-                const ep = execSync('git --exec-path', { encoding: 'utf-8', stdio: 'pipe' }).trim();
-                const bp = path.join(path.resolve(ep, '..', '..'), 'usr', 'bin', 'bash.exe');
-                if (fs.existsSync(bp)) gitBash = bp;
-              } catch { /* fallback */ }
-              const cmd = process.platform === 'win32'
-                ? `"${gitBash}" "${toBash(scriptPath)}" "${toBash(project.repoPath)}"`
-                : `"${scriptPath}" "${project.repoPath}"`;
-              execSync(cmd, { encoding: 'utf-8', stdio: 'pipe', timeout: 30000 });
-            }
-          } catch (err) {
-            request.log.warn(
-              { project: project.name, error: err instanceof Error ? err.message : String(err) },
-              'Failed to uninstall hooks during factory reset',
-            );
-          }
+          uninstallHooks(project.repoPath, request.log);
         }
 
         // 3. Delete all data and re-seed default templates
