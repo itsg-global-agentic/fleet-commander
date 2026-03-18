@@ -6,6 +6,7 @@
 // =============================================================================
 
 import type {
+  FastifyBaseLogger,
   FastifyInstance,
   FastifyPluginCallback,
   FastifyRequest,
@@ -130,7 +131,7 @@ function detectGithubRepo(dirPath: string): string | null {
  * Install Fleet Commander hooks into a project repo.
  * Returns { ok, stdout, stderr } so callers can log / surface errors.
  */
-function installHooks(repoPath: string): { ok: boolean; stdout: string; stderr: string } {
+function installHooks(repoPath: string, logger: FastifyBaseLogger): { ok: boolean; stdout: string; stderr: string } {
   const fail = (msg: string) => ({ ok: false, stdout: '', stderr: msg });
 
   const scriptPath = path.join(config.fleetCommanderRoot, 'scripts', 'install.sh');
@@ -150,7 +151,7 @@ function installHooks(repoPath: string): { ok: boolean; stdout: string; stderr: 
     const e = err as { stdout?: string; stderr?: string; message?: string; status?: number };
     const stdout = e.stdout ?? '';
     const stderr = e.stderr ?? '';
-    console.error(
+    logger.error(
       `[installHooks] Failed for ${repoPath} (exit ${e.status ?? '?'}):\n` +
       `  cmd: ${cmd}\n` +
       `  stderr: ${stderr.trim()}\n` +
@@ -163,7 +164,7 @@ function installHooks(repoPath: string): { ok: boolean; stdout: string; stderr: 
 /**
  * Uninstall Fleet Commander hooks from a project repo.
  */
-function uninstallHooks(repoPath: string): void {
+function uninstallHooks(repoPath: string, logger: FastifyBaseLogger): void {
   try {
     const scriptPath = path.join(config.fleetCommanderRoot, 'scripts', 'uninstall.sh');
     if (!fs.existsSync(scriptPath)) {
@@ -177,9 +178,8 @@ function uninstallHooks(repoPath: string): void {
     execSync(cmd, { encoding: 'utf-8', stdio: 'pipe', timeout: 30000 });
   } catch (err) {
     // Non-fatal — log but don't block project deletion
-    console.error(
-      `[uninstallHooks] Failed to uninstall from ${repoPath}:`,
-      err instanceof Error ? err.message : String(err),
+    logger.error(
+      `[uninstallHooks] Failed to uninstall from ${repoPath}: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }
@@ -447,7 +447,7 @@ const projectsRoutes: FastifyPluginCallback = (
         });
 
         // Install hooks (non-fatal)
-        const installResult = installHooks(normalizedPath);
+        const installResult = installHooks(normalizedPath, request.log);
         if (!installResult.ok) {
           request.log.warn(
             `Hook installation failed for ${normalizedPath}: ${installResult.stderr}`,
@@ -682,7 +682,7 @@ const projectsRoutes: FastifyPluginCallback = (
         }
 
         // Uninstall hooks
-        uninstallHooks(project.repoPath);
+        uninstallHooks(project.repoPath, request.log);
 
         // Clear cached issues for this project
         const issueFetcher = getIssueFetcher();
@@ -738,7 +738,7 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const result = installHooks(project.repoPath);
+        const result = installHooks(project.repoPath, request.log);
 
         // Check what actually landed on disk
         const status = checkInstallStatus(project.repoPath);

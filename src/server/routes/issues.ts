@@ -10,7 +10,7 @@
 //   GET  /api/projects/:projectId/issues    — per-project issue tree
 // =============================================================================
 
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyBaseLogger, FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { getIssueFetcher } from '../services/issue-fetcher.js';
 import { getDatabase } from '../db.js';
 
@@ -18,7 +18,7 @@ import { getDatabase } from '../db.js';
 // Helper: get issue numbers for all active teams from the database
 // ---------------------------------------------------------------------------
 
-function getActiveTeamIssueNumbers(projectId?: number): number[] {
+function getActiveTeamIssueNumbers(logger: FastifyBaseLogger, projectId?: number): number[] {
   try {
     const db = getDatabase();
     const activeTeams = projectId !== undefined
@@ -26,7 +26,7 @@ function getActiveTeamIssueNumbers(projectId?: number): number[] {
       : db.getActiveTeams();
     return activeTeams.map((t) => t.issueNumber);
   } catch (err) {
-    console.error('[IssueRoutes] Failed to get active teams:', err instanceof Error ? err.message : err);
+    logger.error('[IssueRoutes] Failed to get active teams: %s', err instanceof Error ? err.message : err);
     return [];
   }
 }
@@ -120,7 +120,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
    */
   server.get('/api/issues/next', async (_request: FastifyRequest, _reply: FastifyReply) => {
     const fetcher = getIssueFetcher();
-    const activeIssues = getActiveTeamIssueNumbers();
+    const activeIssues = getActiveTeamIssueNumbers(server.log);
     const nextIssue = fetcher.getNextIssue(activeIssues);
 
     if (!nextIssue) {
@@ -146,7 +146,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
    */
   server.get('/api/issues/available', async (_request: FastifyRequest, _reply: FastifyReply) => {
     const fetcher = getIssueFetcher();
-    const activeIssues = getActiveTeamIssueNumbers();
+    const activeIssues = getActiveTeamIssueNumbers(server.log);
     const available = fetcher.getAvailableIssues(activeIssues);
 
     // Enrich with team info (should all be null, but for consistency)
