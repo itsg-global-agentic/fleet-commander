@@ -280,6 +280,7 @@ const systemRoutes: FastifyPluginCallback = (
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
         return reply.code(200).send({
+          host: config.host,
           port: config.port,
           idleThresholdMin: config.idleThresholdMin,
           stuckThresholdMin: config.stuckThresholdMin,

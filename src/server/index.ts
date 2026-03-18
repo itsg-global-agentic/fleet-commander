@@ -102,8 +102,8 @@ async function main() {
     server.log.info('All services stopped, database closed');
   });
 
-  await server.listen({ port: config.port, host: '0.0.0.0' });
-  server.log.info(`Fleet Commander server listening on port ${config.port}`);
+  await server.listen({ port: config.port, host: config.host });
+  server.log.info(`Fleet Commander server listening on ${config.host}:${config.port}`);
 
   // Signal handlers for graceful shutdown
   let shuttingDown = false;

@@ -66,6 +66,11 @@ describe('validateConfig', () => {
     expect(mod.default.port).toBe(parseInt(process.env['PORT'] || '4680', 10));
   });
 
+  it('defaults host to 127.0.0.1', async () => {
+    const mod = await import('../../src/server/config.js');
+    expect(mod.default.host).toBe(process.env['FLEET_HOST'] || '127.0.0.1');
+  });
+
   it('safeParseInt rejects fully non-numeric PORT before config is built', () => {
     // Simulate what would happen: safeParseInt('abc', 'PORT') throws
     expect(() => safeParseInt('abc', 'PORT')).toThrow('Invalid integer for PORT: "abc"');

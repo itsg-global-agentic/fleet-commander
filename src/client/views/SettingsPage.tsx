@@ -6,6 +6,7 @@ import { useApi } from '../hooks/useApi';
 // ---------------------------------------------------------------------------
 
 interface SettingsResponse {
+  host: string;
   port: number;
   idleThresholdMin: number;
   stuckThresholdMin: number;
@@ -49,6 +50,12 @@ const SETTING_GROUPS: SettingGroup[] = [
   {
     title: 'Server',
     rows: [
+      {
+        key: 'host',
+        label: 'Host',
+        envVar: 'FLEET_HOST',
+        description: 'Network interface to bind to',
+      },
       {
         key: 'port',
         label: 'Port',

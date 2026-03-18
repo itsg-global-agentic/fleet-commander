@@ -203,6 +203,7 @@ The SSE broker emits 13 event types:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `4680` | Server port |
+| `FLEET_HOST` | `127.0.0.1` | Network interface to bind to |
 | `FLEET_IDLE_THRESHOLD_MIN` | `3` | Minutes before idle status |
 | `FLEET_STUCK_THRESHOLD_MIN` | `5` | Minutes before stuck status |
 | `FLEET_MAX_CI_FAILURES` | `3` | Unique CI failures before blocking |

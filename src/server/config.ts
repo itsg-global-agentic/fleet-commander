@@ -21,6 +21,7 @@ export function safeParseInt(value: string, name: string): number {
 const fleetCommanderRoot = process.env['FLEET_COMMANDER_ROOT'] || findFleetCommanderRoot();
 
 const config = Object.freeze({
+  host: process.env['FLEET_HOST'] || '127.0.0.1',
   port: safeParseInt(process.env['PORT'] || '4680', 'PORT'),
 
   /** Absolute path to the fleet-commander installation itself */
