@@ -7,27 +7,16 @@ import { useApi } from '../hooks/useApi';
 import { RocketIcon } from './Icons';
 import { STATUS_COLORS } from '../utils/constants';
 
-/** Base colors per usage category */
-const USAGE_BASE_COLORS: Record<string, string> = {
-  daily: '#58A6FF',
-  weekly: '#3FB950',
-  sonnet: '#A371F7',
-  extra: '#D29922',
-};
-
-/** Get bar fill color: base color under 50%, yellow 50-80%, red over 80% */
-function getUsageBarColor(percent: number, baseColor: string): string {
+/** Get usage text color: green under 50%, yellow 50-80%, red over 80% */
+function getUsageColor(percent: number): string {
   if (percent > 80) return '#F85149';
   if (percent >= 50) return '#D29922';
-  return baseColor;
+  return '#3FB950';
 }
 
-/** Determine usage zone: green (<50%), yellow (50-80%), red (>80%) based on highest category */
-function getUsageZone(data: UsageData): 'green' | 'yellow' | 'red' {
-  const max = Math.max(data.dailyPercent, data.weeklyPercent, data.sonnetPercent, data.extraPercent);
-  if (max > 80) return 'red';
-  if (max >= 50) return 'yellow';
-  return 'green';
+/** Check if any usage category is in red zone (>80%) */
+function isUsageRedZone(data: UsageData): boolean {
+  return Math.max(data.dailyPercent, data.weeklyPercent, data.sonnetPercent, data.extraPercent) > 80;
 }
 
 interface UsageData {
@@ -64,24 +53,24 @@ export function TopBar() {
     return acc;
   }, {} as Record<string, number>);
 
-  // Build 4 usage indicators
+  // Build usage indicators with full names
   const usageIndicators = usage
     ? [
-        { key: 'daily', label: 'D', percent: usage.dailyPercent, baseColor: USAGE_BASE_COLORS.daily },
-        { key: 'weekly', label: 'W', percent: usage.weeklyPercent, baseColor: USAGE_BASE_COLORS.weekly },
-        { key: 'sonnet', label: 'S', percent: usage.sonnetPercent, baseColor: USAGE_BASE_COLORS.sonnet },
-        { key: 'extra', label: 'E', percent: usage.extraPercent, baseColor: USAGE_BASE_COLORS.extra },
+        { key: 'daily', label: 'Daily', percent: usage.dailyPercent },
+        { key: 'weekly', label: 'Weekly', percent: usage.weeklyPercent },
+        { key: 'sonnet', label: 'Sonnet', percent: usage.sonnetPercent },
+        { key: 'extra', label: 'Extra', percent: usage.extraPercent },
       ]
     : [];
 
-  const pills = [
-    { label: 'Running', count: counts.running || 0, color: STATUS_COLORS.running },
-    { label: 'Queued', count: counts.queued || 0, color: STATUS_COLORS.queued },
-    { label: 'Launching', count: counts.launching || 0, color: STATUS_COLORS.launching },
-    { label: 'Stuck', count: counts.stuck || 0, color: STATUS_COLORS.stuck },
-    { label: 'Idle', count: counts.idle || 0, color: STATUS_COLORS.idle },
-    { label: 'Done', count: counts.done || 0, color: STATUS_COLORS.done },
-  ];
+  // Status counts — exclude done and failed, only show > 0
+  const statusItems = [
+    { label: 'running', count: counts.running || 0, color: STATUS_COLORS.running },
+    { label: 'queued', count: counts.queued || 0, color: STATUS_COLORS.queued },
+    { label: 'launching', count: counts.launching || 0, color: STATUS_COLORS.launching },
+    { label: 'idle', count: counts.idle || 0, color: STATUS_COLORS.idle },
+    { label: 'stuck', count: counts.stuck || 0, color: STATUS_COLORS.stuck },
+  ].filter(s => s.count > 0);
 
   return (
     <>
@@ -92,67 +81,32 @@ export function TopBar() {
           </h1>
           <ProjectSelector />
         </div>
-        <div className="flex items-center gap-2">
-          {pills.map(pill => (
-            pill.count > 0 && (
-              <span
-                key={pill.label}
-                className="px-2 py-0.5 rounded-full text-xs font-medium"
-                style={{
-                  backgroundColor: pill.color + '20',
-                  color: pill.color,
-                  border: `1px solid ${pill.color}40`,
-                }}
-              >
-                {pill.count} {pill.label}
-              </span>
-            )
+        <div className="flex items-center gap-3">
+          {/* Team status counts — plain colored text with dot separator */}
+          {statusItems.map((item, i) => (
+            <span key={item.label} className="text-xs font-medium">
+              <span style={{ color: item.color }}>{item.count}</span>
+              <span className="text-dark-muted ml-1">{item.label}</span>
+              {i < statusItems.length - 1 && (
+                <span className="text-dark-muted ml-3">&middot;</span>
+              )}
+            </span>
           ))}
-          {/* Usage indicators — 4 compact inline bars */}
-          {usageIndicators.map(ind => {
-            const fillColor = getUsageBarColor(ind.percent, ind.baseColor);
-            const clampedPercent = Math.min(100, Math.max(0, ind.percent));
-            return (
-              <div
-                key={ind.key}
-                className="flex flex-col items-center"
-                style={{ minWidth: 48 }}
-                title={`${ind.key.charAt(0).toUpperCase() + ind.key.slice(1)}: ${ind.percent.toFixed(0)}%`}
-              >
-                <span className="text-[10px] leading-tight font-medium" style={{ color: fillColor }}>
-                  {ind.label}: {ind.percent.toFixed(0)}%
-                </span>
-                <div
-                  className="rounded-full overflow-hidden"
-                  style={{
-                    width: 48,
-                    height: 4,
-                    backgroundColor: '#30363D',
-                    marginTop: 2,
-                  }}
-                >
-                  <div
-                    className="h-full rounded-full"
-                    style={{
-                      width: `${clampedPercent}%`,
-                      backgroundColor: fillColor,
-                    }}
-                  />
-                </div>
-              </div>
-            );
-          })}
+
+          {/* Usage — full names, colored percentage text */}
+          {usageIndicators.length > 0 && statusItems.length > 0 && (
+            <span className="text-dark-muted mx-1">|</span>
+          )}
+          {usageIndicators.map(ind => (
+            <span key={ind.key} className="text-xs font-medium">
+              <span className="text-dark-muted">{ind.label}</span>{' '}
+              <span style={{ color: getUsageColor(ind.percent) }}>{ind.percent.toFixed(0)}%</span>
+            </span>
+          ))}
 
           {/* PAUSED badge when usage is in red zone */}
-          {usage && getUsageZone(usage) === 'red' && (
-            <span
-              className="px-2 py-0.5 rounded-full text-xs font-bold animate-pulse"
-              style={{
-                backgroundColor: '#F8514920',
-                color: '#F85149',
-                border: '1px solid #F8514940',
-              }}
-            >
+          {usage && isUsageRedZone(usage) && (
+            <span className="text-xs font-bold animate-pulse" style={{ color: '#F85149' }}>
               PAUSED
             </span>
           )}

@@ -41,16 +41,17 @@ describe('TopBar', () => {
     expect(screen.getByText('Fleet Commander')).toBeInTheDocument();
   });
 
-  it('shows correct count pills for running teams', () => {
+  it('shows correct counts for running teams', () => {
     mockTeams = [
       makeTeam({ id: 1, status: 'running' }),
       makeTeam({ id: 2, status: 'running' }),
     ];
     render(<TopBar />);
-    expect(screen.getByText('2 Running')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('running')).toBeInTheDocument();
   });
 
-  it('shows correct count pills for multiple statuses', () => {
+  it('shows counts for active statuses but excludes done and failed', () => {
     mockTeams = [
       makeTeam({ id: 1, status: 'running' }),
       makeTeam({ id: 2, status: 'stuck' }),
@@ -61,21 +62,23 @@ describe('TopBar', () => {
       makeTeam({ id: 7, status: 'done' }),
     ];
     render(<TopBar />);
-    expect(screen.getByText('1 Running')).toBeInTheDocument();
-    expect(screen.getByText('2 Stuck')).toBeInTheDocument();
-    expect(screen.getByText('1 Idle')).toBeInTheDocument();
-    expect(screen.getByText('3 Done')).toBeInTheDocument();
+    expect(screen.getByText('running')).toBeInTheDocument();
+    expect(screen.getByText('stuck')).toBeInTheDocument();
+    expect(screen.getByText('idle')).toBeInTheDocument();
+    // done and failed should not appear
+    expect(screen.queryByText('done')).not.toBeInTheDocument();
+    expect(screen.queryByText('failed')).not.toBeInTheDocument();
   });
 
-  it('does not render a pill for statuses with zero count', () => {
+  it('does not render statuses with zero count', () => {
     mockTeams = [
       makeTeam({ id: 1, status: 'running' }),
     ];
     render(<TopBar />);
-    expect(screen.getByText('1 Running')).toBeInTheDocument();
-    expect(screen.queryByText(/Stuck/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Idle/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Done/)).not.toBeInTheDocument();
+    expect(screen.getByText('running')).toBeInTheDocument();
+    expect(screen.queryByText('stuck')).not.toBeInTheDocument();
+    expect(screen.queryByText('idle')).not.toBeInTheDocument();
+    expect(screen.queryByText('done')).not.toBeInTheDocument();
   });
 
 });
