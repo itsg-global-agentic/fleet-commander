@@ -29,7 +29,7 @@ const config = Object.freeze({
   githubPollIntervalMs: safeParseInt(process.env['FLEET_GITHUB_POLL_MS'] || '30000', 'FLEET_GITHUB_POLL_MS'),
   issuePollIntervalMs: safeParseInt(process.env['FLEET_ISSUE_POLL_MS'] || '60000', 'FLEET_ISSUE_POLL_MS'),
   stuckCheckIntervalMs: safeParseInt(process.env['FLEET_STUCK_CHECK_MS'] || '60000', 'FLEET_STUCK_CHECK_MS'),
-  usagePollIntervalMs: safeParseInt(process.env['FLEET_USAGE_POLL_MS'] || '120000', 'FLEET_USAGE_POLL_MS'),
+  usagePollIntervalMs: safeParseInt(process.env['FLEET_USAGE_POLL_MS'] || '900000', 'FLEET_USAGE_POLL_MS'),
 
   idleThresholdMin: safeParseInt(process.env['FLEET_IDLE_THRESHOLD_MIN'] || '3', 'FLEET_IDLE_THRESHOLD_MIN'),
   stuckThresholdMin: safeParseInt(process.env['FLEET_STUCK_THRESHOLD_MIN'] || '5', 'FLEET_STUCK_THRESHOLD_MIN'),
