@@ -1,0 +1,333 @@
+// =============================================================================
+// Fleet Commander — CC Query Service
+// =============================================================================
+// Spawns Claude Code in -p mode for quick, ad-hoc structured queries.
+// All queries are predefined as typed methods — no freeform prompting.
+// Uses a concurrency queue (max 1 at a time) to avoid overloading CC.
+// =============================================================================
+
+import { spawn } from 'child_process';
+import config from '../config.js';
+import { resolveClaudePath } from '../utils/resolve-claude-path.js';
+import type {
+  CCQueryResult,
+  PrioritizedIssue,
+  ComplexityEstimate,
+  IssueSummary,
+  QueueConstraints,
+  AssignmentPlan,
+} from '../../shared/types.js';
+
+// ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
+
+interface ExecuteOptions<T> {
+  prompt: string;
+  jsonSchema: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// CCQueryService (singleton)
+// ---------------------------------------------------------------------------
+
+export class CCQueryService {
+  private static _instance: CCQueryService | null = null;
+  private _queue: Array<{ run: () => void }> = [];
+  private _running = false;
+
+  private constructor() {}
+
+  static getInstance(): CCQueryService {
+    if (!CCQueryService._instance) {
+      CCQueryService._instance = new CCQueryService();
+    }
+    return CCQueryService._instance;
+  }
+
+  // -------------------------------------------------------------------------
+  // Concurrency queue — max 1 concurrent query
+  // -------------------------------------------------------------------------
+
+  private enqueue<T>(fn: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const run = () => {
+        fn().then(resolve, reject).finally(() => {
+          this._running = false;
+          this.dequeue();
+        });
+      };
+
+      if (!this._running) {
+        this._running = true;
+        run();
+      } else {
+        this._queue.push({ run });
+      }
+    });
+  }
+
+  private dequeue(): void {
+    const next = this._queue.shift();
+    if (next) {
+      this._running = true;
+      next.run();
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Private execute method — spawns CC in -p mode
+  // -------------------------------------------------------------------------
+
+  private execute<T>(opts: ExecuteOptions<T>): Promise<CCQueryResult<T>> {
+    return this.enqueue(() => this._executeImpl<T>(opts));
+  }
+
+  private _executeImpl<T>(opts: ExecuteOptions<T>): Promise<CCQueryResult<T>> {
+    return new Promise<CCQueryResult<T>>((resolve) => {
+      const start = Date.now();
+      const claudePath = resolveClaudePath();
+
+      const args = [
+        '-p', opts.prompt,
+        '--output-format', 'json',
+        '--no-session-persistence',
+        '--max-turns', '2',
+        '--model', config.ccQueryModel,
+        '--tools', '',
+        '--strict-mcp-config',
+        '--disable-slash-commands',
+        '--json-schema', JSON.stringify(opts.jsonSchema),
+      ];
+
+      const child = spawn(claudePath, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        windowsHide: true,
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let timedOut = false;
+
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        try {
+          if (process.platform === 'win32') {
+            // Use taskkill for reliable Windows process tree kill
+            spawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], {
+              stdio: 'pipe',
+              windowsHide: true,
+            });
+          } else {
+            child.kill('SIGKILL');
+          }
+        } catch {
+          // Best effort
+        }
+      }, config.ccQueryTimeoutMs);
+
+      child.stdout?.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString();
+      });
+
+      child.stderr?.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+
+      child.on('close', (code) => {
+        clearTimeout(timeout);
+        const durationMs = Date.now() - start;
+
+        if (timedOut) {
+          resolve({
+            success: false,
+            costUsd: 0,
+            durationMs,
+            error: `Query timed out after ${config.ccQueryTimeoutMs}ms`,
+          });
+          return;
+        }
+
+        if (code !== 0) {
+          resolve({
+            success: false,
+            costUsd: 0,
+            durationMs,
+            error: `CC exited with code ${code}: ${stderr.trim().substring(0, 500)}`,
+          });
+          return;
+        }
+
+        // Parse the JSON output from CC
+        try {
+          const parsed = JSON.parse(stdout);
+          // CC --output-format json wraps the result; extract cost and result text
+          const costUsd = parsed.cost_usd ?? parsed.costUsd ?? 0;
+          const resultText = parsed.result ?? stdout;
+
+          // The actual structured data is in the result field as JSON string
+          let data: T | undefined;
+          if (typeof resultText === 'string') {
+            try {
+              data = JSON.parse(resultText) as T;
+            } catch {
+              // result is plain text, not JSON
+            }
+          } else {
+            data = resultText as T;
+          }
+
+          resolve({
+            success: true,
+            data,
+            text: typeof resultText === 'string' ? resultText : JSON.stringify(resultText),
+            costUsd: typeof costUsd === 'number' ? costUsd : 0,
+            durationMs,
+          });
+        } catch {
+          // stdout was not valid JSON — return as text
+          resolve({
+            success: true,
+            text: stdout.trim(),
+            costUsd: 0,
+            durationMs,
+          });
+        }
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timeout);
+        resolve({
+          success: false,
+          costUsd: 0,
+          durationMs: Date.now() - start,
+          error: `Failed to spawn CC: ${err.message}`,
+        });
+      });
+
+      // Close stdin immediately — -p mode reads from args, not stdin
+      child.stdin?.end();
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Public query methods (predefined, typed)
+  // -------------------------------------------------------------------------
+
+  async prioritizeIssues(
+    issues: { number: number; title: string }[],
+  ): Promise<CCQueryResult<PrioritizedIssue[]>> {
+    const issueList = issues.map((i) => `#${i.number}: ${i.title}`).join('\n');
+    const prompt = [
+      'You are a project manager prioritizing GitHub issues for a software team.',
+      'Analyze the following issues and assign each a priority from 1 (highest) to 5 (lowest).',
+      'Consider urgency, impact, and dependencies.',
+      '',
+      'Issues:',
+      issueList,
+      '',
+      'Return a JSON array of objects with: number, title, priority, reason.',
+    ].join('\n');
+
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              number: { type: 'number' },
+              title: { type: 'string' },
+              priority: { type: 'number' },
+              reason: { type: 'string' },
+            },
+            required: ['number', 'title', 'priority', 'reason'],
+          },
+        },
+      },
+      required: ['items'],
+    };
+
+    const result = await this.execute<{ items: PrioritizedIssue[] }>({ prompt, jsonSchema });
+
+    return {
+      ...result,
+      data: result.data?.items,
+    } as CCQueryResult<PrioritizedIssue[]>;
+  }
+
+  async estimateComplexity(
+    issueTitle: string,
+    issueBody: string,
+  ): Promise<CCQueryResult<ComplexityEstimate>> {
+    const prompt = [
+      'You are a senior software engineer estimating the complexity of a GitHub issue.',
+      'Analyze the issue and provide a complexity estimate.',
+      '',
+      `Title: ${issueTitle}`,
+      '',
+      `Description:`,
+      issueBody,
+      '',
+      'Return a JSON object with: complexity ("low", "medium", or "high"), estimatedHours (number), reason (string), risks (array of strings).',
+    ].join('\n');
+
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        complexity: { type: 'string', enum: ['low', 'medium', 'high'] },
+        estimatedHours: { type: 'number' },
+        reason: { type: 'string' },
+        risks: { type: 'array', items: { type: 'string' } },
+      },
+      required: ['complexity', 'estimatedHours', 'reason', 'risks'],
+    };
+
+    return this.execute<ComplexityEstimate>({ prompt, jsonSchema });
+  }
+
+  async suggestAssignmentOrder(
+    issues: IssueSummary[],
+    constraints: QueueConstraints,
+  ): Promise<CCQueryResult<AssignmentPlan>> {
+    const issueList = issues
+      .map((i) => `#${i.number}: ${i.title} [${i.labels.join(', ')}]`)
+      .join('\n');
+    const prompt = [
+      'You are a project manager planning the assignment order for a team of AI coding agents.',
+      `The team can run at most ${constraints.maxConcurrent} agents concurrently.`,
+      constraints.preferredOrder
+        ? `Preferred ordering strategy: ${constraints.preferredOrder}.`
+        : '',
+      '',
+      'Issues:',
+      issueList,
+      '',
+      'Return a JSON object with:',
+      '- order: array of { number, reason } indicating the sequence issues should be assigned',
+      '- estimatedTotalHours: total estimated hours for all issues',
+    ].join('\n');
+
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        order: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              number: { type: 'number' },
+              reason: { type: 'string' },
+            },
+            required: ['number', 'reason'],
+          },
+        },
+        estimatedTotalHours: { type: 'number' },
+      },
+      required: ['order', 'estimatedTotalHours'],
+    };
+
+    return this.execute<AssignmentPlan>({ prompt, jsonSchema });
+  }
+}

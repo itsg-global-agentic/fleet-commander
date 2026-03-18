@@ -18,6 +18,7 @@ import { getDatabase } from '../db.js';
 import { sseBroker } from './sse-broker.js';
 import type { StreamEvent } from './sse-broker.js';
 import { findGitBash } from '../utils/find-git-bash.js';
+import { resolveClaudePath } from '../utils/resolve-claude-path.js';
 import type { Team, Project } from '../../shared/types.js';
 import { getUsageZone } from './usage-tracker.js';
 
@@ -29,61 +30,6 @@ const execAsync = promisify(execCallback);
 
 const MAX_OUTPUT_LINES = config.outputBufferLines;
 const MAX_PARSED_EVENTS = 200;
-
-// ---------------------------------------------------------------------------
-// Resolve claude executable path (Windows needs full path for shell-free spawn)
-// ---------------------------------------------------------------------------
-
-let _resolvedClaudePath: string | null = null;
-
-/**
- * On Windows, `spawn('claude', ...)` with `shell: false` fails because Node
- * cannot resolve bare command names via PATH without a shell. We use `where`
- * to find the full path to claude.exe once, then cache the result.
- *
- * On non-Windows platforms, the bare command name works fine with shell: false.
- */
-function resolveClaudePath(): string {
-  if (_resolvedClaudePath) return _resolvedClaudePath;
-
-  if (process.platform === 'win32') {
-    try {
-      const result = execSync('where claude.exe', {
-        encoding: 'utf-8',
-        timeout: 5000,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-      const firstLine = result.trim().split('\n')[0]?.trim();
-      if (firstLine) {
-        _resolvedClaudePath = firstLine;
-        console.log(`[TeamManager] Resolved claude path: ${_resolvedClaudePath}`);
-        return _resolvedClaudePath;
-      }
-    } catch {
-      // `where` failed — try `where claude` without .exe extension
-      try {
-        const result = execSync('where claude', {
-          encoding: 'utf-8',
-          timeout: 5000,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-        const firstLine = result.trim().split('\n')[0]?.trim();
-        if (firstLine) {
-          _resolvedClaudePath = firstLine;
-          console.log(`[TeamManager] Resolved claude path: ${_resolvedClaudePath}`);
-          return _resolvedClaudePath;
-        }
-      } catch {
-        // Fall through to default
-      }
-    }
-  }
-
-  // Non-Windows or resolution failed — use configured command as-is
-  _resolvedClaudePath = config.claudeCmd;
-  console.log(`[TeamManager] Using claude command: ${_resolvedClaudePath}`);
-  return _resolvedClaudePath;
-}
 
 // ---------------------------------------------------------------------------
 // summarizeEvent — short text summary for console logging

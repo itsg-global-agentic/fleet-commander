@@ -53,6 +53,9 @@ const config = Object.freeze({
   // FC's own hooks/ directory (source for copying into project worktrees)
   fcHooksDir: path.join(fleetCommanderRoot, 'hooks'),
 
+  ccQueryModel: process.env['FLEET_CC_QUERY_MODEL'] || 'sonnet',
+  ccQueryTimeoutMs: safeParseInt(process.env['FLEET_CC_QUERY_TIMEOUT_MS'] || '30000', 'FLEET_CC_QUERY_TIMEOUT_MS'),
+
   outputBufferLines: 500,
   sseHeartbeatMs: 30000,
 

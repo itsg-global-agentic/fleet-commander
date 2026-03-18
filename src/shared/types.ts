@@ -205,6 +205,55 @@ export interface MessageTemplate {
 }
 
 // ---------------------------------------------------------------------------
+// CC Query Service (structured queries to Claude Code)
+// ---------------------------------------------------------------------------
+
+/** Generic result wrapper for all CC query responses */
+export interface CCQueryResult<T> {
+  success: boolean;
+  data?: T;
+  text?: string;
+  costUsd: number;
+  durationMs: number;
+  error?: string;
+}
+
+/** A single issue with computed priority from CC analysis */
+export interface PrioritizedIssue {
+  number: number;
+  title: string;
+  priority: number;
+  reason: string;
+}
+
+/** Complexity estimate for an issue */
+export interface ComplexityEstimate {
+  complexity: 'low' | 'medium' | 'high';
+  estimatedHours: number;
+  reason: string;
+  risks: string[];
+}
+
+/** Lightweight issue summary used as input to query methods */
+export interface IssueSummary {
+  number: number;
+  title: string;
+  labels: string[];
+}
+
+/** Constraints for queue assignment planning */
+export interface QueueConstraints {
+  maxConcurrent: number;
+  preferredOrder?: 'priority' | 'complexity' | 'fifo';
+}
+
+/** Ordered assignment plan returned by CC */
+export interface AssignmentPlan {
+  order: { number: number; reason: string }[];
+  estimatedTotalHours: number;
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard View (v_team_dashboard)
 // ---------------------------------------------------------------------------
 
