@@ -81,4 +81,16 @@ describe('TopBar', () => {
     expect(screen.queryByText('done')).not.toBeInTheDocument();
   });
 
+  it('renders dot separators between multiple statuses', () => {
+    mockTeams = [
+      makeTeam({ id: 1, status: 'running' }),
+      makeTeam({ id: 2, status: 'idle' }),
+    ];
+    const { container } = render(<TopBar />);
+    // Middle-dot separator rendered as &middot; (·)
+    const dots = container.querySelectorAll('span');
+    const dotTexts = Array.from(dots).filter(el => el.textContent === '\u00B7');
+    expect(dotTexts.length).toBe(1);
+  });
+
 });
