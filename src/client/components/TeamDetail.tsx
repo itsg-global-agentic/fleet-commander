@@ -326,6 +326,7 @@ export function TeamDetail() {
                       {detail.branchName && (
                         <span className="ml-3">Branch: {detail.branchName}</span>
                       )}
+                      <span className="ml-3">Model: {detail.model ?? '\u2014'}</span>
                     </div>
                   </section>
 

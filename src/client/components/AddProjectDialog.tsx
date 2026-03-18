@@ -33,6 +33,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
   const [repoPath, setRepoPath] = useState('');
   const [githubRepo, setGithubRepo] = useState('');
   const [maxActiveTeams, setMaxActiveTeams] = useState(5);
+  const [model, setModel] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -70,6 +71,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
       setRepoPath('');
       setGithubRepo('');
       setMaxActiveTeams(5);
+      setModel('');
       setError(null);
       setLoading(false);
       setSuggestions([]);
@@ -234,6 +236,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
         repoPath: repoPath.trim(),
         githubRepo: githubRepo.trim() || undefined,
         maxActiveTeams,
+        model: model.trim() || undefined,
       });
       onAdded();
     } catch (err: unknown) {
@@ -242,7 +245,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
     } finally {
       setLoading(false);
     }
-  }, [name, repoPath, githubRepo, maxActiveTeams, api, onAdded]);
+  }, [name, repoPath, githubRepo, maxActiveTeams, model, api, onAdded]);
 
   // Keyboard navigation for suggestions + Enter to submit
   const handlePathKeyDown = useCallback(
@@ -476,6 +479,25 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
             />
             <p className="mt-1 text-xs text-dark-muted/60">
               Max concurrent active teams before new launches are queued (1-50, default: 5).
+            </p>
+          </div>
+
+          {/* Model */}
+          <div>
+            <label className="block text-sm text-dark-muted mb-1">
+              Model <span className="text-dark-muted/50">(optional)</span>
+            </label>
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="e.g. opus, sonnet, claude-opus-4-6"
+              className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+              disabled={loading}
+            />
+            <p className="mt-1 text-xs text-dark-muted/60">
+              Claude model to use for teams in this project. Empty uses the default model.
             </p>
           </div>
 

@@ -143,6 +143,7 @@ export interface ProjectInsert {
   githubRepo?: string | null;
   maxActiveTeams?: number;
   promptFile?: string | null;
+  model?: string | null;
 }
 
 export interface ProjectUpdate {
@@ -152,6 +153,7 @@ export interface ProjectUpdate {
   hooksInstalled?: boolean;
   maxActiveTeams?: number;
   promptFile?: string | null;
+  model?: string | null;
 }
 
 export interface ProjectFilter {
@@ -205,6 +207,9 @@ export class FleetDatabase {
 
     // Add team_transitions table if missing (for existing databases)
     this.addTeamTransitionsTable();
+
+    // Add model column to projects if missing (for existing databases)
+    this.addModelColumn();
 
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
@@ -366,6 +371,22 @@ export class FleetDatabase {
   }
 
   /**
+   * Add model column to projects table if it doesn't exist.
+   * Handles upgrade of existing databases that lack this column.
+   */
+  private addModelColumn(): void {
+    try {
+      const columns = this.db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+      const hasColumn = columns.some((c) => c.name === 'model');
+      if (!hasColumn) {
+        this.db.exec('ALTER TABLE projects ADD COLUMN model TEXT');
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
+  /**
    * Get the current schema version.
    */
   getSchemaVersion(): number {
@@ -386,8 +407,8 @@ export class FleetDatabase {
   insertProject(data: ProjectInsert): Project {
     const now = new Date().toISOString();
     const stmt = this.db.prepare(`
-      INSERT INTO projects (name, repo_path, github_repo, max_active_teams, prompt_file, created_at, updated_at)
-      VALUES (@name, @repoPath, @githubRepo, @maxActiveTeams, @promptFile, @createdAt, @updatedAt)
+      INSERT INTO projects (name, repo_path, github_repo, max_active_teams, prompt_file, model, created_at, updated_at)
+      VALUES (@name, @repoPath, @githubRepo, @maxActiveTeams, @promptFile, @model, @createdAt, @updatedAt)
     `);
 
     const info = stmt.run({
@@ -396,6 +417,7 @@ export class FleetDatabase {
       githubRepo: data.githubRepo ?? null,
       maxActiveTeams: data.maxActiveTeams ?? 5,
       promptFile: data.promptFile ?? null,
+      model: data.model ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -480,6 +502,10 @@ export class FleetDatabase {
     if (fields.promptFile !== undefined) {
       setClauses.push('prompt_file = @promptFile');
       params.promptFile = fields.promptFile;
+    }
+    if (fields.model !== undefined) {
+      setClauses.push('model = @model');
+      params.model = fields.model;
     }
 
     if (setClauses.length === 0) return this.getProject(id);
@@ -1235,6 +1261,7 @@ export class FleetDatabase {
       hooksInstalled: (row.hooks_installed as number) === 1,
       maxActiveTeams: (row.max_active_teams as number | undefined) ?? 5,
       promptFile: (row.prompt_file as string | null) ?? null,
+      model: (row.model as string | null) ?? null,
       createdAt: row.created_at as string,
       updatedAt: row.updated_at as string,
     };
@@ -1324,6 +1351,7 @@ export class FleetDatabase {
       issueTitle: row.issue_title as string | null,
       projectId: (row.project_id as number | null) ?? null,
       projectName: (row.project_name as string | null) ?? null,
+      model: (row.model as string | null) ?? null,
       status: row.status as TeamStatus,
       phase: row.phase as TeamPhase,
       worktreeName: row.worktree_name as string,

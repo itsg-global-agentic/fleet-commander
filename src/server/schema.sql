@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS projects (
   hooks_installed INTEGER NOT NULL DEFAULT 0,         -- 0 | 1
   max_active_teams INTEGER NOT NULL DEFAULT 5,        -- max concurrent active teams before queueing
   prompt_file     TEXT,                               -- relative path to launch prompt .md file
+  model           TEXT,                               -- Claude model override e.g. "opus", "sonnet", "claude-opus-4-6"
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -114,6 +115,7 @@ SELECT
   t.issue_title,
   t.project_id,
   p.name AS project_name,
+  p.model AS model,
   t.status,
   t.phase,
   t.worktree_name,

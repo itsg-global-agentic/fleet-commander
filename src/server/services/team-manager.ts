@@ -432,6 +432,10 @@ export class TeamManager {
       args.push('--dangerously-skip-permissions');
     }
 
+    if (project.model) {
+      args.push('--model', project.model);
+    }
+
     // In headless mode, the initial prompt is sent via stdin (not as positional arg)
     // so that the process stays alive for follow-up messages.
     if (!isHeadless) {
@@ -845,6 +849,10 @@ export class TeamManager {
 
     if (config.skipPermissions) {
       args.push('--dangerously-skip-permissions');
+    }
+
+    if (project.model) {
+      args.push('--model', project.model);
     }
 
     // Update status to launching
@@ -1274,6 +1282,10 @@ export class TeamManager {
 
     if (config.skipPermissions) {
       args.push('--dangerously-skip-permissions');
+    }
+
+    if (project.model) {
+      args.push('--model', project.model);
     }
 
     // Initial prompt is sent via stdin, not as positional arg

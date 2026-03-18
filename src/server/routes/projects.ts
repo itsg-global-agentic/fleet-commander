@@ -31,6 +31,7 @@ interface CreateProjectBody {
   repoPath: string;
   githubRepo?: string;
   maxActiveTeams?: number;
+  model?: string;
 }
 
 interface UpdateProjectBody {
@@ -40,6 +41,7 @@ interface UpdateProjectBody {
   hooksInstalled?: boolean;
   maxActiveTeams?: number;
   promptFile?: string | null;
+  model?: string | null;
 }
 
 interface ProjectIdParams {
@@ -346,7 +348,7 @@ const projectsRoutes: FastifyPluginCallback = (
       reply: FastifyReply,
     ) => {
       try {
-        const { name, repoPath, githubRepo, maxActiveTeams } = request.body;
+        const { name, repoPath, githubRepo, maxActiveTeams, model } = request.body;
 
         // Validate name
         if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -441,6 +443,7 @@ const projectsRoutes: FastifyPluginCallback = (
           githubRepo: resolvedGithubRepo,
           maxActiveTeams: maxActiveTeams ?? 5,
           promptFile: promptRelPath,
+          model: model?.trim() || null,
         });
 
         // Install hooks (non-fatal)
@@ -572,7 +575,7 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const { name, status, githubRepo, hooksInstalled, maxActiveTeams, promptFile } = request.body || {};
+        const { name, status, githubRepo, hooksInstalled, maxActiveTeams, promptFile, model } = request.body || {};
 
         // Validate status if provided
         if (status !== undefined) {
@@ -610,6 +613,7 @@ const projectsRoutes: FastifyPluginCallback = (
           hooksInstalled,
           maxActiveTeams,
           promptFile,
+          model: model !== undefined ? (model?.trim() || null) : undefined,
         });
 
         // Broadcast SSE event
