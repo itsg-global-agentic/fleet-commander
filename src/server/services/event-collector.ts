@@ -37,6 +37,8 @@ export interface EventPayload {
   tool_input?: string;   // tool input JSON from PostToolUseFailure events (passed via route, not shell)
   stop_reason?: string;
   worktree_root?: string;
+  msg_to?: string;
+  msg_summary?: string;
 }
 
 /** Result returned from processEvent */
@@ -59,6 +61,15 @@ export interface EventCollectorDb {
   }): { id: number };
   updateTeam(teamId: number, fields: Record<string, unknown>): void;
   insertTransition(data: { teamId: number; fromStatus: TeamStatus; toStatus: TeamStatus; trigger: string; reason: string }): void;
+  insertAgentMessage(data: {
+    teamId: number;
+    eventId: number;
+    sender: string;
+    recipient: string;
+    summary?: string | null;
+    content?: string | null;
+    sessionId?: string | null;
+  }): { id: number };
 }
 
 /** SSE broker interface for broadcasting events */
@@ -238,6 +249,25 @@ export function processEvent(
     tool_name: payload.tool_name || null,
     timestamp: payload.timestamp || nowIso,
   });
+
+  // ── Capture inter-agent message routing ───────────────────────
+  // When a SendMessage tool call is received with a msg_to field,
+  // record the message in the agent_messages table for routing visibility.
+  if (payload.tool_name === 'SendMessage' && payload.msg_to) {
+    try {
+      db.insertAgentMessage({
+        teamId,
+        eventId,
+        sender: payload.agent_type || 'unknown',
+        recipient: payload.msg_to,
+        summary: payload.msg_summary || null,
+        content: payload.message || null,
+        sessionId: payload.session_id || null,
+      });
+    } catch {
+      // Non-critical — silently ignore insert failures
+    }
+  }
 
   return { event_id: eventId, team_id: teamId, processed: true };
 }

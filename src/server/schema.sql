@@ -228,5 +228,22 @@ CREATE TABLE IF NOT EXISTS team_transitions (
 
 CREATE INDEX IF NOT EXISTS idx_team_transitions_team ON team_transitions(team_id);
 
--- Insert schema version 4 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (4);
+-- ---------------------------------------------------------------------------
+-- AGENT MESSAGES — inter-agent message routing captured from SendMessage
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS agent_messages (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id         TEXT NOT NULL,
+  event_id        INTEGER REFERENCES events(id),
+  sender          TEXT NOT NULL,
+  recipient       TEXT NOT NULL,
+  summary         TEXT,
+  content         TEXT,
+  session_id      TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_messages_team ON agent_messages(team_id);
+
+-- Insert schema version 5 (or upgrade from earlier versions)
+INSERT OR IGNORE INTO schema_version (version) VALUES (5);

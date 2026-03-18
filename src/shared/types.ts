@@ -290,6 +290,23 @@ export interface TeamMember {
 }
 
 // ---------------------------------------------------------------------------
+// Agent Messages (inter-agent message routing)
+// ---------------------------------------------------------------------------
+
+/** A routed message between agents captured from SendMessage tool use */
+export interface AgentMessage {
+  id: number;
+  teamId: number;
+  eventId: number;
+  sender: string;
+  recipient: string;
+  summary: string | null;
+  content: string | null;
+  sessionId: string | null;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard View (v_team_dashboard)
 // ---------------------------------------------------------------------------
 

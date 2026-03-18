@@ -1024,6 +1024,87 @@ const teamsRoutes: FastifyPluginCallback = (
     },
   );
 
+  // -------------------------------------------------------------------------
+  // GET /api/teams/:id/messages — agent messages for this team
+  // -------------------------------------------------------------------------
+  fastify.get(
+    '/api/teams/:id/messages',
+    async (
+      request: FastifyRequest<{ Params: TeamIdParams; Querystring: { limit?: string } }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const teamId = parseInt(request.params.id, 10);
+        if (isNaN(teamId) || teamId < 1) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: 'Invalid team ID',
+          });
+        }
+
+        const db = getDatabase();
+        const team = db.getTeam(teamId);
+        if (!team) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: `Team ${teamId} not found`,
+          });
+        }
+
+        const limitParam = (request.query as { limit?: string }).limit;
+        const limit = limitParam ? parseInt(limitParam, 10) : undefined;
+
+        const messages = db.getAgentMessages(teamId, limit);
+        return reply.code(200).send(messages);
+      } catch (err: unknown) {
+        request.log.error(err, 'Failed to get agent messages');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // GET /api/teams/:id/messages/summary — aggregated message counts
+  // -------------------------------------------------------------------------
+  fastify.get(
+    '/api/teams/:id/messages/summary',
+    async (
+      request: FastifyRequest<{ Params: TeamIdParams }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const teamId = parseInt(request.params.id, 10);
+        if (isNaN(teamId) || teamId < 1) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: 'Invalid team ID',
+          });
+        }
+
+        const db = getDatabase();
+        const team = db.getTeam(teamId);
+        if (!team) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: `Team ${teamId} not found`,
+          });
+        }
+
+        const summary = db.getAgentMessageSummary(teamId);
+        return reply.code(200).send(summary);
+      } catch (err: unknown) {
+        request.log.error(err, 'Failed to get agent message summary');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
   done();
 };
 
