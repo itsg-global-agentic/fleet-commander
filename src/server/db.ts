@@ -11,6 +11,7 @@ import type {
   PullRequest,
   PRState,
   CIStatus,
+  MergeStatus,
   Event,
   Command,
   UsageSnapshot,
@@ -84,9 +85,9 @@ export interface PRInsert {
   prNumber: number;
   teamId?: number | null;
   title?: string | null;
-  state?: string | null;
-  ciStatus?: string | null;
-  mergeStatus?: string | null;
+  state?: PRState | null;
+  ciStatus?: CIStatus | null;
+  mergeStatus?: MergeStatus | null;
   autoMerge?: boolean;
   ciFailCount?: number;
   checksJson?: string | null;
@@ -95,9 +96,9 @@ export interface PRInsert {
 export interface PRUpdate {
   teamId?: number | null;
   title?: string | null;
-  state?: string | null;
-  ciStatus?: string | null;
-  mergeStatus?: string | null;
+  state?: PRState | null;
+  ciStatus?: CIStatus | null;
+  mergeStatus?: MergeStatus | null;
   autoMerge?: boolean;
   ciFailCount?: number;
   checksJson?: string | null;
@@ -1278,9 +1279,9 @@ export class FleetDatabase {
       prNumber: row.pr_number as number,
       teamId: row.team_id as number | null,
       title: (row.title as string | null) ?? null,
-      state: row.state as string | null,
-      mergeStatus: row.merge_state as string | null,
-      ciStatus: row.ci_status as string | null,
+      state: row.state as PRState | null,
+      mergeStatus: row.merge_state as MergeStatus | null,
+      ciStatus: row.ci_status as CIStatus | null,
       ciFailCount: row.ci_fail_count as number,
       checksJson: row.checks_json as string | null,
       autoMerge: (row.auto_merge as number) === 1,
@@ -1336,7 +1337,7 @@ export class FleetDatabase {
       sessionCount: row.session_count as number,
       prState: (row.pr_state as PRState | null) ?? null,
       ciStatus: (row.ci_status as CIStatus | null) ?? null,
-      mergeStatus: row.merge_status as string | null,
+      mergeStatus: row.merge_status as MergeStatus | null,
     };
   }
 }

@@ -18,6 +18,9 @@ export type PRState = 'draft' | 'open' | 'merged' | 'closed';
 /** CI pipeline status */
 export type CIStatus = 'none' | 'pending' | 'passing' | 'failing';
 
+/** PR merge readiness status (from GitHub mergeStateStatus) */
+export type MergeStatus = 'unknown' | 'clean' | 'behind' | 'blocked' | 'dirty' | 'unstable' | 'has_hooks' | 'draft';
+
 /** Project status */
 export type ProjectStatus = 'active' | 'paused' | 'archived';
 
@@ -99,9 +102,9 @@ export interface PullRequest {
   prNumber: number;
   teamId: number | null;
   title: string | null;
-  state: string | null;
-  mergeStatus: string | null;
-  ciStatus: string | null;
+  state: PRState | null;
+  mergeStatus: MergeStatus | null;
+  ciStatus: CIStatus | null;
   ciFailCount: number;
   checksJson: string | null;
   autoMerge: boolean;
@@ -218,7 +221,7 @@ export interface TeamDashboardRow {
   sessionCount: number;
   prState: PRState | null;
   ciStatus: CIStatus | null;
-  mergeStatus: string | null;
+  mergeStatus: MergeStatus | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -251,9 +254,9 @@ export interface TeamDetail {
   idleMin: number | null;
   pr: {
     number: number;
-    state: string | null;
-    mergeStatus: string | null;
-    ciStatus: string | null;
+    state: PRState | null;
+    mergeStatus: MergeStatus | null;
+    ciStatus: CIStatus | null;
     ciFailCount: number;
     checks: CICheck[];
     autoMerge: boolean;

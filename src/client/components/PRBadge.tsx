@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { PRDetail } from './PRDetail';
-import type { PRState } from '../../shared/types';
+import type { PRState, CIStatus } from '../../shared/types';
 
 /** CI status icon and color map */
 const CI_ICONS: Record<string, { icon: string; color: string }> = {
@@ -20,7 +20,7 @@ const STATE_COLORS: Record<string, string> = {
 
 interface PRBadgeProps {
   prNumber: number | null;
-  ciStatus: string | null;
+  ciStatus: CIStatus | null;
   teamId?: number;
   prState?: PRState | null;
 }

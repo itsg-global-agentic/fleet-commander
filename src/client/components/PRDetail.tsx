@@ -19,6 +19,9 @@ const MERGE_STATUS_COLORS: Record<string, string> = {
   behind: '#D29922',
   blocked: '#F85149',
   dirty: '#F85149',
+  unstable: '#D29922',
+  has_hooks: '#D29922',
+  draft: '#8B949E',
   unknown: '#8B949E',
 };
 
