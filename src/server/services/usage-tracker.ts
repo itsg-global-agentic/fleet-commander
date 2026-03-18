@@ -189,11 +189,11 @@ class UsagePoller {
     const data = (await resp.json()) as OAuthUsageResponse;
     const rawOutput = JSON.stringify(data);
 
-    // Map response fields to percentages (0-100)
-    const dailyPercent = Math.round((data.five_hour?.utilization ?? 0) * 100);
-    const weeklyPercent = Math.round((data.seven_day?.utilization ?? 0) * 100);
-    const sonnetPercent = Math.round((data.seven_day_sonnet?.utilization ?? 0) * 100);
-    const extraPercent = Math.round((data.extra_usage?.utilization ?? 0) * 100);
+    // API returns utilization as 0-100 already (e.g. 26.0 = 26%)
+    const dailyPercent = data.five_hour?.utilization ?? 0;
+    const weeklyPercent = data.seven_day?.utilization ?? 0;
+    const sonnetPercent = data.seven_day_sonnet?.utilization ?? 0;
+    const extraPercent = data.extra_usage?.utilization ?? 0;
 
     const dailyResetsAt = data.five_hour?.resets_at ?? null;
     const weeklyResetsAt = data.seven_day?.resets_at ?? null;
