@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS pull_requests (
   title           TEXT,
   state           TEXT,                           -- OPEN|MERGED|CLOSED|draft
   ci_status       TEXT,                           -- none|pending|passing|failing
-  merge_state     TEXT,                           -- unknown|clean|behind|blocked|dirty
+  merge_status    TEXT,                           -- unknown|clean|behind|blocked|dirty
   auto_merge      INTEGER NOT NULL DEFAULT 0,     -- 0|1
   ci_fail_count   INTEGER NOT NULL DEFAULT 0,     -- unique failure types; >= 3 means blocked
   checks_json     TEXT,                           -- JSON array: [{name, status, conclusion}]
@@ -128,7 +128,7 @@ SELECT
   ROUND((julianday('now') - julianday(t.last_event_at)) * 24 * 60, 1) AS idle_min,
   pr.state AS pr_state,
   pr.ci_status,
-  pr.merge_state AS merge_status,
+  pr.merge_status,
   t.created_at,
   t.updated_at
 FROM teams t

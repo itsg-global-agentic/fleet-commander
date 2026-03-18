@@ -243,6 +243,9 @@ export class FleetDatabase {
     // Add daily_resets_at and weekly_resets_at columns to usage_snapshots if missing
     this.addUsageResetsAtColumns();
 
+    // Rename merge_state -> merge_status in pull_requests (for existing databases)
+    this.renameMergeStateColumn();
+
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
     // In compiled (node): __dirname is dist/server/server
@@ -441,6 +444,17 @@ export class FleetDatabase {
       }
       if (!columns.some((c) => c.name === 'weekly_resets_at')) {
         this.db.exec('ALTER TABLE usage_snapshots ADD COLUMN weekly_resets_at TEXT');
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
+  private renameMergeStateColumn(): void {
+    try {
+      const columns = this.db.prepare("PRAGMA table_info(pull_requests)").all() as Array<{ name: string }>;
+      if (columns.some((c) => c.name === 'merge_state')) {
+        this.db.exec('ALTER TABLE pull_requests RENAME COLUMN merge_state TO merge_status');
       }
     } catch {
       // Table may not exist yet (fresh database) — schema.sql will create it
@@ -842,8 +856,8 @@ export class FleetDatabase {
 
   insertPullRequest(data: PRInsert): PullRequest {
     const stmt = this.db.prepare(`
-      INSERT INTO pull_requests (pr_number, team_id, title, state, ci_status, merge_state, auto_merge, ci_fail_count, checks_json)
-      VALUES (@prNumber, @teamId, @title, @state, @ciStatus, @mergeState, @autoMerge, @ciFailCount, @checksJson)
+      INSERT INTO pull_requests (pr_number, team_id, title, state, ci_status, merge_status, auto_merge, ci_fail_count, checks_json)
+      VALUES (@prNumber, @teamId, @title, @state, @ciStatus, @mergeStatus, @autoMerge, @ciFailCount, @checksJson)
     `);
 
     stmt.run({
@@ -852,7 +866,7 @@ export class FleetDatabase {
       title: data.title ?? null,
       state: data.state ?? null,
       ciStatus: data.ciStatus ?? null,
-      mergeState: data.mergeStatus ?? null,
+      mergeStatus: data.mergeStatus ?? null,
       autoMerge: data.autoMerge ? 1 : 0,
       ciFailCount: data.ciFailCount ?? 0,
       checksJson: data.checksJson ?? null,
@@ -894,7 +908,7 @@ export class FleetDatabase {
       params.ciStatus = fields.ciStatus;
     }
     if (fields.mergeStatus !== undefined) {
-      setClauses.push('merge_state = @mergeStatus');
+      setClauses.push('merge_status = @mergeStatus');
       params.mergeStatus = fields.mergeStatus;
     }
     if (fields.autoMerge !== undefined) {
@@ -1369,7 +1383,7 @@ export class FleetDatabase {
       teamId: row.team_id as number | null,
       title: (row.title as string | null) ?? null,
       state: row.state as PRState | null,
-      mergeStatus: row.merge_state as MergeStatus | null,
+      mergeStatus: row.merge_status as MergeStatus | null,
       ciStatus: row.ci_status as CIStatus | null,
       ciFailCount: row.ci_fail_count as number,
       checksJson: row.checks_json as string | null,
