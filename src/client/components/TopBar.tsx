@@ -4,36 +4,36 @@ import { useFleet } from '../context/FleetContext';
 import { LaunchDialog } from './LaunchDialog';
 import { useApi } from '../hooks/useApi';
 import { RocketIcon } from './Icons';
-import { STATUS_COLORS } from '../utils/constants';
+import { STATUS_COLORS, getUsageColor } from '../utils/constants';
+import type { UsageZone } from '../../shared/types';
 
-/** Get usage text color: green under 50%, yellow 50-80%, red over 80% */
-function getUsageColor(percent: number): string {
-  if (percent > 80) return '#F85149';
-  if (percent >= 50) return '#D29922';
-  return '#3FB950';
+interface RedThresholds {
+  daily: number;
+  weekly: number;
+  sonnet: number;
+  extra: number;
 }
 
-/** Check if any usage category is in red zone (>80%) */
-function isUsageRedZone(data: UsageData): boolean {
-  return Math.max(data.dailyPercent, data.weeklyPercent, data.sonnetPercent, data.extraPercent) > 80;
-}
+const DEFAULT_RED_THRESHOLDS: RedThresholds = { daily: 85, weekly: 95, sonnet: 95, extra: 95 };
 
-interface UsageData {
+interface UsageResponse {
   dailyPercent: number;
   weeklyPercent: number;
   sonnetPercent: number;
   extraPercent: number;
+  zone?: UsageZone;
+  redThresholds?: RedThresholds;
 }
 
 export function TopBar() {
   const { teams } = useFleet();
   const api = useApi();
   const [launchOpen, setLaunchOpen] = useState(false);
-  const [usage, setUsage] = useState<UsageData | null>(null);
+  const [usage, setUsage] = useState<UsageResponse | null>(null);
 
   const fetchUsage = useCallback(async () => {
     try {
-      const data = await api.get<UsageData>('usage');
+      const data = await api.get<UsageResponse>('usage');
       setUsage(data);
     } catch {
       // Silently ignore — pill will just not show
@@ -52,13 +52,15 @@ export function TopBar() {
     return acc;
   }, {} as Record<string, number>);
 
+  const thresholds = usage?.redThresholds ?? DEFAULT_RED_THRESHOLDS;
+
   // Build usage indicators with full names
   const usageIndicators = usage
     ? [
-        { key: 'daily', label: 'Daily', percent: usage.dailyPercent },
-        { key: 'weekly', label: 'Weekly', percent: usage.weeklyPercent },
-        { key: 'sonnet', label: 'Sonnet', percent: usage.sonnetPercent },
-        { key: 'extra', label: 'Extra', percent: usage.extraPercent },
+        { key: 'daily', label: 'Daily', percent: usage.dailyPercent, redThreshold: thresholds.daily },
+        { key: 'weekly', label: 'Weekly', percent: usage.weeklyPercent, redThreshold: thresholds.weekly },
+        { key: 'sonnet', label: 'Sonnet', percent: usage.sonnetPercent, redThreshold: thresholds.sonnet },
+        { key: 'extra', label: 'Extra', percent: usage.extraPercent, redThreshold: thresholds.extra },
       ]
     : [];
 
@@ -70,6 +72,9 @@ export function TopBar() {
     { label: 'idle', count: counts.idle || 0, color: STATUS_COLORS.idle },
     { label: 'stuck', count: counts.stuck || 0, color: STATUS_COLORS.stuck },
   ].filter(s => s.count > 0);
+
+  // Use server-provided zone instead of computing locally
+  const isRedZone = usage?.zone === 'red';
 
   return (
     <>
@@ -98,12 +103,12 @@ export function TopBar() {
           {usageIndicators.map(ind => (
             <span key={ind.key} className="text-xs font-medium">
               <span className="text-dark-muted">{ind.label}</span>{' '}
-              <span style={{ color: getUsageColor(ind.percent) }}>{ind.percent.toFixed(0)}%</span>
+              <span style={{ color: getUsageColor(ind.percent, ind.redThreshold) }}>{ind.percent.toFixed(0)}%</span>
             </span>
           ))}
 
           {/* PAUSED badge when usage is in red zone */}
-          {usage && isUsageRedZone(usage) && (
+          {isRedZone && (
             <span className="text-xs font-bold animate-pulse" style={{ color: '#F85149' }}>
               PAUSED
             </span>

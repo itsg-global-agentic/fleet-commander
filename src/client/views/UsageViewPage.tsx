@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
+import { getUsageColor } from '../utils/constants';
 import type { UsageSnapshot } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -8,29 +9,31 @@ import type { UsageSnapshot } from '../../shared/types';
 
 const REFRESH_INTERVAL_MS = 30_000; // 30 seconds
 
+interface RedThresholds {
+  daily: number;
+  weekly: number;
+  sonnet: number;
+  extra: number;
+}
+
+const DEFAULT_RED_THRESHOLDS: RedThresholds = { daily: 85, weekly: 95, sonnet: 95, extra: 95 };
+
 interface UsageBar {
   label: string;
   key: 'dailyPercent' | 'weeklyPercent' | 'sonnetPercent' | 'extraPercent';
-  baseColor: string;
+  thresholdKey: keyof RedThresholds;
 }
 
 const USAGE_BARS: UsageBar[] = [
-  { label: 'Daily Usage', key: 'dailyPercent', baseColor: '#58A6FF' },
-  { label: 'Weekly Usage', key: 'weeklyPercent', baseColor: '#3FB950' },
-  { label: 'Sonnet Usage', key: 'sonnetPercent', baseColor: '#A371F7' },
-  { label: 'Extra Usage', key: 'extraPercent', baseColor: '#D29922' },
+  { label: 'Daily Usage', key: 'dailyPercent', thresholdKey: 'daily' },
+  { label: 'Weekly Usage', key: 'weeklyPercent', thresholdKey: 'weekly' },
+  { label: 'Sonnet Usage', key: 'sonnetPercent', thresholdKey: 'sonnet' },
+  { label: 'Extra Usage', key: 'extraPercent', thresholdKey: 'extra' },
 ];
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Get color based on usage threshold */
-function getBarColor(percent: number, baseColor: string): string {
-  if (percent > 80) return '#F85149';
-  if (percent >= 50) return '#D29922';
-  return baseColor;
-}
 
 /** Format a date string for display */
 function formatTimestamp(dateStr: string): string {
@@ -44,8 +47,12 @@ function formatTimestamp(dateStr: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// HistoryResponse type
+// Response types
 // ---------------------------------------------------------------------------
+
+interface UsageResponse extends UsageSnapshot {
+  redThresholds?: RedThresholds;
+}
 
 interface UsageHistoryResponse {
   count: number;
@@ -59,6 +66,7 @@ interface UsageHistoryResponse {
 export function UsageViewPage() {
   const api = useApi();
   const [usage, setUsage] = useState<UsageSnapshot | null>(null);
+  const [redThresholds, setRedThresholds] = useState<RedThresholds>(DEFAULT_RED_THRESHOLDS);
   const [history, setHistory] = useState<UsageSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -66,10 +74,13 @@ export function UsageViewPage() {
   const fetchUsage = useCallback(async () => {
     try {
       const [latest, historyData] = await Promise.all([
-        api.get<UsageSnapshot>('usage'),
+        api.get<UsageResponse>('usage'),
         api.get<UsageHistoryResponse>('usage/history?limit=10'),
       ]);
       setUsage(latest);
+      if (latest.redThresholds) {
+        setRedThresholds(latest.redThresholds);
+      }
       setHistory(historyData.snapshots);
       setError(null);
     } catch (err) {
@@ -108,7 +119,7 @@ export function UsageViewPage() {
           <div className="flex flex-col gap-4">
             {USAGE_BARS.map((bar) => {
               const percent = usage[bar.key] ?? 0;
-              const color = getBarColor(percent, bar.baseColor);
+              const color = getUsageColor(percent, redThresholds[bar.thresholdKey]);
               const clampedPercent = Math.min(Math.max(percent, 0), 100);
 
               return (
@@ -192,19 +203,19 @@ export function UsageViewPage() {
                         {snap.recordedAt ? formatTimestamp(snap.recordedAt) : '--'}
                       </td>
                       <td className="px-4 whitespace-nowrap text-sm text-right tabular-nums"
-                        style={{ color: getBarColor(snap.dailyPercent, '#58A6FF') }}>
+                        style={{ color: getUsageColor(snap.dailyPercent, redThresholds.daily) }}>
                         {snap.dailyPercent.toFixed(1)}%
                       </td>
                       <td className="px-4 whitespace-nowrap text-sm text-right tabular-nums"
-                        style={{ color: getBarColor(snap.weeklyPercent, '#3FB950') }}>
+                        style={{ color: getUsageColor(snap.weeklyPercent, redThresholds.weekly) }}>
                         {snap.weeklyPercent.toFixed(1)}%
                       </td>
                       <td className="px-4 whitespace-nowrap text-sm text-right tabular-nums"
-                        style={{ color: getBarColor(snap.sonnetPercent, '#A371F7') }}>
+                        style={{ color: getUsageColor(snap.sonnetPercent, redThresholds.sonnet) }}>
                         {snap.sonnetPercent.toFixed(1)}%
                       </td>
                       <td className="px-4 whitespace-nowrap text-sm text-right tabular-nums"
-                        style={{ color: getBarColor(snap.extraPercent, '#D29922') }}>
+                        style={{ color: getUsageColor(snap.extraPercent, redThresholds.extra) }}>
                         {snap.extraPercent.toFixed(1)}%
                       </td>
                     </tr>
