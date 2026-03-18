@@ -42,14 +42,14 @@ const usageRoutes: FastifyPluginCallback = (
             extraPercent: 0,
             recordedAt: null,
             zone: getUsageZone(),
-            redThresholds: { daily: config.usageRedDailyPct, weekly: config.usageRedWeeklyPct },
+            redThresholds: { daily: config.usageRedDailyPct, weekly: config.usageRedWeeklyPct, sonnet: config.usageRedSonnetPct, extra: config.usageRedExtraPct },
           });
         }
 
         return reply.code(200).send({
           ...latest,
           zone: getUsageZone(),
-          redThresholds: { daily: config.usageRedDailyPct, weekly: config.usageRedWeeklyPct },
+          redThresholds: { daily: config.usageRedDailyPct, weekly: config.usageRedWeeklyPct, sonnet: config.usageRedSonnetPct, extra: config.usageRedExtraPct },
         });
       } catch (err: unknown) {
         _request.log.error(err, 'Failed to get latest usage');
