@@ -30,6 +30,7 @@ interface LaunchBody {
   issueTitle?: string;
   prompt?: string;
   headless?: boolean;
+  force?: boolean;
 }
 
 interface LaunchBatchBody {
@@ -96,7 +97,7 @@ const teamsRoutes: FastifyPluginCallback = (
       reply: FastifyReply,
     ) => {
       try {
-        const { projectId, issueNumber, issueTitle, prompt, headless } = request.body;
+        const { projectId, issueNumber, issueTitle, prompt, headless, force } = request.body;
 
         if (!projectId || typeof projectId !== 'number' || projectId < 1) {
           return reply.code(400).send({
@@ -113,7 +114,7 @@ const teamsRoutes: FastifyPluginCallback = (
         }
 
         const manager = getTeamManager();
-        const team = await manager.launch(projectId, issueNumber, issueTitle, prompt, headless);
+        const team = await manager.launch(projectId, issueNumber, issueTitle, prompt, headless, force);
         return reply.code(201).send(team);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);

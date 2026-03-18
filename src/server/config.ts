@@ -35,6 +35,9 @@ const config = Object.freeze({
   stuckThresholdMin: safeParseInt(process.env['FLEET_STUCK_THRESHOLD_MIN'] || '15', 'FLEET_STUCK_THRESHOLD_MIN'),
   maxUniqueCiFailures: safeParseInt(process.env['FLEET_MAX_CI_FAILURES'] || '3', 'FLEET_MAX_CI_FAILURES'),
 
+  usageRedDailyPct: safeParseInt(process.env['FLEET_USAGE_RED_DAILY_PCT'] || '85', 'FLEET_USAGE_RED_DAILY_PCT'),
+  usageRedWeeklyPct: safeParseInt(process.env['FLEET_USAGE_RED_WEEKLY_PCT'] || '95', 'FLEET_USAGE_RED_WEEKLY_PCT'),
+
   claudeCmd: process.env['FLEET_CLAUDE_CMD'] || 'claude',
   skipPermissions: process.env['FLEET_SKIP_PERMISSIONS'] !== 'false',
 

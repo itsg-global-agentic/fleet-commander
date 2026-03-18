@@ -12,7 +12,8 @@ import type {
   FastifyReply,
 } from 'fastify';
 import { getDatabase } from '../db.js';
-import { processUsageSnapshot } from '../services/usage-tracker.js';
+import { processUsageSnapshot, getUsageZone } from '../services/usage-tracker.js';
+import config from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Plugin
@@ -40,10 +41,16 @@ const usageRoutes: FastifyPluginCallback = (
             sonnetPercent: 0,
             extraPercent: 0,
             recordedAt: null,
+            zone: getUsageZone(),
+            redThresholds: { daily: config.usageRedDailyPct, weekly: config.usageRedWeeklyPct },
           });
         }
 
-        return reply.code(200).send(latest);
+        return reply.code(200).send({
+          ...latest,
+          zone: getUsageZone(),
+          redThresholds: { daily: config.usageRedDailyPct, weekly: config.usageRedWeeklyPct },
+        });
       } catch (err: unknown) {
         _request.log.error(err, 'Failed to get latest usage');
         return reply.code(500).send({

@@ -1,19 +1,46 @@
 /**
- * Usage Tracking Service — Records and broadcasts usage percentage snapshots
+ * Usage Tracking Service — Reads usage from Anthropic OAuth endpoint
  *
- * Replaces cost tracking with usage-percentage tracking that mirrors what
- * Claude Code's /usage command reports: daily, weekly, Sonnet-only, and
- * extra usage as 0-100% progress bars.
+ * Replaces the old `claude -p "/usage"` poller with a direct HTTP call to
+ * the Anthropic OAuth usage API, reading the token from the local
+ * Claude credentials file.
  *
- * Includes a UsagePoller that periodically runs `claude -p "/usage"` to
- * capture real usage data from Claude Code.
+ * Also implements a usage gate: when usage enters the "red zone",
+ * queue blocking is activated — no new teams will be dequeued until
+ * usage drops back to "green".
  */
 
-import { execSync } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { getDatabase } from '../db.js';
 import { sseBroker } from './sse-broker.js';
 import config from '../config.js';
-import { findGitBash } from '../utils/find-git-bash.js';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type UsageZone = 'green' | 'red';
+
+export interface ParsedUsage {
+  daily: number;
+  weekly: number;
+  sonnet: number;
+  extra: number;
+}
+
+interface OAuthUsageBucket {
+  utilization: number;
+  resets_at?: string;
+}
+
+interface OAuthUsageResponse {
+  five_hour?: OAuthUsageBucket;
+  seven_day?: OAuthUsageBucket;
+  seven_day_sonnet?: OAuthUsageBucket;
+  extra_usage?: OAuthUsageBucket;
+}
 
 // ---------------------------------------------------------------------------
 // Manual snapshot helper (kept for POST /api/usage testing endpoint)
@@ -30,6 +57,8 @@ export function processUsageSnapshot(data: {
   weeklyPercent?: number;
   sonnetPercent?: number;
   extraPercent?: number;
+  dailyResetsAt?: string;
+  weeklyResetsAt?: string;
   rawOutput?: string;
 }): void {
   const db = getDatabase();
@@ -40,22 +69,46 @@ export function processUsageSnapshot(data: {
     weekly_percent: data.weeklyPercent ?? 0,
     sonnet_percent: data.sonnetPercent ?? 0,
     extra_percent: data.extraPercent ?? 0,
+    zone: getUsageZone(),
   });
 }
 
 // ---------------------------------------------------------------------------
-// Parsed usage result
+// Usage Zone — red/green gate
 // ---------------------------------------------------------------------------
 
-interface ParsedUsage {
-  daily: number;
-  weekly: number;
-  sonnet: number;
-  extra: number;
+let _lastZone: UsageZone = 'green';
+let _latestDaily = 0;
+let _latestWeekly = 0;
+
+/**
+ * Returns 'red' if usage exceeds the configured thresholds, 'green' otherwise.
+ */
+export function getUsageZone(): UsageZone {
+  if (_latestDaily >= config.usageRedDailyPct || _latestWeekly >= config.usageRedWeeklyPct) {
+    return 'red';
+  }
+  return 'green';
 }
 
 // ---------------------------------------------------------------------------
-// Usage Poller — runs `claude -p "/usage"` on a timer
+// OAuth token reader
+// ---------------------------------------------------------------------------
+
+function readOAuthToken(): string | null {
+  try {
+    const credPath = path.join(os.homedir(), '.claude', '.credentials.json');
+    const raw = fs.readFileSync(credPath, 'utf-8');
+    const creds = JSON.parse(raw);
+    const token = creds?.claudeAiOauth?.accessToken;
+    return typeof token === 'string' && token.length > 0 ? token : null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Usage Poller — fetches from Anthropic OAuth endpoint
 // ---------------------------------------------------------------------------
 
 class UsagePoller {
@@ -88,46 +141,25 @@ class UsagePoller {
   }
 
   /**
-   * Execute a single poll: run `claude -p "/usage"`, parse the output,
-   * store it as a usage snapshot, and broadcast via SSE.
+   * Execute a single poll: fetch usage from Anthropic API,
+   * store as a usage snapshot, and broadcast via SSE.
    */
   poll(): void {
     try {
-      const claudeCmd = config.claudeCmd;
-      // Run claude in print mode with the /usage slash command.
-      // This should output usage information and exit immediately.
-      const env: Record<string, string | undefined> = { ...process.env };
-      const gitBash = findGitBash();
-      if (gitBash) env['CLAUDE_CODE_GIT_BASH_PATH'] = gitBash;
-
-      const output = execSync(`${claudeCmd} -p "/usage"`, {
-        encoding: 'utf-8',
-        timeout: 30000,
-        env,
-      });
-
-      const parsed = this.parseUsageOutput(output);
-      if (parsed) {
-        const db = getDatabase();
-        db.insertUsageSnapshot({
-          dailyPercent: parsed.daily,
-          weeklyPercent: parsed.weekly,
-          sonnetPercent: parsed.sonnet,
-          extraPercent: parsed.extra,
-          rawOutput: output,
-        });
-
-        sseBroker.broadcast('usage_updated', {
-          daily_percent: parsed.daily,
-          weekly_percent: parsed.weekly,
-          sonnet_percent: parsed.sonnet,
-          extra_percent: parsed.extra,
-        });
-
-        console.log(
-          `[UsagePoller] Snapshot recorded — daily=${parsed.daily}% weekly=${parsed.weekly}% sonnet=${parsed.sonnet}% extra=${parsed.extra}%`,
-        );
+      const token = readOAuthToken();
+      if (!token) {
+        console.warn('[UsagePoller] No OAuth token found in ~/.claude/.credentials.json');
+        return;
       }
+
+      // Use synchronous fetch via a self-invoking async to keep poll() sync-compatible
+      // with the setInterval pattern. Fire-and-forget.
+      this.fetchUsage(token).catch((err: unknown) => {
+        console.error(
+          '[UsagePoller] Failed to fetch usage:',
+          err instanceof Error ? err.message : err,
+        );
+      });
     } catch (err: unknown) {
       console.error(
         '[UsagePoller] Failed to poll usage:',
@@ -137,60 +169,89 @@ class UsagePoller {
   }
 
   /**
-   * Parse the raw text output of `claude -p "/usage"` into percentage values.
-   *
-   * The exact format of the /usage output is not guaranteed, so we try
-   * multiple parsing strategies:
-   *
-   * 1. Keyword matching — look for lines containing "daily", "weekly",
-   *    "sonnet", or "extra" with a percentage nearby.
-   * 2. Positional fallback — take the first 2-4 percentage values found
-   *    and assign them in order (daily, weekly, sonnet, extra).
+   * Fetch usage data from the Anthropic OAuth endpoint and process it.
    */
-  parseUsageOutput(output: string): ParsedUsage | null {
-    const result: ParsedUsage = { daily: 0, weekly: 0, sonnet: 0, extra: 0 };
+  private async fetchUsage(token: string): Promise<void> {
+    const resp = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
+    });
 
-    // Strategy 1: Keyword-based matching on each line
-    const lines = output.split('\n');
-    for (const line of lines) {
-      const lower = line.toLowerCase();
-      const pctMatch = line.match(/(\d+(?:\.\d+)?)\s*%/);
-      if (!pctMatch) continue;
-      const pct = parseFloat(pctMatch[1]);
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => '');
+      console.error(`[UsagePoller] API returned ${resp.status}: ${body.substring(0, 200)}`);
+      return;
+    }
 
-      if (lower.includes('daily') || lower.includes('dzien')) {
-        result.daily = pct;
-      } else if (lower.includes('weekly') || lower.includes('tydz') || lower.includes('tygodn')) {
-        result.weekly = pct;
-      } else if (lower.includes('sonnet')) {
-        result.sonnet = pct;
-      } else if (lower.includes('extra') || lower.includes('dodatkow')) {
-        result.extra = pct;
+    const data = (await resp.json()) as OAuthUsageResponse;
+    const rawOutput = JSON.stringify(data);
+
+    // Map response fields to percentages (0-100)
+    const dailyPercent = Math.round((data.five_hour?.utilization ?? 0) * 100);
+    const weeklyPercent = Math.round((data.seven_day?.utilization ?? 0) * 100);
+    const sonnetPercent = Math.round((data.seven_day_sonnet?.utilization ?? 0) * 100);
+    const extraPercent = Math.round((data.extra_usage?.utilization ?? 0) * 100);
+
+    const dailyResetsAt = data.five_hour?.resets_at ?? null;
+    const weeklyResetsAt = data.seven_day?.resets_at ?? null;
+
+    // Update module-level tracking variables
+    _latestDaily = dailyPercent;
+    _latestWeekly = weeklyPercent;
+
+    const previousZone = _lastZone;
+    const currentZone = getUsageZone();
+
+    // Store snapshot
+    const db = getDatabase();
+    db.insertUsageSnapshot({
+      dailyPercent,
+      weeklyPercent,
+      sonnetPercent,
+      extraPercent,
+      dailyResetsAt: dailyResetsAt ?? undefined,
+      weeklyResetsAt: weeklyResetsAt ?? undefined,
+      rawOutput,
+    });
+
+    // Broadcast via SSE
+    sseBroker.broadcast('usage_updated', {
+      daily_percent: dailyPercent,
+      weekly_percent: weeklyPercent,
+      sonnet_percent: sonnetPercent,
+      extra_percent: extraPercent,
+      zone: currentZone,
+    });
+
+    console.log(
+      `[UsagePoller] Snapshot recorded — daily=${dailyPercent}% weekly=${weeklyPercent}% sonnet=${sonnetPercent}% extra=${extraPercent}% zone=${currentZone}`,
+    );
+
+    // Zone transition: red -> green => trigger queue processing for all projects
+    if (previousZone === 'red' && currentZone === 'green') {
+      console.log('[UsagePoller] Zone transition: red -> green — draining queues');
+      try {
+        // Dynamically import to avoid circular dependency
+        const { getTeamManager } = await import('./team-manager.js');
+        const manager = getTeamManager();
+        const projects = db.getProjects({ status: 'active' });
+        for (const project of projects) {
+          const queued = db.getQueuedTeamsByProject(project.id);
+          if (queued.length > 0) {
+            manager.processQueue(project.id).catch((err: unknown) => {
+              console.error(`[UsagePoller] processQueue error for project ${project.id}:`, err);
+            });
+          }
+        }
+      } catch (err: unknown) {
+        console.error('[UsagePoller] Failed to drain queues on zone transition:', err);
       }
     }
 
-    // If at least one value was found via keywords, use them
-    if (result.daily > 0 || result.weekly > 0 || result.sonnet > 0 || result.extra > 0) {
-      return result;
-    }
-
-    // Strategy 2: Positional — grab all percentages in document order
-    const allPcts = output.match(/(\d+(?:\.\d+)?)\s*%/g);
-    if (allPcts && allPcts.length >= 2) {
-      const nums = allPcts.map((s) => parseFloat(s));
-      result.daily = nums[0] ?? 0;
-      result.weekly = nums[1] ?? 0;
-      result.sonnet = nums[2] ?? 0;
-      result.extra = nums[3] ?? 0;
-      return result;
-    }
-
-    // Could not parse — log for debugging
-    console.log(
-      '[UsagePoller] Could not parse usage output:',
-      output.substring(0, 500),
-    );
-    return null;
+    _lastZone = currentZone;
   }
 }
 

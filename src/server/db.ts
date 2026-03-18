@@ -121,6 +121,8 @@ export interface UsageInsert {
   weeklyPercent?: number;
   sonnetPercent?: number;
   extraPercent?: number;
+  dailyResetsAt?: string;
+  weeklyResetsAt?: string;
   rawOutput?: string;
 }
 
@@ -215,6 +217,9 @@ export class FleetDatabase {
 
     // Add custom_prompt column to teams if missing (for existing databases)
     this.addCustomPromptColumn();
+
+    // Add daily_resets_at and weekly_resets_at columns to usage_snapshots if missing
+    this.addUsageResetsAtColumns();
 
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
@@ -397,6 +402,23 @@ export class FleetDatabase {
       const hasColumn = columns.some((c) => c.name === 'custom_prompt');
       if (!hasColumn) {
         this.db.exec('ALTER TABLE teams ADD COLUMN custom_prompt TEXT');
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
+  /**
+   * Add daily_resets_at and weekly_resets_at columns to usage_snapshots if missing.
+   */
+  private addUsageResetsAtColumns(): void {
+    try {
+      const columns = this.db.prepare("PRAGMA table_info(usage_snapshots)").all() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === 'daily_resets_at')) {
+        this.db.exec('ALTER TABLE usage_snapshots ADD COLUMN daily_resets_at TEXT');
+      }
+      if (!columns.some((c) => c.name === 'weekly_resets_at')) {
+        this.db.exec('ALTER TABLE usage_snapshots ADD COLUMN weekly_resets_at TEXT');
       }
     } catch {
       // Table may not exist yet (fresh database) — schema.sql will create it
@@ -925,8 +947,8 @@ export class FleetDatabase {
 
   insertUsageSnapshot(data: UsageInsert): UsageSnapshot {
     const stmt = this.db.prepare(`
-      INSERT INTO usage_snapshots (team_id, project_id, session_id, daily_percent, weekly_percent, sonnet_percent, extra_percent, raw_output)
-      VALUES (@teamId, @projectId, @sessionId, @dailyPercent, @weeklyPercent, @sonnetPercent, @extraPercent, @rawOutput)
+      INSERT INTO usage_snapshots (team_id, project_id, session_id, daily_percent, weekly_percent, sonnet_percent, extra_percent, daily_resets_at, weekly_resets_at, raw_output)
+      VALUES (@teamId, @projectId, @sessionId, @dailyPercent, @weeklyPercent, @sonnetPercent, @extraPercent, @dailyResetsAt, @weeklyResetsAt, @rawOutput)
     `);
 
     const info = stmt.run({
@@ -937,6 +959,8 @@ export class FleetDatabase {
       weeklyPercent: data.weeklyPercent ?? 0,
       sonnetPercent: data.sonnetPercent ?? 0,
       extraPercent: data.extraPercent ?? 0,
+      dailyResetsAt: data.dailyResetsAt ?? null,
+      weeklyResetsAt: data.weeklyResetsAt ?? null,
       rawOutput: data.rawOutput ?? null,
     });
 
@@ -1355,6 +1379,8 @@ export class FleetDatabase {
       weeklyPercent: row.weekly_percent as number,
       sonnetPercent: row.sonnet_percent as number,
       extraPercent: row.extra_percent as number,
+      dailyResetsAt: (row.daily_resets_at as string | null) ?? null,
+      weeklyResetsAt: (row.weekly_resets_at as string | null) ?? null,
       rawOutput: row.raw_output as string | null,
       recordedAt: row.recorded_at as string,
     };

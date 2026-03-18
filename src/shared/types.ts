@@ -24,6 +24,9 @@ export type MergeStatus = 'unknown' | 'clean' | 'behind' | 'blocked' | 'dirty' |
 /** Project status */
 export type ProjectStatus = 'active' | 'paused' | 'archived';
 
+/** Usage zone for queue gating */
+export type UsageZone = 'green' | 'red';
+
 // ---------------------------------------------------------------------------
 // Core Entities (matching PRD section 4 schema)
 // ---------------------------------------------------------------------------
@@ -158,6 +161,8 @@ export interface UsageSnapshot {
   weeklyPercent: number;
   sonnetPercent: number;
   extraPercent: number;
+  dailyResetsAt: string | null;
+  weeklyResetsAt: string | null;
   rawOutput: string | null;
   recordedAt: string;
 }

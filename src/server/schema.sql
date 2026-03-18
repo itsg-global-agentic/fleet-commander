@@ -158,6 +158,8 @@ CREATE TABLE IF NOT EXISTS usage_snapshots (
   weekly_percent  REAL DEFAULT 0,
   sonnet_percent  REAL DEFAULT 0,
   extra_percent   REAL DEFAULT 0,
+  daily_resets_at TEXT,
+  weekly_resets_at TEXT,
   raw_output      TEXT,
   recorded_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );

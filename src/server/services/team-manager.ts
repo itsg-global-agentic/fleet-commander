@@ -19,6 +19,7 @@ import { sseBroker } from './sse-broker.js';
 import type { StreamEvent } from './sse-broker.js';
 import { findGitBash } from '../utils/find-git-bash.js';
 import type { Team, Project } from '../../shared/types.js';
+import { getUsageZone } from './usage-tracker.js';
 
 const execAsync = promisify(execCallback);
 
@@ -220,6 +221,7 @@ export class TeamManager {
     issueTitle?: string,
     prompt?: string,
     headless?: boolean,
+    force?: boolean,
   ): Promise<Team> {
     const db = getDatabase();
 
@@ -230,6 +232,12 @@ export class TeamManager {
     }
 
     console.log(`[TeamManager] Launch started: project=${project.name} issue=#${issueNumber}`);
+
+    // Usage gate: if in red zone and not forced, queue instead of launching
+    if (!force && getUsageZone() === 'red') {
+      console.log(`[TeamManager] Usage zone is RED — queueing team for issue #${issueNumber}`);
+      return this.queueTeam(db, project, projectId, issueNumber, issueTitle, headless, prompt);
+    }
 
     // Check active team limit before proceeding
     const activeCount = db.getActiveTeamCountByProject(projectId);
@@ -1144,6 +1152,12 @@ export class TeamManager {
       const db = getDatabase();
       const project = db.getProject(projectId);
       if (!project) return;
+
+      // Usage gate: do not dequeue if in red zone
+      if (getUsageZone() === 'red') {
+        console.log(`[TeamManager] processQueue blocked — usage zone is RED`);
+        return;
+      }
 
       const activeCount = db.getActiveTeamCountByProject(projectId);
       const available = project.maxActiveTeams - activeCount;
