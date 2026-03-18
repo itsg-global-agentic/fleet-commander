@@ -21,14 +21,16 @@ const STATUS_PRIORITY: Record<TeamStatus, number> = {
   done: 6,
 };
 
-/** Sort teams by status priority, then by duration descending within same status */
+/** Sort teams by status priority, then by launch date descending (newest first) within same status */
 function sortTeams(teams: TeamDashboardRow[]): TeamDashboardRow[] {
   return [...teams].sort((a, b) => {
     const aPri = STATUS_PRIORITY[a.status] ?? 99;
     const bPri = STATUS_PRIORITY[b.status] ?? 99;
     if (aPri !== bPri) return aPri - bPri;
-    // Within same status: sort by duration descending (longest first)
-    return (b.durationMin ?? 0) - (a.durationMin ?? 0);
+    // Within same status: sort by launch date descending (newest first)
+    const aTime = a.launchedAt ? new Date(a.launchedAt).getTime() : 0;
+    const bTime = b.launchedAt ? new Date(b.launchedAt).getTime() : 0;
+    return bTime - aTime;
   });
 }
 
