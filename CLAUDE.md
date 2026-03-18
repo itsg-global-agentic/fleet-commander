@@ -235,9 +235,9 @@ The SSE broker emits 14 event types:
 This repo (`fleet-commander-dirty`) is the **development/dogfooding clone**. The production instance lives at `C:\Git\fleet-commander` (port 4680). This clone runs on **port 4681** with a separate database (`fleet-dirty.db`) so both can run side-by-side without interference.
 
 - **Production:** `C:\Git\fleet-commander` — port 4680, `fleet.db` — used for real team orchestration
-- **Development:** `C:\Git\fleet-commander-dirty` — port 4681, `fleet-dirty.db` — used for development, testing, dogfooding
+- **Development:** `C:\Git\fleet-commander-dirty` — port 4681 — used for development, testing, dogfooding
 
-Start with: `fleet-commander-dirty.bat` (Windows) or `PORT=4681 FLEET_DB_PATH=./fleet-dirty.db node dist/server/index.js`
+Start with: `fleet-commander-dirty.bat` (Windows) or `PORT=4681 node dist/server/index.js`
 
 Never push untested changes directly to the production repo. Develop and validate here first.
 
