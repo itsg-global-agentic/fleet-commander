@@ -33,6 +33,12 @@ export function ProjectsPage() {
   const limitInputRef = useRef<HTMLInputElement>(null);
   const committedRef = useRef(false);
 
+  // Inline edit state for model
+  const [editingModelId, setEditingModelId] = useState<number | null>(null);
+  const [editModelValue, setEditModelValue] = useState('');
+  const modelInputRef = useRef<HTMLInputElement>(null);
+  const modelCommittedRef = useRef(false);
+
   // Prompt editor state
   const [editingPromptId, setEditingPromptId] = useState<number | null>(null);
   const [promptContent, setPromptContent] = useState('');
@@ -154,6 +160,30 @@ export function ProjectsPage() {
 
   const handleCancelEditLimit = useCallback(() => {
     setEditingLimitId(null);
+  }, []);
+
+  const handleEditModel = useCallback((project: ProjectSummary) => {
+    setEditingModelId(project.id);
+    setEditModelValue(project.model ?? '');
+    setTimeout(() => modelInputRef.current?.focus(), 50);
+  }, []);
+
+  const handleSaveModel = useCallback(
+    async (projectId: number) => {
+      try {
+        await api.put(`projects/${projectId}`, { model: editModelValue.trim() || null });
+        await fetchProjects();
+      } catch {
+        // ignore
+      }
+      modelCommittedRef.current = false;
+      setEditingModelId(null);
+    },
+    [api, editModelValue, fetchProjects],
+  );
+
+  const handleCancelEditModel = useCallback(() => {
+    setEditingModelId(null);
   }, []);
 
   // Load prompt content when editing
@@ -458,6 +488,39 @@ export function ProjectsPage() {
                           }}
                         >
                           {project.queuedTeamCount} queued
+                        </span>
+                      )}
+                      {editingModelId === project.id ? (
+                        <span className="shrink-0 inline-flex items-center gap-1">
+                          <span>Model:</span>
+                          <input
+                            ref={modelInputRef}
+                            type="text"
+                            value={editModelValue}
+                            onChange={(e) => setEditModelValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                modelCommittedRef.current = true;
+                                handleSaveModel(project.id);
+                              }
+                              if (e.key === 'Escape') handleCancelEditModel();
+                            }}
+                            onBlur={() => {
+                              if (!modelCommittedRef.current) {
+                                handleSaveModel(project.id);
+                              }
+                            }}
+                            placeholder="default"
+                            className="w-32 px-1 py-0 text-xs rounded border border-dark-accent bg-dark-base text-dark-text focus:outline-none"
+                          />
+                        </span>
+                      ) : (
+                        <span
+                          className="shrink-0 cursor-pointer hover:text-dark-text transition-colors"
+                          onClick={() => handleEditModel(project)}
+                          title="Click to edit model"
+                        >
+                          Model: {project.model || 'default'}
                         </span>
                       )}
                     </div>

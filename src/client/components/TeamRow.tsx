@@ -103,6 +103,13 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
         </span>
       </td>
 
+      {/* Model */}
+      <td className="px-4 whitespace-nowrap">
+        <span className="text-sm text-dark-muted">
+          {team.model ?? '\u2014'}
+        </span>
+      </td>
+
       {/* Duration */}
       <td className="px-4 whitespace-nowrap">
         <span className="text-sm text-dark-muted">

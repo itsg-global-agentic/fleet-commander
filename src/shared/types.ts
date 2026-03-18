@@ -38,6 +38,7 @@ export interface Project {
   hooksInstalled: boolean;
   maxActiveTeams: number;
   promptFile: string | null;
+  model?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -208,6 +209,7 @@ export interface TeamDashboardRow {
   issueTitle: string | null;
   projectId: number | null;
   projectName: string | null;
+  model: string | null;
   status: TeamStatus;
   phase: TeamPhase;
   worktreeName: string;
@@ -240,6 +242,7 @@ export interface TeamDetail {
   id: number;
   issueNumber: number;
   issueTitle: string | null;
+  model?: string | null;
   status: TeamStatus;
   phase: TeamPhase;
   pid: number | null;

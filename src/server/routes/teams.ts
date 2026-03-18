@@ -363,6 +363,15 @@ const teamsRoutes: FastifyPluginCallback = (
           });
         }
 
+        // Look up project to get model
+        let projectModel: string | null = null;
+        if (team.projectId) {
+          const project = db.getProject(team.projectId);
+          if (project) {
+            projectModel = project.model ?? null;
+          }
+        }
+
         // Compute duration & idle in minutes
         const launchedAt = team.launchedAt ? new Date(team.launchedAt) : null;
         const now = new Date();
@@ -415,6 +424,7 @@ const teamsRoutes: FastifyPluginCallback = (
           id: team.id,
           issueNumber: team.issueNumber,
           issueTitle: team.issueTitle,
+          model: projectModel,
           status: team.status,
           phase: team.phase,
           pid: team.pid,
