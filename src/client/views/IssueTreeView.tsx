@@ -15,7 +15,7 @@ const STATUS_FILTERS = [
   { key: 'running', label: 'Running', color: '#3FB950' },
   { key: 'idle', label: 'Idle', color: '#D29922' },
   { key: 'stuck', label: 'Stuck', color: '#F85149' },
-  { key: 'done', label: 'Done', color: '#56D4DD' },
+  { key: 'done', label: 'Done', color: '#A371F7' },
   { key: 'failed', label: 'Failed', color: '#F85149' },
 ] as const;
 

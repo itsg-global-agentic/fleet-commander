@@ -36,7 +36,7 @@ export const STATES: StateMachineState[] = [
   { id: 'running', label: 'Running', color: '#3FB950' },
   { id: 'idle', label: 'Idle', color: '#D29922' },
   { id: 'stuck', label: 'Stuck', color: '#F85149' },
-  { id: 'done', label: 'Done', color: '#56D4DD' },
+  { id: 'done', label: 'Done', color: '#A371F7' },
   { id: 'failed', label: 'Failed', color: '#F85149' },
 ];
 
