@@ -169,28 +169,30 @@ export class CCQueryService {
         // Parse the JSON output from CC
         try {
           const parsed = JSON.parse(stdout);
-          // CC --output-format json wraps the result; extract cost and result text
-          const costUsd = parsed.cost_usd ?? parsed.costUsd ?? 0;
-          const resultText = parsed.result ?? stdout;
+          // CC --output-format json returns total_cost_usd (not cost_usd)
+          const costUsd = parsed.total_cost_usd ?? 0;
 
-          // The actual structured data is in the result field as JSON string
+          // Prefer structured_output (populated when --json-schema is used),
+          // fall back to parsing result text for backward compatibility
           let data: T | undefined;
-          if (typeof resultText === 'string') {
+          if (parsed.structured_output != null) {
+            data = parsed.structured_output as T;
+          } else if (typeof parsed.result === 'string' && parsed.result) {
             try {
-              data = JSON.parse(resultText) as T;
+              data = JSON.parse(parsed.result) as T;
             } catch {
               // result is plain text, not JSON
             }
-          } else {
-            data = resultText as T;
           }
+
+          const resultText = parsed.result ?? '';
 
           resolve({
             success: true,
             data,
             text: typeof resultText === 'string' ? resultText : JSON.stringify(resultText),
             costUsd: typeof costUsd === 'number' ? costUsd : 0,
-            durationMs,
+            durationMs: parsed.duration_ms ?? durationMs,
           });
         } catch {
           // stdout was not valid JSON — return as text
