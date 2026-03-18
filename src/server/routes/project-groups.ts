@@ -52,9 +52,9 @@ const projectGroupsRoutes: FastifyPluginCallback = (
         const groups = db.getProjectGroups();
 
         // Enrich with project counts
+        const allProjects = db.getProjects();
         const enriched = groups.map((g: ProjectGroup) => {
-          const projects = db.getProjects();
-          const linked = projects.filter((p) => p.groupId === g.id);
+          const linked = allProjects.filter((p) => p.groupId === g.id);
           return {
             ...g,
             projectCount: linked.length,
