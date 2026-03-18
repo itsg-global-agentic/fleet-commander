@@ -19,6 +19,7 @@ import type {
   TeamStatus,
   TeamPhase,
   Project,
+  ProjectGroup,
   ProjectSummary,
   ProjectStatus,
   MessageTemplate,
@@ -194,6 +195,7 @@ export interface ProjectInsert {
   name: string;
   repoPath: string;
   githubRepo?: string | null;
+  groupId?: number | null;
   maxActiveTeams?: number;
   promptFile?: string | null;
   model?: string | null;
@@ -202,11 +204,22 @@ export interface ProjectInsert {
 export interface ProjectUpdate {
   name?: string;
   githubRepo?: string | null;
+  groupId?: number | null;
   status?: ProjectStatus;
   hooksInstalled?: boolean;
   maxActiveTeams?: number;
   promptFile?: string | null;
   model?: string | null;
+}
+
+export interface ProjectGroupInsert {
+  name: string;
+  description?: string | null;
+}
+
+export interface ProjectGroupUpdate {
+  name?: string;
+  description?: string | null;
 }
 
 export interface ProjectFilter {
@@ -278,6 +291,10 @@ export class FleetDatabase {
 
     // Rename merge_state -> merge_status in pull_requests (for existing databases)
     this.renameMergeStateColumn();
+
+    // Add project_groups table and group_id column to projects if missing
+    this.addProjectGroupsTable();
+    this.addGroupIdColumn();
 
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
@@ -532,6 +549,34 @@ export class FleetDatabase {
     }
   }
 
+  private addProjectGroupsTable(): void {
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS project_groups (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          name            TEXT NOT NULL UNIQUE,
+          description     TEXT,
+          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+    } catch {
+      // Table may already exist — safe to ignore
+    }
+  }
+
+  private addGroupIdColumn(): void {
+    try {
+      const columns = this.db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === 'group_id')) {
+        this.db.exec('ALTER TABLE projects ADD COLUMN group_id INTEGER REFERENCES project_groups(id)');
+        this.db.exec('CREATE INDEX IF NOT EXISTS idx_projects_group ON projects(group_id)');
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
   /**
    * Get the current schema version.
    */
@@ -553,14 +598,15 @@ export class FleetDatabase {
   insertProject(data: ProjectInsert): Project {
     const now = new Date().toISOString();
     const stmt = this.db.prepare(`
-      INSERT INTO projects (name, repo_path, github_repo, max_active_teams, prompt_file, model, created_at, updated_at)
-      VALUES (@name, @repoPath, @githubRepo, @maxActiveTeams, @promptFile, @model, @createdAt, @updatedAt)
+      INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, created_at, updated_at)
+      VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @createdAt, @updatedAt)
     `);
 
     const info = stmt.run({
       name: data.name,
       repoPath: data.repoPath,
       githubRepo: data.githubRepo ?? null,
+      groupId: data.groupId ?? null,
       maxActiveTeams: data.maxActiveTeams ?? 5,
       promptFile: data.promptFile ?? null,
       model: data.model ?? null,
@@ -633,6 +679,10 @@ export class FleetDatabase {
       setClauses.push('github_repo = @githubRepo');
       params.githubRepo = fields.githubRepo;
     }
+    if (fields.groupId !== undefined) {
+      setClauses.push('group_id = @groupId');
+      params.groupId = fields.groupId;
+    }
     if (fields.status !== undefined) {
       setClauses.push('status = @status');
       params.status = fields.status;
@@ -673,6 +723,68 @@ export class FleetDatabase {
     const stmt = this.db.prepare('SELECT * FROM v_team_dashboard WHERE project_id = ?');
     const rows = stmt.all(projectId) as Record<string, unknown>[];
     return rows.map((r) => this.mapDashboardRow(r));
+  }
+
+  // -------------------------------------------------------------------------
+  // Project Groups
+  // -------------------------------------------------------------------------
+
+  insertProjectGroup(data: ProjectGroupInsert): ProjectGroup {
+    const now = new Date().toISOString();
+    const stmt = this.db.prepare(`
+      INSERT INTO project_groups (name, description, created_at, updated_at)
+      VALUES (@name, @description, @createdAt, @updatedAt)
+    `);
+
+    const info = stmt.run({
+      name: data.name,
+      description: data.description ?? null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return this.getProjectGroup(Number(info.lastInsertRowid))!;
+  }
+
+  getProjectGroup(id: number): ProjectGroup | undefined {
+    const stmt = this.db.prepare('SELECT * FROM project_groups WHERE id = ?');
+    const row = stmt.get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapProjectGroupRow(row) : undefined;
+  }
+
+  getProjectGroups(): ProjectGroup[] {
+    const stmt = this.db.prepare('SELECT * FROM project_groups ORDER BY name ASC');
+    const rows = stmt.all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapProjectGroupRow(r));
+  }
+
+  updateProjectGroup(id: number, fields: ProjectGroupUpdate): ProjectGroup | undefined {
+    const setClauses: string[] = [];
+    const params: Record<string, unknown> = { id };
+
+    if (fields.name !== undefined) {
+      setClauses.push('name = @name');
+      params.name = fields.name;
+    }
+    if (fields.description !== undefined) {
+      setClauses.push('description = @description');
+      params.description = fields.description;
+    }
+
+    if (setClauses.length === 0) return this.getProjectGroup(id);
+
+    setClauses.push("updated_at = datetime('now')");
+
+    const sql = `UPDATE project_groups SET ${setClauses.join(', ')} WHERE id = @id`;
+    this.db.prepare(sql).run(params);
+    return this.getProjectGroup(id);
+  }
+
+  deleteProjectGroup(id: number): boolean {
+    // Unlink all projects from this group before deleting
+    this.db.prepare('UPDATE projects SET group_id = NULL WHERE group_id = ?').run(id);
+    const result = this.db.prepare('DELETE FROM project_groups WHERE id = ?').run(id);
+    return result.changes > 0;
   }
 
   // -------------------------------------------------------------------------
@@ -1464,11 +1576,22 @@ export class FleetDatabase {
       name: row.name as string,
       repoPath: row.repo_path as string,
       githubRepo: row.github_repo as string | null,
+      groupId: (row.group_id as number | null) ?? null,
       status: row.status as ProjectStatus,
       hooksInstalled: (row.hooks_installed as number) === 1,
       maxActiveTeams: (row.max_active_teams as number | undefined) ?? 5,
       promptFile: (row.prompt_file as string | null) ?? null,
       model: (row.model as string | null) ?? null,
+      createdAt: utcify(row.created_at as string),
+      updatedAt: utcify(row.updated_at as string),
+    };
+  }
+
+  private mapProjectGroupRow(row: Record<string, unknown>): ProjectGroup {
+    return {
+      id: row.id as number,
+      name: row.name as string,
+      description: (row.description as string | null) ?? null,
       createdAt: utcify(row.created_at as string),
       updatedAt: utcify(row.updated_at as string),
     };

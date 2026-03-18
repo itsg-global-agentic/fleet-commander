@@ -39,6 +39,7 @@ interface UpdateProjectBody {
   name?: string;
   status?: ProjectStatus;
   githubRepo?: string | null;
+  groupId?: number | null;
   hooksInstalled?: boolean;
   maxActiveTeams?: number;
   promptFile?: string | null;
@@ -487,7 +488,7 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const { name, status, githubRepo, hooksInstalled, maxActiveTeams, promptFile, model } = request.body || {};
+        const { name, status, githubRepo, groupId, hooksInstalled, maxActiveTeams, promptFile, model } = request.body || {};
 
         // Validate status if provided
         if (status !== undefined) {
@@ -522,6 +523,7 @@ const projectsRoutes: FastifyPluginCallback = (
           name: name?.trim(),
           status,
           githubRepo,
+          groupId,
           hooksInstalled,
           maxActiveTeams,
           promptFile,

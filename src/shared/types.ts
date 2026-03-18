@@ -31,12 +31,22 @@ export type UsageZone = 'green' | 'red';
 // Core Entities (matching PRD section 4 schema)
 // ---------------------------------------------------------------------------
 
+/** A logical group of projects (repos) */
+export interface ProjectGroup {
+  id: number;
+  name: string;
+  description: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** A project representing a local git repository */
 export interface Project {
   id: number;
   name: string;
   repoPath: string;
   githubRepo: string | null;
+  groupId: number | null;
   status: ProjectStatus;
   hooksInstalled: boolean;
   maxActiveTeams: number;

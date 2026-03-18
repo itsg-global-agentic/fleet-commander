@@ -12,6 +12,7 @@ import systemRoutes from './routes/system.js';
 import usageRoutes from './routes/usage.js';
 import prsRoutes from './routes/prs.js';
 import projectsRoutes from './routes/projects.js';
+import projectGroupsRoutes from './routes/project-groups.js';
 import stateMachineRoutes from './routes/state-machine.js';
 import queryRoutes from './routes/query.js';
 import { sseBroker } from './services/sse-broker.js';
@@ -52,6 +53,7 @@ async function main() {
   await server.register(usageRoutes);
   await server.register(prsRoutes);
   await server.register(projectsRoutes);
+  await server.register(projectGroupsRoutes);
   await server.register(stateMachineRoutes);
   await server.register(queryRoutes);
 

@@ -9,6 +9,17 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 -- ---------------------------------------------------------------------------
+-- PROJECT GROUPS — logical grouping of projects (repos)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS project_groups (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  name            TEXT NOT NULL UNIQUE,
+  description     TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- ---------------------------------------------------------------------------
 -- PROJECTS — a local git repository managed by Fleet Commander
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS projects (
@@ -16,6 +27,7 @@ CREATE TABLE IF NOT EXISTS projects (
   name            TEXT NOT NULL,                      -- user-friendly, e.g. "my-project"
   repo_path       TEXT NOT NULL UNIQUE,               -- absolute path, e.g. "C:/Git/my-project"
   github_repo     TEXT,                               -- e.g. "org/my-project"
+  group_id        INTEGER REFERENCES project_groups(id), -- optional group membership
   status          TEXT NOT NULL DEFAULT 'active',     -- active | paused | archived
   hooks_installed INTEGER NOT NULL DEFAULT 0,         -- 0 | 1
   max_active_teams INTEGER NOT NULL DEFAULT 5,        -- max concurrent active teams before queueing
@@ -26,6 +38,7 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
+CREATE INDEX IF NOT EXISTS idx_projects_group ON projects(group_id);
 
 -- ---------------------------------------------------------------------------
 -- TEAMS — a Claude Code worktree session working on an issue
@@ -215,5 +228,5 @@ CREATE TABLE IF NOT EXISTS team_transitions (
 
 CREATE INDEX IF NOT EXISTS idx_team_transitions_team ON team_transitions(team_id);
 
--- Insert schema version 3 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (3);
+-- Insert schema version 4 (or upgrade from earlier versions)
+INSERT OR IGNORE INTO schema_version (version) VALUES (4);
