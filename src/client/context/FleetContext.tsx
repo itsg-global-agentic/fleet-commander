@@ -4,11 +4,8 @@ import type { TeamDashboardRow } from '../../shared/types';
 
 interface FleetContextValue {
   teams: TeamDashboardRow[];
-  allTeams: TeamDashboardRow[];
   selectedTeamId: number | null;
   setSelectedTeamId: (id: number | null) => void;
-  selectedProjectId: number | null;
-  setSelectedProjectId: (id: number | null) => void;
   connected: boolean;
   lastEvent: Date | null;
 }
@@ -16,9 +13,8 @@ interface FleetContextValue {
 const FleetContext = createContext<FleetContextValue | null>(null);
 
 export function FleetProvider({ children }: { children: ReactNode }) {
-  const [allTeams, setAllTeams] = useState<TeamDashboardRow[]>([]);
+  const [teams, setTeams] = useState<TeamDashboardRow[]>([]);
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
 
   // Fetch the full team dashboard from the REST API.
   // Used as a fallback when an SSE event signals a change but
@@ -27,9 +23,9 @@ export function FleetProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch('/api/teams');
       if (res.ok) {
-        const teams = (await res.json()) as TeamDashboardRow[];
-        console.log('[FleetContext] Teams fetched via REST:', teams.length, teams.map(t => ({ id: t.id, status: t.status })));
-        setAllTeams(teams);
+        const data = (await res.json()) as TeamDashboardRow[];
+        console.log('[FleetContext] Teams fetched via REST:', data.length, data.map(t => ({ id: t.id, status: t.status })));
+        setTeams(data);
       }
     } catch {
       // Network error — will be retried on next event
@@ -43,7 +39,7 @@ export function FleetProvider({ children }: { children: ReactNode }) {
       const payload = data as { teams?: TeamDashboardRow[] };
       if (Array.isArray(payload.teams)) {
         console.log('[FleetContext] Teams loaded from SSE:', payload.teams.length, payload.teams.map(t => ({ id: t.id, status: t.status })));
-        setAllTeams(payload.teams);
+        setTeams(payload.teams);
       }
     } else if (type === 'usage_updated' || type === 'pr_updated') {
       // Usage or PR data changed — refresh teams to pick up any related state changes.
@@ -60,22 +56,13 @@ export function FleetProvider({ children }: { children: ReactNode }) {
     fetchTeams();
   }, [fetchTeams]);
 
-  // Filter teams by selected project
-  const teams = useMemo(() => {
-    if (selectedProjectId === null) return allTeams;
-    return allTeams.filter((t) => t.projectId === selectedProjectId);
-  }, [allTeams, selectedProjectId]);
-
   const value = useMemo<FleetContextValue>(() => ({
     teams,
-    allTeams,
     selectedTeamId,
     setSelectedTeamId,
-    selectedProjectId,
-    setSelectedProjectId,
     connected,
     lastEvent,
-  }), [teams, allTeams, selectedTeamId, selectedProjectId, connected, lastEvent]);
+  }), [teams, selectedTeamId, connected, lastEvent]);
 
   return (
     <FleetContext.Provider value={value}>

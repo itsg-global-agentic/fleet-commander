@@ -35,7 +35,7 @@ function sortTeams(teams: TeamDashboardRow[]): TeamDashboardRow[] {
 }
 
 export function FleetGridView() {
-  const { teams, allTeams, selectedTeamId, setSelectedTeamId } = useFleet();
+  const { teams, selectedTeamId, setSelectedTeamId } = useFleet();
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
 
   const sortedTeams = useMemo(() => sortTeams(teams), [teams]);
@@ -58,7 +58,7 @@ export function FleetGridView() {
       {/* Header with view toggle */}
       <div className="flex items-center justify-between mb-3 px-4">
         <div className="text-xs text-dark-muted">
-          {allTeams.length} total teams ({sortedTeams.length} shown)
+          {sortedTeams.length} team{sortedTeams.length !== 1 ? 's' : ''}
         </div>
         <div className="inline-flex rounded border border-dark-border text-xs overflow-hidden">
           <button

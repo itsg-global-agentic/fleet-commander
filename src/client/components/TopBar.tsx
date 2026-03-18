@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useFleet } from '../context/FleetContext';
 import { LaunchDialog } from './LaunchDialog';
-import { ProjectSelector } from './ProjectSelector';
 import { useApi } from '../hooks/useApi';
 import { RocketIcon } from './Icons';
 import { STATUS_COLORS } from '../utils/constants';
@@ -79,7 +78,6 @@ export function TopBar() {
           <h1 className="text-sm font-semibold text-dark-text tracking-wide">
             Fleet Commander
           </h1>
-          <ProjectSelector />
         </div>
         <div className="flex items-center gap-3">
           {/* Team status counts — plain colored text with dot separator */}
