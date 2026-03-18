@@ -283,7 +283,7 @@ export class TeamManager {
 
     // ── Step 2: Create git worktree in the PROJECT's repo ──
     const worktreeOk = await this.createWorktree(
-      project.repoPath, worktreeRelPath, worktreeAbsPath, branchName, team.id,
+      project.repoPath, worktreeRelPath, worktreeAbsPath, branchName, team.id, 'queued',
     );
     if (!worktreeOk) {
       throw new Error(`Failed to create worktree for team ${team.id}`);
@@ -822,7 +822,7 @@ export class TeamManager {
 
     // ── Step 1: Create git worktree ──
     const worktreeOk = await this.createWorktree(
-      project.repoPath, worktreeRelPath, worktreeAbsPath, branchName, team.id,
+      project.repoPath, worktreeRelPath, worktreeAbsPath, branchName, team.id, 'launching',
     );
     if (!worktreeOk) return;
 
@@ -1318,6 +1318,7 @@ export class TeamManager {
     worktreeAbsPath: string,
     branchName: string,
     teamId: number,
+    fromStatus: 'queued' | 'launching',
   ): Promise<boolean> {
     if (fs.existsSync(worktreeAbsPath)) return true;
 
@@ -1339,7 +1340,7 @@ export class TeamManager {
         const db = getDatabase();
         db.insertTransition({
           teamId,
-          fromStatus: 'launching',
+          fromStatus,
           toStatus: 'failed',
           trigger: 'system',
           reason: `Worktree creation failed: ${msg.slice(0, 200)}`,
