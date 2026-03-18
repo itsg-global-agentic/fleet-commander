@@ -70,6 +70,7 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
   const api = useApi();
   const [events, setEvents] = useState<StreamEvent[]>([]);
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Poll for parsed stream events every 2 seconds
@@ -121,6 +122,9 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {
+      setCopyFailed(true);
+      setTimeout(() => setCopyFailed(false), 2000);
     });
   }, [events]);
 
@@ -140,7 +144,7 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
         className="absolute top-1.5 right-1.5 z-10 px-2 py-0.5 text-[10px] rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted bg-[#0D1117] transition-colors"
         title="Copy full log to clipboard"
       >
-        {copied ? 'Copied!' : 'Copy'}
+        {copied ? 'Copied!' : copyFailed ? 'Failed' : 'Copy'}
       </button>
 
       <div className="font-mono text-xs overflow-y-auto bg-[#0D1117] p-2 rounded border border-dark-border custom-scrollbar">
