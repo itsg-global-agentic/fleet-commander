@@ -118,9 +118,13 @@ interface TreeNodeProps {
   checkedIssues?: Set<number>;
   /** Callback when checkbox state changes */
   onCheckChange?: (issueNumber: number, checked: boolean) => void;
+  /** Callback to prioritize a subtree (parent nodes only) */
+  onPrioritizeSubtree?: (subtreeChildren: IssueNode[]) => Promise<void>;
+  /** Whether a prioritization request is in progress */
+  prioritizing?: boolean;
 }
 
-export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, forceExpand, projectId, priorityMap, checkedIssues, onCheckChange }: TreeNodeProps) {
+export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, forceExpand, projectId, priorityMap, checkedIssues, onCheckChange, onPrioritizeSubtree, prioritizing }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(depth < 2);
   const isExpanded = forceExpand || expanded;
   const hasChildren = node.children.length > 0;
@@ -232,6 +236,33 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
           </span>
         )}
 
+        {/* Prioritize button — only for parent nodes with children */}
+        {hasChildren && onPrioritizeSubtree && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onPrioritizeSubtree(node.children);
+            }}
+            disabled={prioritizing}
+            className={`ml-auto shrink-0 transition-opacity inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded border border-[#A371F7]/50 text-[#A371F7] hover:bg-[#A371F7]/10 disabled:opacity-50 disabled:cursor-not-allowed ${
+              prioritizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+            }`}
+            title={`Prioritize sub-issues under #${node.number}`}
+          >
+            {prioritizing ? (
+              <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            ) : (
+              <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M7.823.9l4.584 4.584-7.636 7.636L.187 8.536 7.823.9ZM14.2 6.1l-1.3 1.3-4.584-4.584L9.6 1.5a1.5 1.5 0 012.122 0L14.2 3.978a1.5 1.5 0 010 2.122Z" />
+              </svg>
+            )}
+            Prioritize
+          </button>
+        )}
+
         {/* Play button — only for leaf issues with no active team that are open */}
         {!hasActiveTeam && node.state === 'open' && !hasChildren && (
           <button
@@ -283,6 +314,8 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
               priorityMap={priorityMap}
               checkedIssues={checkedIssues}
               onCheckChange={onCheckChange}
+              onPrioritizeSubtree={onPrioritizeSubtree}
+              prioritizing={prioritizing}
             />
           ))}
         </div>

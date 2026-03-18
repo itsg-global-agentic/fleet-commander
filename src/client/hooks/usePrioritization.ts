@@ -21,6 +21,8 @@ interface PrioritizationState {
 interface UsePrioritizationReturn extends PrioritizationState {
   /** Run AI prioritization on the given issue tree */
   prioritize: (tree: IssueNode[]) => Promise<void>;
+  /** Run AI prioritization on a subtree and merge results into existing priorityMap */
+  prioritizeSubtree: (subtreeNodes: IssueNode[]) => Promise<void>;
   /** Reset all prioritization state */
   reset: () => void;
   /** Toggle an issue's checked state */
@@ -33,7 +35,7 @@ interface UsePrioritizationReturn extends PrioritizationState {
   checkedSortedIssueNumbers: number[];
 }
 
-/** Collect all open leaf issue numbers + titles from a tree */
+/** Collect all open issue numbers + titles from a tree (including parents) */
 function collectOpenIssues(nodes: IssueNode[]): { number: number; title: string }[] {
   const result: { number: number; title: string }[] = [];
   for (const node of nodes) {
@@ -42,6 +44,19 @@ function collectOpenIssues(nodes: IssueNode[]): { number: number; title: string 
     }
     if (node.children.length > 0) {
       result.push(...collectOpenIssues(node.children));
+    }
+  }
+  return result;
+}
+
+/** Collect only open leaf issues (no children) from a tree */
+export function collectOpenLeafIssues(nodes: IssueNode[]): { number: number; title: string }[] {
+  const result: { number: number; title: string }[] = [];
+  for (const node of nodes) {
+    if (node.children.length > 0) {
+      result.push(...collectOpenLeafIssues(node.children));
+    } else if (node.state === 'open') {
+      result.push({ number: node.number, title: node.title });
     }
   }
   return result;
@@ -121,6 +136,53 @@ export function usePrioritization(): UsePrioritizationReturn {
     }
   }, [api]);
 
+  const prioritizeSubtree = useCallback(async (subtreeNodes: IssueNode[]) => {
+    const issues = collectOpenLeafIssues(subtreeNodes);
+    if (issues.length === 0) return;
+
+    setState((prev) => ({ ...prev, loading: true, error: null }));
+
+    try {
+      const result = await api.post<CCQueryResult<PrioritizedIssue[]>>(
+        'query/prioritizeIssues',
+        { issues },
+      );
+
+      if (!result.success || !result.data) {
+        setState((prev) => ({
+          ...prev,
+          loading: false,
+          error: result.error ?? 'Prioritization returned no data',
+        }));
+        return;
+      }
+
+      // Merge new results into existing priorityMap
+      setState((prev) => {
+        const mergedMap = new Map(prev.priorityMap);
+        const mergedChecked = new Set(prev.checkedIssues);
+        for (const item of result.data!) {
+          mergedMap.set(item.number, item);
+          mergedChecked.add(item.number);
+        }
+        return {
+          priorityMap: mergedMap,
+          loading: false,
+          error: null,
+          costUsd: result.costUsd,
+          durationMs: result.durationMs,
+          checkedIssues: mergedChecked,
+        };
+      });
+    } catch (err) {
+      setState((prev) => ({
+        ...prev,
+        loading: false,
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }, [api]);
+
   const reset = useCallback(() => {
     setState({
       priorityMap: new Map(),
@@ -159,6 +221,7 @@ export function usePrioritization(): UsePrioritizationReturn {
   return {
     ...state,
     prioritize,
+    prioritizeSubtree,
     reset,
     toggleCheck,
     hasPriority,

@@ -634,6 +634,8 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
               priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
               checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
               onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
+              onPrioritizeSubtree={prioritization.prioritizeSubtree}
+              prioritizing={prioritization.loading}
             />
           ))}
         </div>
@@ -702,6 +704,8 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
             priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
             checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
             onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
+            onPrioritizeSubtree={prioritization.prioritizeSubtree}
+            prioritizing={prioritization.loading}
           />
         ))}
       </div>
