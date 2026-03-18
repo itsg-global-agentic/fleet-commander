@@ -1167,7 +1167,7 @@ export class TeamManager {
     }
 
     // Hardcoded fallback (should not normally be reached)
-    const fallback = `Read the ENTIRE file .claude/prompts/fleet-workflow.md before taking any actions.\nYou are the TL. Create a team and spawn the CORE team (Coordinator + analyst + dev + reviewer) as described in the workflow.\nIssue: #${issueNumber}`;
+    const fallback = `Read the ENTIRE file .claude/prompts/fleet-workflow.md before taking any actions.\nYou are the TL. There is NO coordinator — you orchestrate the Diamond team directly: Analyst → Dev → Reviewer.\nPhase 1: Spawn fleet-analyst. Phase 2: Spawn fleet-dev (from brief TYPE). Phase 3: Spawn fleet-reviewer. Dev and reviewer communicate p2p.\nIssue: #${issueNumber}`;
     console.log(`[TeamManager] Using hardcoded fallback prompt`);
     return fallback;
   }

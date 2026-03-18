@@ -155,21 +155,23 @@ function checkInstallStatus(repoPath: string): InstallStatus {
 
   // Agent templates expected in .claude/agents/
   const agentNames = [
-    'fleet-coordinator.md',
     'fleet-analyst.md',
+    'fleet-dev.md',
     'fleet-reviewer.md',
-    'fleet-dev-generic.md',
-    'fleet-dev-csharp.md',
-    'fleet-dev-fsharp.md',
-    'fleet-dev-python.md',
-    'fleet-dev-typescript.md',
-    'fleet-dev-devops.md',
   ];
   const agentsDir = path.join(repoPath, '.claude', 'agents');
   const agentFiles: InstallFileStatus[] = agentNames.map((name) => ({
     name,
     exists: fs.existsSync(path.join(agentsDir, name)),
   }));
+
+  // Guidebooks in .claude/guides/
+  const guidesDir = path.join(repoPath, '.claude', 'guides');
+  const guideFiles: InstallFileStatus[] = fs.existsSync(guidesDir)
+    ? fs.readdirSync(guidesDir)
+        .filter((f) => f.endsWith('.md'))
+        .map((name) => ({ name, exists: true }))
+    : [];
 
   // Additional config files
   const settingsFile: InstallFileStatus = {
@@ -191,6 +193,10 @@ function checkInstallStatus(repoPath: string): InstallStatus {
     agents: {
       installed: agentFiles.every((f) => f.exists),
       files: agentFiles,
+    },
+    guides: {
+      installed: guideFiles.length > 0,
+      files: guideFiles,
     },
     settings: settingsFile,
   };
@@ -339,7 +345,8 @@ const projectsRoutes: FastifyPluginCallback = (
               // Create a basic default prompt inline
               fs.writeFileSync(promptAbsPath,
                 'Read the ENTIRE file `.claude/prompts/fleet-workflow.md` before taking any actions.\n' +
-                'You are the TL. Spawn the CORE team (Coordinator + Analyst + Reviewer) as described in the workflow. Do NOT spawn developers yet.\n' +
+                'You are the TL. There is NO coordinator — you orchestrate the Diamond team directly: Analyst → Dev → Reviewer.\n' +
+                'Phase 1: Spawn fleet-analyst. Phase 2: Spawn fleet-dev (from brief TYPE). Phase 3: Spawn fleet-reviewer.\n' +
                 'Issue: #{{ISSUE_NUMBER}}\n',
                 'utf-8',
               );

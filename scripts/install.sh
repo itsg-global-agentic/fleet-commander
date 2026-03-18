@@ -14,7 +14,18 @@ mkdir -p "$FC_ROOT/prompts"
 if [ ! -f "$FC_ROOT/prompts/default-prompt.md" ]; then
   cat > "$FC_ROOT/prompts/default-prompt.md" << 'PROMPT_EOF'
 Read the ENTIRE file `.claude/prompts/fleet-workflow.md` before taking any actions.
-You are the TL. Spawn the CORE team (Coordinator + Analyst + Reviewer) as described in the workflow. Do NOT spawn developers yet.
+
+You are the Team Lead (TL). Your job:
+1. Read the workflow to understand the Diamond team structure (Analyst → Dev → Reviewer)
+2. There is NO coordinator — you orchestrate all 3 agents directly
+3. Phase 1: Spawn `fleet-analyst` to analyze the issue and produce a brief
+4. Phase 2: Spawn the appropriate `fleet-dev-*` specialist based on the brief's TYPE field
+5. Phase 3: When dev reports "ready for review", spawn `fleet-reviewer`
+6. Let dev and reviewer communicate peer-to-peer during review — do NOT relay messages
+7. After APPROVE: rebase, create PR, set auto-merge
+8. Respond to FC messages (ci_green, ci_red, pr_merged, nudges) promptly
+9. On pr_merged: close issue, shut down agents, finish
+
 Issue: #{{ISSUE_NUMBER}}
 PROMPT_EOF
   echo "  Created default prompt: $FC_ROOT/prompts/default-prompt.md"
@@ -166,10 +177,52 @@ else
   echo "  No agent templates found in $AGENTS_SRC (skipped)"
 fi
 
+# ── 5. Install guidebooks ────────────────────────────────────────
+GUIDES_SRC="$FC_ROOT/templates/guides"
+GUIDES_DIR="$TARGET/.claude/guides"
+
+if [ -d "$GUIDES_SRC" ]; then
+  mkdir -p "$GUIDES_DIR"
+  GUIDE_COUNT=0
+  for GUIDE_FILE in "$GUIDES_SRC"/*.md; do
+    [ -f "$GUIDE_FILE" ] || continue
+    GUIDE_NAME="$(basename "$GUIDE_FILE")"
+    if [ ! -f "$GUIDES_DIR/$GUIDE_NAME" ]; then
+      cp "$GUIDE_FILE" "$GUIDES_DIR/$GUIDE_NAME"
+      GUIDE_COUNT=$((GUIDE_COUNT + 1))
+    fi
+  done
+  echo "  Installed $GUIDE_COUNT new guidebooks to $GUIDES_DIR (existing preserved)"
+else
+  echo "  No guidebooks found in $GUIDES_SRC (skipped)"
+fi
+
+# ── 6. Clean up retired agent templates ──────────────────────────
+OLD_AGENTS=(
+  "fleet-coordinator.md"
+  "fleet-dev-generic.md"
+  "fleet-dev-csharp.md"
+  "fleet-dev-fsharp.md"
+  "fleet-dev-python.md"
+  "fleet-dev-typescript.md"
+  "fleet-dev-devops.md"
+)
+REMOVED_COUNT=0
+for OLD_AGENT in "${OLD_AGENTS[@]}"; do
+  if [ -f "$AGENTS_DIR/$OLD_AGENT" ]; then
+    rm "$AGENTS_DIR/$OLD_AGENT"
+    REMOVED_COUNT=$((REMOVED_COUNT + 1))
+  fi
+done
+if [ "$REMOVED_COUNT" -gt 0 ]; then
+  echo "  Removed $REMOVED_COUNT retired agent templates"
+fi
+
 # ── Done ──────────────────────────────────────────────────────────
 echo ""
 echo "Fleet Commander installed successfully!"
-echo "  Hooks:    $HOOK_DIR"
-echo "  Settings: $SETTINGS"
-echo "  Workflow: $PROMPTS_DIR/fleet-workflow.md"
-echo "  Agents:   $AGENTS_DIR"
+echo "  Hooks:      $HOOK_DIR"
+echo "  Settings:   $SETTINGS"
+echo "  Workflow:   $PROMPTS_DIR/fleet-workflow.md"
+echo "  Agents:     $AGENTS_DIR"
+echo "  Guidebooks: $GUIDES_DIR"

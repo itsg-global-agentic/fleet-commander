@@ -1,7 +1,7 @@
 <!-- Fleet Commander workflow template. Installed by Fleet Commander into your project. -->
-<!-- Placeholders {{PROJECT_NAME}}, {{project_slug}}, {{BASE_BRANCH}} are replaced during installation. -->
+<!-- Placeholders {{PROJECT_NAME}}, {{project_slug}}, {{BASE_BRANCH}}, {{ISSUE_NUMBER}} are replaced during installation. -->
 
-# Workflow {{PROJECT_NAME}}
+# Diamond Workflow — {{PROJECT_NAME}}
 
 ## About Fleet Commander
 
@@ -11,6 +11,7 @@ Fleet Commander (FC) is the orchestration layer that manages your team. Key fact
 - **CI/PR updates via stdin** — FC watches GitHub for CI results and PR status. When something changes, FC sends a message directly to the Team Lead (TL) via stdin. No PR Watcher agent is needed.
 - **Dashboard** — The PM watches all teams from the FC dashboard. They can see your state (Analyzing, Implementing, Reviewing, PR, Done, Blocked), recent events, and output in real time.
 - **Messages from FC** — FC may send structured messages to the TL (see "FC Messages" section below). These arrive as stdin messages and should be acted on promptly.
+- **Idle/Stuck thresholds** — FC marks agents idle after 3 minutes of inactivity and stuck after 5 minutes. Agents waiting for peer messages are expected to be idle — this is normal. TL should only intervene when stuck.
 
 ## Entry Point
 
@@ -20,44 +21,60 @@ User: claude --worktree {{project_slug}}-{N}
 ```
 
 **Role of TL (main agent = You):**
-1. `TeamCreate` -> `issue-{N}`
-2. Spawn CORE team immediately (Coordinator + Analyst + Reviewer — see table below)
-3. Wait for report from Coordinator ("Done" or "Blocked")
-4. When Coordinator requests a specialist spawn (e.g. fleet-dev-typescript) — spawn the appropriate agent into the existing team and confirm to Coordinator that the agent is available
-5. `TeamDelete`
-6. **Proactivity** — TL MUST actively monitor progress:
-   - When an agent is idle >3 min without a report — ask for status
-   - When Coordinator does not report after completing a phase — query them
-   - TL is the hub that pushes the team forward, NOT a passive observer
+1. Read this workflow and understand the team structure
+2. Spawn `fleet-analyst` and send it the issue number
+3. Wait for the Analyst's brief
+4. Spawn `fleet-dev` with the brief + guidebook list (the TYPE field tells the dev which guidebooks to read)
+5. Once dev reports "ready for review", spawn `fleet-reviewer`
+6. Let dev and reviewer communicate peer-to-peer — DO NOT relay messages between them
+7. Only intervene if: escalation after 3 review rounds, agent stuck (5min idle), or final PR creation
+8. When review passes: rebase, create PR, set auto-merge
+9. Respond to FC messages (ci_green, ci_red, pr_merged, nudge_idle, nudge_stuck)
+10. On pr_merged: close issue, shut down agents, finish
 
-All cycle logic lives in the Coordinator (`.claude/agents/fleet-coordinator.md`).
-
-## Team Structure
+## Team Composition — Diamond (3 Agents)
 
 | Agent | subagent_type | name | Role | Spawn |
 |-------|---------------|------|------|-------|
-| **Coordinator** | `fleet-coordinator` | `coordinator` | Manages the cycle, creates PR, delegates work | CORE (always) |
-| Analyst | `fleet-analyst` | `analyst` | Analyzes issue + codebase, produces brief | CORE (always) |
-| Reviewer | `fleet-reviewer` | `reviewer` | Code review + acceptance testing | CORE (always) |
-| C# Dev | `fleet-dev-csharp` | `dev-csharp` | C# / .NET implementation | Specialist (on demand) |
-| F# Dev | `fleet-dev-fsharp` | `dev-fsharp` | F# implementation | Specialist (on demand) |
-| Python Dev | `fleet-dev-python` | `dev-python` | Python implementation | Specialist (on demand) |
-| TypeScript Dev | `fleet-dev-typescript` | `dev-typescript` | TypeScript / JS implementation | Specialist (on demand) |
-| DevOps Dev | `fleet-dev-devops` | `dev-devops` | CI/CD, infrastructure, Docker, scripts | Specialist (on demand) |
-| Generic Dev | `fleet-dev-generic` | `dev-generic` | General-purpose implementation | Specialist (on demand) |
+| **Analyst** | `fleet-analyst` | `analyst` | Analyzes issue + codebase, produces structured brief with guidebook paths | Phase 1 only |
+| **Dev** | `fleet-dev` | `dev` | Implements code, writes tests, pushes commits. Reads guidebooks for specialization. Communicates with reviewer directly during review. | Phase 2 onward |
+| **Reviewer** | `fleet-reviewer` | `reviewer` | Two-pass code review. Sends feedback directly to dev. Reports final verdict to TL. | Phase 3 onward |
 
-TL spawns the CORE team immediately (without specialists). Specialists are spawned later by TL at Coordinator's request, after the Analyst's brief identifies the required language/area.
+There is NO coordinator agent. The TL orchestrates all three agents directly.
+
+All agents use `model: inherit` — they run on the same model as the TL.
+
+### Agent Lifecycle
+
+- **Analyst** is spawned first and dismissed after delivering the brief. It does not persist.
+- **Dev** is spawned after the brief and persists through implementation, review rounds, and CI fixes.
+- **Reviewer** is spawned when dev reports "ready for review" and persists through all review rounds.
+- Dev and Reviewer communicate **peer-to-peer** — TL does not relay messages between them.
+
+### TYPE to Guidebook Mapping
+
+All implementation work is assigned to the single `fleet-dev` agent. The Analyst's TYPE and Guidebooks fields tell the dev which guidebooks to read for domain-specific conventions.
+
+| TYPE in brief | Guidebooks to read |
+|---------------|-------------------|
+| C# / .NET | `csharp-conventions.md` |
+| F# | `fsharp-conventions.md` |
+| TypeScript / JS | `typescript-conventions.md` |
+| Python | `python-conventions.md` |
+| Infrastructure / CI | `devops-conventions.md` |
+| Generic / unknown | CLAUDE.md only (no language-specific guidebook) |
+| Mixed (A + B) | Multiple guidebooks — dev reads all relevant ones |
 
 ## Workflow State Machine
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Analyzing : start (spawn team)
-    Analyzing --> Implementing : brief OK
-    Analyzing --> Blocked : BLOCKED
-    Implementing --> Reviewing : dev reports "done"
-    Reviewing --> Implementing : REJECT (fix round, max 3 total)
-    Reviewing --> PR : APPROVE + push
+    [*] --> Analyzing : start (spawn analyst)
+    Analyzing --> Implementing : brief OK (spawn dev)
+    Analyzing --> Blocked : BLOCKED in brief
+    Implementing --> Reviewing : dev reports "ready for review" (spawn reviewer)
+    Reviewing --> Implementing : REJECT (dev fixes, max 3 rounds)
+    Reviewing --> PR : APPROVE (TL creates PR)
     PR --> Done : CI GREEN + merge
     PR --> Implementing : CI RED (dev fixes, pushes)
     Implementing --> Blocked : escalation
@@ -68,114 +85,206 @@ stateDiagram-v2
 
 **Blocked can be entered from any active state** when the team cannot proceed (missing info, unresolvable conflicts, repeated failures).
 
-## Communication Protocol
+---
 
-Applies to EVERY agent in the team:
+## Phase 1 — Analysis
 
-- **SendMessage** with `type: "message"`, `recipient: "{name}"`, `summary: "5-10 words"`
-- Messages arrive automatically — no need to poll
-- After spawn: `TaskList` — check if you have an assigned task
-- After completing a task: `TaskUpdate` -> `status: "completed"`, then `TaskList` for the next one
-- On `shutdown_request` -> respond `shutdown_response` with `approve: true`
-- **Coordinator is the hub** — agents report TO Coordinator, Coordinator relays
+1. **TL spawns `fleet-analyst`** with the issue number
+2. Analyst reads the issue, explores the codebase, discovers guidebooks, and produces a structured brief
+3. Brief arrives via `SendMessage` from analyst to TL
+4. TL validates the brief has all required fields (see format below)
+5. TL evaluates the brief:
+   - `BLOCKED=yes` → state Blocked, comment on issue, STOP
+   - `BLOCKED=no` → proceed to Phase 2
+   - Missing required fields → ask Analyst to redo with specific gaps identified
 
-### Work Assignment
+### Brief Format
 
-- Coordinator uses `TaskCreate` to assign work to specialists
-- Coordinator uses `TaskUpdate` to track progress
-- For mixed-language work: sequential tasks with `blockedBy` dependencies
+The Analyst produces a brief in this format:
 
-### Idle is Normal
+```
+## Analysis Brief for Issue #{N}
 
-- Agents waiting for work or reviews are expected to be idle
-- Do NOT ping an agent that has been idle for less than 3 minutes
-- TL should query agents idle >3 min without a report
+### Language/Framework
+{primary language} / {framework(s)}
 
-## Brief Format
+### Guidebooks
+- {path/to/guidebook1.md}
+- {path/to/guidebook2.md}
+- (none found)
 
-The Analyst produces a brief in this format (English):
+### Type
+{single | mixed} — {developer mapping}
+
+### Key Files
+- {path} — {what changes and why}
+
+### What Needs to Change
+{Detailed analysis with implementation approach}
+
+### Risks
+- {specific risk or edge case}
+
+### Blocked
+no | yes — {reason}
+```
+
+### Edge Case: Analyst Fails
+
+If the Analyst is unresponsive for >5 minutes or produces an unusable brief:
+1. TL performs a quick analysis directly: read `CLAUDE.md`, scan the issue, identify key files
+2. Produce a minimal brief (Key Files + What Needs to Change + Type is enough)
+3. Proceed to Phase 2 with the self-generated brief
+4. Do NOT spend more than a few minutes on this — a good-enough brief is better than a perfect one
+
+---
+
+## Phase 2 — Implementation
+
+1. **TL spawns `fleet-dev`** with the brief and guidebook list (the TYPE field determines which guidebooks the dev should read)
+2. **TL spawns the dev agent** with this context in the task:
+   - The full Analyst brief
+   - The list of guidebook paths from the brief (dev reads these first)
+   - The target branch name (see Branch Naming below)
+   - Issue number and title
+3. Dev reads guidebooks, implements, tests locally, commits atomically
+4. Dev reports to TL: "Ready for review. Branch: `{branch}`"
+5. TL transitions to Phase 3
+
+### Dev Task Format (sent via TaskCreate)
 
 ```
 ISSUE: #{N} {title}
-TYPE: {language} | mixed ({specify languages})
-FILES: {list of files to modify/create}
-SCOPE: {what needs to change and why}
-RISKS: {potential issues, breaking changes, dependencies}
-BLOCKED: no | yes → {reason}
+BRANCH: {feat|fix|test}/{N}-{short-desc}
+BASE: {{BASE_BRANCH}}
+
+BRIEF:
+{paste the full analyst brief here}
+
+GUIDEBOOKS (read these before implementing):
+{list of paths from brief}
+
+INSTRUCTIONS:
+1. Read each guidebook file listed above
+2. Implement the changes described in the brief
+3. Follow conventions from CLAUDE.md
+4. Run build + tests locally before reporting ready
+5. Commit atomically: "Issue #{N}: {description}"
+6. Report "Ready for review. Branch: {branch}" when done
 ```
 
-Coordinator actions based on brief:
-- `BLOCKED: yes` → state Blocked
-- `BLOCKED: no` → check TYPE, request specialist spawns from TL if needed, then `TaskCreate` for dev(s), state Implementing
+### Mixed-Language Work
 
-## Review Process
+For mixed-type issues (e.g., C# backend + TypeScript frontend):
+1. Spawn the primary dev first (larger scope)
+2. When primary dev completes, spawn secondary dev with `blockedBy` dependency
+3. Wait for both to complete before review
 
-Two-pass review by the Reviewer:
+### Edge Case: Dev Gets Stuck
 
-1. **Code Quality** — style, correctness, error handling, edge cases, test coverage
-2. **Acceptance** — does the change actually solve the issue as described?
+- FC's stuck detector will nudge TL if the team is idle too long
+- TL checks if the dev agent is still active (TaskList)
+- If dev is stuck: send a message with more context, hints, or simplified scope
+- If dev is unresponsive after nudge: stop the dev agent, spawn a fresh one with additional context from the failed attempt
 
-Verdict: **APPROVE** or **REJECT** with specific feedback.
+---
 
-- APPROVE → dev pushes branch, state PR
-- REJECT → dev fixes (max 2 rounds of rejection, then Blocked)
-- **Max 3 review rounds total** (initial + 2 fix rounds)
+## Phase 3 — Review (Peer-to-Peer)
 
-## PR Rules
+1. **TL spawns `fleet-reviewer`** with the branch name and issue number
+2. **TL tells dev**: "Reviewer is available as `reviewer`. When review feedback arrives, address it and re-request review directly."
+3. **TL tells reviewer**: "Dev is available as `dev`. Send rejection feedback directly to dev. Send your final APPROVE/REJECT verdict to me (TL)."
+4. **TL steps back.** The dev↔reviewer loop runs peer-to-peer:
+   - Reviewer performs two-pass review (code quality + acceptance)
+   - **REJECT** → reviewer sends actionable feedback directly to dev → dev fixes and re-requests review from reviewer directly
+   - **APPROVE** → reviewer notifies TL with the final verdict
+5. TL monitors but does NOT intervene unless:
+   - **3 review rounds exhausted** → TL arbitrates (see Error Handling)
+   - **Agent stuck** (5min idle) → TL sends a nudge
+   - **Escalation request** from either agent → TL steps in
 
-### Branch Freshness
-
-**MANDATORY before every push**: the **Coordinator** checks branch freshness and instructs the dev to rebase on the base branch before pushing. The dev does NOT decide when to rebase autonomously — the Coordinator owns this gate.
-
-Coordinator instruction to dev:
-```bash
-git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}}
-```
-If rebase fails (conflicts) → state Blocked.
-
-Before creating PR, Coordinator instructs the dev to force-push the rebased branch:
-```bash
-git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}} && git push --force-with-lease
-```
-
-### Auto-Merge (Mandatory)
-
-Every PR MUST have auto-merge set immediately after creation:
-```bash
-gh pr merge {PR} --auto --squash --delete-branch
-```
-No exceptions. Auto-merge remains active after fixup pushes — do NOT re-set it.
-
-### Branch Naming
-
-Worktree creates branch `worktree-{{project_slug}}-{N}` from `{{BASE_BRANCH}}`.
-Dev renames it to the appropriate convention:
-
-| Prefix | Use |
-|--------|-----|
-| `feat/{N}-{desc}` | New feature |
-| `fix/{N}-{desc}` | Bug fix |
-| `test/{N}-{desc}` | Test-only changes |
-
-Coordinator provides the target branch name in the task prompt.
-
-### Commit Format
+### Reviewer Task Format (sent via TaskCreate)
 
 ```
-Issue #{N}: {description}
+ISSUE: #{N} {title}
+BRANCH: {branch-name}
+BASE: {{BASE_BRANCH}}
+
+Review the changes on this branch against the base branch.
+Two-pass review: code quality + acceptance criteria from the issue.
+
+PEERS:
+- Dev agent name: {dev-agent-name}
+- Send rejection feedback DIRECTLY to dev via SendMessage
+- Send final APPROVE or REJECT verdict to TL (me)
+
+If you reject, include a numbered list of specific, actionable fixes with file:line references.
+Dev will fix and message you directly when ready for re-review.
+Max 3 review rounds total (initial + 2 re-reviews).
+After 3rd rejection, report BLOCKED to TL.
 ```
 
-Atomic commits — each commit should be a logical unit.
+### TL Non-Intervention Rules
 
-### PR Creation
+During the dev↔reviewer loop, TL MUST NOT:
+- Relay messages between dev and reviewer (they talk directly)
+- Ask "how's it going?" before an agent is stuck (5min)
+- Override reviewer's verdict (until round 3 escalation)
+- Tell dev to skip fixing a review comment
+- Inject new requirements not in the original issue
 
-```bash
-gh pr create --base {{BASE_BRANCH}} --title "Issue #{N}: {description}" --body "Closes #{N}"
-```
+TL MAY:
+- Respond to FC messages (ci_red, nudge_stuck, etc.)
+- Intervene on escalation from either agent
+- Arbitrate after 3 failed review rounds
+- Nudge an agent that has been idle for 5+ minutes
 
-### Build Before Push
+---
 
-**MANDATORY before reporting "done" to Reviewer**: dev must run the project build and any new tests locally. This prevents unnecessary CI iteration.
+## Phase 4 — PR
+
+After reviewer sends APPROVE to TL:
+
+1. **Branch freshness check** (MANDATORY):
+   ```bash
+   git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}} && git push --force-with-lease
+   ```
+   If rebase fails (conflicts) → state Blocked.
+
+2. **TL creates PR**:
+   ```bash
+   gh pr create --base {{BASE_BRANCH}} --title "Issue #{N}: {description}" --body "Closes #{N}"
+   ```
+
+3. **Set auto-merge immediately** (mandatory, no exceptions):
+   ```bash
+   gh pr merge {PR} --auto --squash --delete-branch
+   ```
+
+4. Wait for FC to send CI status via stdin:
+   - `ci_green` → auto-merge handles merge → wait for `pr_merged`
+   - `ci_red` → TL forwards failure details to dev → dev fixes and pushes
+   - After 3 unique CI failure types → state Blocked (FC sends `ci_blocked`)
+   - `pr_merged` → state Done
+
+---
+
+## Phase 5 — Done
+
+1. Close issue: `gh issue close {N} --comment "Closed. PR #{PR} merged."`
+2. `shutdown_request` to all active subagents → wait for `shutdown_response`
+3. TL finishes
+
+---
+
+## BLOCKED State
+
+Entered from any phase when the team cannot proceed:
+1. Comment on the issue explaining what blocks progress
+2. Report blocker details to FC (visible in dashboard)
+3. STOP all work — wait for PM instructions from FC dashboard
+
+---
 
 ## FC Messages
 
@@ -187,70 +296,143 @@ Fleet Commander sends these messages directly to the TL via stdin. They arrive a
 | `ci_red` | CI fails on PR | "CI failed on PR #{PR}. Failing checks: {details}. Fix count: {N}/{max}." |
 | `ci_blocked` | Too many CI failures | "STOP. {N} unique CI failure types on PR #{PR}. Wait for instructions." |
 | `pr_merged` | PR is merged | "PR #{PR} merged. Close the issue, clean up, and finish." |
-| `stuck_nudge` | Team idle too long | "You have been idle. What is the status?" |
+| `nudge_idle` | Team idle 3+ min | "You have been idle for a while. What is the status?" |
+| `nudge_stuck` | Team stuck 5+ min | "You appear stuck. Report status or ask for help." |
 
-**On `ci_green`**: Auto-merge will handle the merge. Move to Done once merged.
-**On `ci_red`**: Coordinator delegates fix to the dev. This counts toward the failure limit.
+### TL Response to FC Messages
+
+**On `ci_green`**: Auto-merge will handle the merge. Acknowledge and wait for `pr_merged`.
+
+**On `ci_red`**: Forward failure details to dev. Dev fixes and pushes. This counts toward the failure limit.
+
 **On `ci_blocked`**: STOP all work. Wait for PM instructions from the dashboard.
-**On `pr_merged`**: Coordinator closes the issue, reports "Done" to TL, team shuts down.
 
-## State Details
+**On `pr_merged`**: Close the issue, shut down agents (`shutdown_request` to all), finish.
 
-### ANALYZING
-- Coordinator waits for brief from Analyst
-- BLOCKED=yes → state Blocked
-- BLOCKED=no → Coordinator checks TYPE, requests specialist spawns from TL if needed, creates tasks for dev(s), state Implementing
+**On `nudge_idle`**: Report current status to FC. If waiting for a subagent, check on them.
 
-### IMPLEMENTING
-- Dev(s) implement, commit atomically: `Issue #{N}: description`
-- Mixed-language: sequential tasks (`TaskCreate` with `blockedBy`)
-- **MANDATORY**: rebase on `{{BASE_BRANCH}}` before every push
-- **MANDATORY**: build + new tests locally before reporting "done"
-- Dev reports "done" → Coordinator passes to Reviewer, state Reviewing
+**On `nudge_stuck`**: Check which agent is stuck. Send a targeted nudge. If no progress after nudge, escalate to FC by reporting status.
 
-### REVIEWING
-- Reviewer performs 2-pass review (code quality + acceptance)
-- APPROVE → dev pushes branch, state PR
-- REJECT → dev fixes (max 2 rejections, then Blocked)
+---
 
-### PR
-- Dev pushes rebased branch
-- Coordinator creates PR: `gh pr create --base {{BASE_BRANCH}} ...`
-- Coordinator sets auto-merge: `gh pr merge {PR} --auto --squash --delete-branch`
-- FC monitors CI and sends results via stdin (no PR Watcher needed)
-- GREEN → auto-merge handles it, state Done
-- RED → dev fixes and pushes. Progress on the same bug type does NOT count as a new failure. Max 3 unique failure types, then Blocked.
+## Error Handling
 
-### DONE
-- Coordinator: update checkboxes in issue → `[x]`, close issue
-- Coordinator reports to TL: "Done. PR #{PR} merged."
-- TL: `shutdown_request` to everyone → `TeamDelete`
+### Agent Spawn Failure
 
-### BLOCKED
-- Comment on the issue explaining what is blocking
-- STOP all work
+If spawning any agent fails:
+1. **Retry once** — wait 5 seconds, attempt spawn again
+2. **If retry fails** — TL takes over that agent's role:
+   - Analyst fails → TL does the analysis themselves
+   - Dev fails → TL implements the code themselves
+   - Reviewer fails → TL reviews the code themselves (still two-pass)
+3. Log the failure for FC visibility (FC sees it via hooks)
+
+### Test Failure During Implementation
+
+1. Dev runs tests locally before reporting "ready for review"
+2. If tests fail → dev fixes and re-runs until green
+3. Dev does NOT report "ready for review" with failing tests
+4. If dev cannot fix tests after reasonable effort → dev reports blocker to TL → TL may assist or escalate
+
+### Review Loop Stuck (3 Rounds Exhausted)
+
+After 3 review rounds (initial + 2 fix rounds) with REJECT:
+1. Reviewer sends `BLOCKED — 3 review rounds exhausted` to TL
+2. TL reads the latest rejection feedback and the current code
+3. TL arbitrates:
+   - If remaining issues are minor nits → TL overrides and proceeds to PR
+   - If remaining issues are substantive → TL sends specific guidance to dev for one final attempt
+   - If fundamentally broken → state Blocked, comment on issue
+
+### Dev and Reviewer Disagree
+
+If the same issue bounces back and forth between dev and reviewer:
+- After round 2, if the same point is still contested, reviewer escalates to TL
+- TL reads the diff and the reviewer's feedback
+- TL arbitrates: either side with the reviewer (dev must fix) or override the reviewer (approve with noted exception)
+
+### CI Failure Handling
+
+1. `ci_red` received → TL forwards failure details to dev
+2. Dev fixes the failing tests/checks and pushes
+3. Progress on the same failure type does NOT count as a new unique failure
+4. After 3 unique failure types → state Blocked (FC sends `ci_blocked`)
+
+### Rebase Conflict
+
+1. If `git rebase origin/{{BASE_BRANCH}}` fails with conflicts → state Blocked
+2. Comment on issue explaining the conflict
+3. STOP — do not attempt manual conflict resolution across worktrees
+
+---
+
+## Branch Naming
+
+The TL determines the branch name based on the issue type and provides it to the dev in the task prompt:
+
+| Prefix | Use |
+|--------|-----|
+| `feat/{N}-{desc}` | New feature |
+| `fix/{N}-{desc}` | Bug fix |
+| `test/{N}-{desc}` | Test-only changes |
+
+### Commit Format
+
+```
+Issue #{N}: {description}
+```
+
+Atomic commits — each commit should be a logical unit.
+
+### Build Before Review
+
+**MANDATORY before reporting "ready for review"**: dev must run the project build and any new tests locally. This prevents unnecessary review iteration.
+
+---
 
 ## Rules
 
 - **One issue at a time** — atomic changes only
 - **CI must be green** — PR CANNOT be merged with red CI
 - **Branch from {{BASE_BRANCH}}** — NEVER commit directly to {{BASE_BRANCH}}
-- **Coordinator does not implement** — delegate to devs
-- **Idle = normal state** — do not ping, wait at least 3 minutes
-- **TL does not take over agent tasks** — if an agent is unresponsive, respawn instead of doing their work
+- **TL creates the PR** — dev pushes code, TL creates the PR and sets auto-merge
+- **P2P for review** — dev and reviewer talk directly, TL does not relay
+- **Idle = normal** — agents waiting for messages are expected to be idle
+- **TL intervenes only on escalation, stuck, or PR** — do not micromanage the dev↔reviewer loop
+- **Respond to FC messages promptly** — FC messages arrive via stdin and require action
+- **TL does not implement** — spawn subagents for all work (except analyst fallback)
+- **Analyst failure is not fatal** — TL can produce a minimal brief if analyst fails
 
 ## Anti-Patterns
 
 | Wrong | Right |
 |-------|-------|
-| Coordinator reads code | Delegate to Analyst |
-| Coordinator implements | Delegate to Dev |
-| Coordinator pings "how's it going?" | Wait for report |
-| Dev ignores CI red | ALWAYS fix CI |
-| Dev commits to {{BASE_BRANCH}} | Only branch feat/*, fix/*, test/* |
+| TL relays messages between dev and reviewer | Dev and reviewer talk directly (p2p) |
+| TL asks "how's it going?" every minute | Wait for report or 5min stuck threshold |
+| TL implements code while dev is active | Let dev do the implementation |
+| TL overrides reviewer without reading feedback | Read feedback, arbitrate only after 3 rounds |
+| Dev pushes without local tests | Build + tests locally BEFORE reporting ready |
 | Dev pushes without rebase | ALWAYS rebase on {{BASE_BRANCH}} before push |
-| Dev pushes without local tests | Build + new tests locally BEFORE push |
-| Respawn agent after idle | Idle = normal state |
-| TL waits passively | TL queries agents after 3 min idle without report |
-| TL takes over CI monitoring | FC handles CI monitoring automatically |
-| TL spawns a PR Watcher | FC sends CI/PR updates via stdin — no watcher needed |
+| Dev creates the PR | TL creates the PR after APPROVE |
+| Spawning a coordinator / 4th agent | Diamond team is exactly 3 agents: analyst, dev, reviewer |
+| Spawning all agents at once | Spawn each agent when its phase begins |
+| Ignoring FC messages | Always respond to ci_green, ci_red, pr_merged, nudges |
+| Respawning agent after 2 min idle | Idle is normal — only act at 5min stuck threshold |
+| TL monitors CI manually | FC handles CI monitoring and sends updates via stdin |
+
+## Decision Summary
+
+```
+Phase 1: TL → spawn Analyst → receive brief → validate
+Phase 2: TL → spawn Dev (fleet-dev + guidebooks from brief) → dev implements → dev reports "ready for review"
+Phase 3: TL → spawn Reviewer → reviewer + dev iterate p2p → reviewer reports verdict to TL
+Phase 4: TL → rebase → create PR → set auto-merge → FC monitors CI
+Phase 5: TL → close issue → shutdown agents → finish
+```
+
+Edge cases:
+- Analyst fails → TL does quick analysis themselves
+- Dev stuck → TL nudges, then restarts with more context
+- 3 rejections → TL arbitrates: simplify, override nits, restart dev, or abort
+- Dev/Reviewer disagree → TL arbitrates after round 2
+- CI blocked → STOP, wait for PM

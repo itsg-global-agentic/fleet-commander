@@ -80,6 +80,7 @@ export interface InstallStatus {
   hooks: InstallHooksStatus;
   prompt: InstallCategoryStatus;
   agents: InstallCategoryStatus;
+  guides?: InstallCategoryStatus;
   settings: InstallFileStatus;
 }
 
