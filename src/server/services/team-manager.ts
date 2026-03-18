@@ -1112,6 +1112,13 @@ export class TeamManager {
         stoppedAt: null,
         lastEventAt: null,
       });
+      db.insertTransition({
+        teamId: existing.id,
+        fromStatus: existing.status,
+        toStatus: 'queued',
+        trigger: 'pm_action',
+        reason: 'Re-queued by PM (queue path)',
+      });
       const team = db.getTeam(existing.id)!;
       const activeCount = db.getActiveTeamCountByProject(projectId);
       console.log(`[TeamManager] Team ${team.id} queued (${activeCount}/${project.maxActiveTeams} active)`);
@@ -1131,6 +1138,13 @@ export class TeamManager {
       phase: 'init',
       customPrompt: prompt ?? null,
       launchedAt: now,
+    });
+    db.insertTransition({
+      teamId: team.id,
+      fromStatus: 'none',
+      toStatus: 'queued',
+      trigger: 'pm_action',
+      reason: 'Team created and queued',
     });
 
     const activeCount = db.getActiveTeamCountByProject(projectId);
