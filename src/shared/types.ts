@@ -96,6 +96,11 @@ export interface Team {
   prNumber: number | null;
   customPrompt: string | null;
   headless: boolean;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheCreationTokens: number;
+  totalCacheReadTokens: number;
+  totalCostUsd: number;
   launchedAt: string | null;
   stoppedAt: string | null;
   lastEventAt: string | null;
@@ -280,6 +285,11 @@ export interface TeamDashboardRow {
   lastEventAt: string | null;
   durationMin: number;
   idleMin: number | null;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheCreationTokens: number;
+  totalCacheReadTokens: number;
+  totalCostUsd: number;
   prState: PRState | null;
   ciStatus: CIStatus | null;
   mergeStatus: MergeStatus | null;
@@ -314,6 +324,11 @@ export interface TeamDetail {
   lastEventAt: string | null;
   durationMin: number;
   idleMin: number | null;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCacheCreationTokens: number;
+  totalCacheReadTokens: number;
+  totalCostUsd: number;
   pr: {
     number: number;
     state: PRState | null;

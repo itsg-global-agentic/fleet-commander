@@ -93,6 +93,11 @@ export interface TeamUpdate {
   prNumber?: number | null;
   customPrompt?: string | null;
   headless?: boolean;
+  totalInputTokens?: number;
+  totalOutputTokens?: number;
+  totalCacheCreationTokens?: number;
+  totalCacheReadTokens?: number;
+  totalCostUsd?: number;
   launchedAt?: string | null;
   stoppedAt?: string | null;
   lastEventAt?: string | null;
@@ -247,6 +252,9 @@ export class FleetDatabase {
 
     // Add daily_resets_at and weekly_resets_at columns to usage_snapshots if missing
     this.addUsageResetsAtColumns();
+
+    // Add token/cost tracking columns to teams if missing
+    this.addTokenTrackingColumns();
 
     // Rename merge_state -> merge_status in pull_requests (for existing databases)
     this.renameMergeStateColumn();
@@ -461,6 +469,32 @@ export class FleetDatabase {
       }
       if (!columns.some((c) => c.name === 'weekly_resets_at')) {
         this.db.exec('ALTER TABLE usage_snapshots ADD COLUMN weekly_resets_at TEXT');
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
+  /**
+   * Add token/cost tracking columns to teams table if missing.
+   */
+  private addTokenTrackingColumns(): void {
+    try {
+      const columns = this.db.prepare("PRAGMA table_info(teams)").all() as Array<{ name: string }>;
+      if (!columns.some((c) => c.name === 'total_input_tokens')) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN total_input_tokens INTEGER DEFAULT 0');
+      }
+      if (!columns.some((c) => c.name === 'total_output_tokens')) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN total_output_tokens INTEGER DEFAULT 0');
+      }
+      if (!columns.some((c) => c.name === 'total_cache_creation_tokens')) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN total_cache_creation_tokens INTEGER DEFAULT 0');
+      }
+      if (!columns.some((c) => c.name === 'total_cache_read_tokens')) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN total_cache_read_tokens INTEGER DEFAULT 0');
+      }
+      if (!columns.some((c) => c.name === 'total_cost_usd')) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN total_cost_usd REAL DEFAULT 0');
       }
     } catch {
       // Table may not exist yet (fresh database) — schema.sql will create it
@@ -772,6 +806,26 @@ export class FleetDatabase {
     if (fields.headless !== undefined) {
       setClauses.push('headless = @headless');
       params.headless = fields.headless ? 1 : 0;
+    }
+    if (fields.totalInputTokens !== undefined) {
+      setClauses.push('total_input_tokens = @totalInputTokens');
+      params.totalInputTokens = fields.totalInputTokens;
+    }
+    if (fields.totalOutputTokens !== undefined) {
+      setClauses.push('total_output_tokens = @totalOutputTokens');
+      params.totalOutputTokens = fields.totalOutputTokens;
+    }
+    if (fields.totalCacheCreationTokens !== undefined) {
+      setClauses.push('total_cache_creation_tokens = @totalCacheCreationTokens');
+      params.totalCacheCreationTokens = fields.totalCacheCreationTokens;
+    }
+    if (fields.totalCacheReadTokens !== undefined) {
+      setClauses.push('total_cache_read_tokens = @totalCacheReadTokens');
+      params.totalCacheReadTokens = fields.totalCacheReadTokens;
+    }
+    if (fields.totalCostUsd !== undefined) {
+      setClauses.push('total_cost_usd = @totalCostUsd');
+      params.totalCostUsd = fields.totalCostUsd;
     }
     if (fields.launchedAt !== undefined) {
       setClauses.push('launched_at = @launchedAt');
@@ -1379,6 +1433,11 @@ export class FleetDatabase {
       prNumber: row.pr_number as number | null,
       customPrompt: (row.custom_prompt as string | null) ?? null,
       headless: (row.headless as number) !== 0,
+      totalInputTokens: (row.total_input_tokens as number | undefined) ?? 0,
+      totalOutputTokens: (row.total_output_tokens as number | undefined) ?? 0,
+      totalCacheCreationTokens: (row.total_cache_creation_tokens as number | undefined) ?? 0,
+      totalCacheReadTokens: (row.total_cache_read_tokens as number | undefined) ?? 0,
+      totalCostUsd: (row.total_cost_usd as number | undefined) ?? 0,
       launchedAt: utcify(row.launched_at as string | null),
       stoppedAt: utcify(row.stopped_at as string | null),
       lastEventAt: utcify(row.last_event_at as string | null),
@@ -1462,6 +1521,11 @@ export class FleetDatabase {
       lastEventAt: utcify(row.last_event_at as string | null),
       durationMin: row.duration_min as number,
       idleMin: row.idle_min as number | null,
+      totalInputTokens: (row.total_input_tokens as number | undefined) ?? 0,
+      totalOutputTokens: (row.total_output_tokens as number | undefined) ?? 0,
+      totalCacheCreationTokens: (row.total_cache_creation_tokens as number | undefined) ?? 0,
+      totalCacheReadTokens: (row.total_cache_read_tokens as number | undefined) ?? 0,
+      totalCostUsd: (row.total_cost_usd as number | undefined) ?? 0,
       prState: (row.pr_state as PRState | null) ?? null,
       ciStatus: (row.ci_status as CIStatus | null) ?? null,
       mergeStatus: row.merge_status as MergeStatus | null,

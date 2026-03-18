@@ -70,11 +70,20 @@ interface OutputBuffer {
 // TeamManager
 // ---------------------------------------------------------------------------
 
+interface TokenCounter {
+  inputTokens: number;
+  outputTokens: number;
+  cacheCreationTokens: number;
+  cacheReadTokens: number;
+  costUsd: number;
+}
+
 export class TeamManager {
   private outputBuffers: Map<number, OutputBuffer> = new Map();
   private childProcesses: Map<number, ChildProcess> = new Map();
   private stdinPipes: Map<number, Writable> = new Map();
   private parsedEvents: Map<number, StreamEvent[]> = new Map();
+  private tokenCounters: Map<number, TokenCounter> = new Map();
   private _processingQueue = new Set<number>();
 
   // -------------------------------------------------------------------------
@@ -450,9 +459,11 @@ export class TeamManager {
     }
 
     // Clean up child process reference
+    this.flushTokenCounters(teamId);
     this.childProcesses.delete(teamId);
     this.outputBuffers.delete(teamId);
     this.parsedEvents.delete(teamId);
+    this.tokenCounters.delete(teamId);
 
     // Re-read to get the latest status (process exit handler may have already updated it)
     const stopTeam = db.getTeam(teamId);
@@ -1202,10 +1213,12 @@ export class TeamManager {
 
     child.on('exit', (code, signal) => {
       console.log(`[TeamManager] Process exited for team ${teamId} (code=${code}, signal=${signal})`);
+      this.flushTokenCounters(teamId);
       this.childProcesses.delete(teamId);
       this.stdinPipes.delete(teamId);
       this.outputBuffers.delete(teamId);
       this.parsedEvents.delete(teamId);
+      this.tokenCounters.delete(teamId);
 
       const currentTeam = db.getTeam(teamId);
       if (!currentTeam) return;
@@ -1240,10 +1253,12 @@ export class TeamManager {
 
     child.on('error', (err) => {
       console.error(`[TeamManager] ERROR: process error for team ${teamId}:`, err.message);
+      this.flushTokenCounters(teamId);
       this.childProcesses.delete(teamId);
       this.stdinPipes.delete(teamId);
       this.outputBuffers.delete(teamId);
       this.parsedEvents.delete(teamId);
+      this.tokenCounters.delete(teamId);
 
       const currentTeam = db.getTeam(teamId);
       if (!currentTeam) return;
@@ -1444,6 +1459,18 @@ export class TeamManager {
     }
     const events = this.parsedEvents.get(teamId)!;
 
+    // Initialize token counter (seed from DB for restarts)
+    if (!this.tokenCounters.has(teamId)) {
+      const existingTeam = db.getTeam(teamId);
+      this.tokenCounters.set(teamId, {
+        inputTokens: existingTeam?.totalInputTokens ?? 0,
+        outputTokens: existingTeam?.totalOutputTokens ?? 0,
+        cacheCreationTokens: existingTeam?.totalCacheCreationTokens ?? 0,
+        cacheReadTokens: existingTeam?.totalCacheReadTokens ?? 0,
+        costUsd: existingTeam?.totalCostUsd ?? 0,
+      });
+    }
+
     // Partial line buffer for handling chunks that split across data events
     let stdoutPartial = '';
 
@@ -1481,11 +1508,8 @@ export class TeamManager {
               events.shift();
             }
 
-            // Log cost from result events (usage snapshots are written by usage-tracker)
-            if (event.type === 'result' && (event as any).total_cost_usd != null) {
-              const costUsd = (event as any).total_cost_usd as number;
-              console.log(`[TeamManager] Team ${teamId} cost: $${costUsd.toFixed(4)}`);
-            }
+            // Accumulate token counts from assistant events
+            this.accumulateTokens(teamId, event);
 
             // Broadcast interesting events via SSE
             if (['assistant', 'tool_use', 'tool_result', 'result'].includes(event.type)) {
@@ -1520,11 +1544,8 @@ export class TeamManager {
               events.shift();
             }
 
-            // Log cost from result events (usage snapshots are written by usage-tracker)
-            if (event.type === 'result' && (event as any).total_cost_usd != null) {
-              const costUsd = (event as any).total_cost_usd as number;
-              console.log(`[TeamManager] Team ${teamId} cost: $${costUsd.toFixed(4)}`);
-            }
+            // Accumulate token counts from assistant events
+            this.accumulateTokens(teamId, event);
           } catch {
             console.log(`[CC:${logPrefix}:raw] ${trimmed.substring(0, 200)}`);
           }
@@ -1553,6 +1574,84 @@ export class TeamManager {
           }
         }
       });
+    }
+  }
+
+  /**
+   * Extract and accumulate token counts from stream events.
+   * - `assistant` events: increment token counters from usage.input_tokens, etc.
+   * - `result` events: replace totalCostUsd (it's cumulative) and flush to DB.
+   */
+  private accumulateTokens(teamId: number, event: StreamEvent): void {
+    const counter = this.tokenCounters.get(teamId);
+    if (!counter) return;
+
+    const ev = event as Record<string, unknown>;
+
+    if (event.type === 'assistant') {
+      // Extract usage from message.usage (Claude API response format)
+      const message = ev.message as Record<string, unknown> | undefined;
+      const usage = message?.usage as Record<string, unknown> | undefined;
+      if (usage) {
+        if (typeof usage.input_tokens === 'number') {
+          counter.inputTokens += usage.input_tokens;
+        }
+        if (typeof usage.output_tokens === 'number') {
+          counter.outputTokens += usage.output_tokens;
+        }
+        if (typeof usage.cache_creation_input_tokens === 'number') {
+          counter.cacheCreationTokens += usage.cache_creation_input_tokens;
+        }
+        if (typeof usage.cache_read_input_tokens === 'number') {
+          counter.cacheReadTokens += usage.cache_read_input_tokens;
+        }
+      }
+    }
+
+    if (event.type === 'result') {
+      // total_cost_usd on result is cumulative for the session — replace, don't add
+      if (typeof ev.total_cost_usd === 'number') {
+        counter.costUsd = ev.total_cost_usd;
+        console.log(`[TeamManager] Team ${teamId} cost: $${counter.costUsd.toFixed(4)}`);
+      }
+      // Flush to DB on every result event
+      this.flushTokenCounters(teamId);
+    }
+  }
+
+  /**
+   * Persist in-memory token counters to the database and broadcast SSE update.
+   */
+  private flushTokenCounters(teamId: number): void {
+    const counter = this.tokenCounters.get(teamId);
+    if (!counter) return;
+
+    try {
+      const db = getDatabase();
+      db.updateTeam(teamId, {
+        totalInputTokens: counter.inputTokens,
+        totalOutputTokens: counter.outputTokens,
+        totalCacheCreationTokens: counter.cacheCreationTokens,
+        totalCacheReadTokens: counter.cacheReadTokens,
+        totalCostUsd: counter.costUsd,
+      });
+
+      const currentTeam = db.getTeam(teamId);
+      const status = currentTeam?.status ?? 'running';
+      sseBroker.broadcast('team_status_changed', {
+        team_id: teamId,
+        status,
+        previous_status: status,
+        tokens: {
+          input: counter.inputTokens,
+          output: counter.outputTokens,
+          cacheCreation: counter.cacheCreationTokens,
+          cacheRead: counter.cacheReadTokens,
+          costUsd: counter.costUsd,
+        },
+      }, teamId);
+    } catch (err) {
+      console.error(`[TeamManager] Failed to flush token counters for team ${teamId}:`, err);
     }
   }
 

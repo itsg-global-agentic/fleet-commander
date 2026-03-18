@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS teams (
   pr_number       INTEGER,
   custom_prompt   TEXT,                            -- custom prompt override (persisted for queued teams)
   headless        INTEGER NOT NULL DEFAULT 1,     -- 0=interactive terminal, 1=headless stream-json
+  total_input_tokens INTEGER DEFAULT 0,
+  total_output_tokens INTEGER DEFAULT 0,
+  total_cache_creation_tokens INTEGER DEFAULT 0,
+  total_cache_read_tokens INTEGER DEFAULT 0,
+  total_cost_usd  REAL DEFAULT 0,
   launched_at     TEXT,
   stopped_at      TEXT,
   last_event_at   TEXT,
@@ -127,6 +132,11 @@ SELECT
   t.last_event_at,
   ROUND((julianday('now') - julianday(t.launched_at)) * 24 * 60, 0) AS duration_min,
   ROUND((julianday('now') - julianday(t.last_event_at)) * 24 * 60, 1) AS idle_min,
+  t.total_input_tokens,
+  t.total_output_tokens,
+  t.total_cache_creation_tokens,
+  t.total_cache_read_tokens,
+  t.total_cost_usd,
   pr.state AS pr_state,
   pr.ci_status,
   pr.merge_status,

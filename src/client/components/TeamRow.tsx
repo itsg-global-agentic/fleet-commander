@@ -23,6 +23,13 @@ function truncate(str: string, maxLen: number): string {
   return str.slice(0, maxLen - 1) + '\u2026';
 }
 
+/** Format a token count to a compact string (e.g. "125K", "1.2M") */
+function formatTokens(count: number): string {
+  if (count < 1000) return String(count);
+  if (count < 1_000_000) return (count / 1000).toFixed(count < 10_000 ? 1 : 0) + 'K';
+  return (count / 1_000_000).toFixed(1) + 'M';
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -116,6 +123,20 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
         <span className={`text-sm ${activityColor}`} title={team.lastEventAt ?? undefined}>
           {activityLabel}
         </span>
+      </td>
+
+      {/* Tokens */}
+      <td className="px-4 whitespace-nowrap">
+        {(team.totalInputTokens + team.totalOutputTokens) > 0 ? (
+          <span
+            className="text-sm text-dark-muted"
+            title={`Input: ${formatTokens(team.totalInputTokens)}, Output: ${formatTokens(team.totalOutputTokens)}, Cache: ${formatTokens(team.totalCacheCreationTokens + team.totalCacheReadTokens)}`}
+          >
+            {formatTokens(team.totalInputTokens + team.totalOutputTokens)}
+          </span>
+        ) : (
+          <span className="text-sm text-dark-muted">{'\u2014'}</span>
+        )}
       </td>
 
       {/* PR */}

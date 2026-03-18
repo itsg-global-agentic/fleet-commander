@@ -331,6 +331,30 @@ export function TeamDetail() {
                       )}
                       <span className="ml-3">Model: {detail.model ?? '\u2014'}</span>
                     </div>
+
+                    {/* Token breakdown */}
+                    {(detail.totalInputTokens + detail.totalOutputTokens) > 0 && (
+                      <div className="mt-3 flex items-center gap-4 text-sm">
+                        <span className="text-dark-muted">
+                          Input: <span className="text-dark-text">{detail.totalInputTokens.toLocaleString()}</span>
+                        </span>
+                        <span className="text-dark-muted">
+                          Output: <span className="text-dark-text">{detail.totalOutputTokens.toLocaleString()}</span>
+                        </span>
+                        {(detail.totalCacheCreationTokens + detail.totalCacheReadTokens) > 0 && (
+                          <span className="text-dark-muted">
+                            Cache: <span className="text-dark-text">
+                              {(detail.totalCacheCreationTokens + detail.totalCacheReadTokens).toLocaleString()}
+                            </span>
+                          </span>
+                        )}
+                        {detail.totalCostUsd > 0 && (
+                          <span className="text-dark-muted">
+                            Cost: <span className="text-[#3FB950]">${detail.totalCostUsd.toFixed(4)}</span>
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </section>
 
                   {/* ---- Transition History ---- */}
