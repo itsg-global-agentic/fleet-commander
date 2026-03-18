@@ -41,11 +41,6 @@ describe('TopBar', () => {
     expect(screen.getByText('Fleet Commander')).toBeInTheDocument();
   });
 
-  it('shows total cost of $0.00 when there are no teams', () => {
-    render(<TopBar />);
-    expect(screen.getByText('$0.00')).toBeInTheDocument();
-  });
-
   it('shows correct count pills for running teams', () => {
     mockTeams = [
       makeTeam({ id: 1, status: 'running' }),
@@ -83,22 +78,4 @@ describe('TopBar', () => {
     expect(screen.queryByText(/Done/)).not.toBeInTheDocument();
   });
 
-  it('calculates and displays total cost across all teams', () => {
-    mockTeams = [
-      makeTeam({ id: 1, totalCost: 1.25 }),
-      makeTeam({ id: 2, totalCost: 3.75 }),
-      makeTeam({ id: 3, totalCost: 0.50 }),
-    ];
-    render(<TopBar />);
-    expect(screen.getByText('$5.50')).toBeInTheDocument();
-  });
-
-  it('handles teams with no totalCost gracefully', () => {
-    mockTeams = [
-      makeTeam({ id: 1, totalCost: 2.00 }),
-      makeTeam({ id: 2, totalCost: 0 }),
-    ];
-    render(<TopBar />);
-    expect(screen.getByText('$2.00')).toBeInTheDocument();
-  });
 });

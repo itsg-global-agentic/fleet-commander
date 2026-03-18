@@ -126,8 +126,6 @@ SELECT
   t.last_event_at,
   ROUND((julianday('now') - julianday(t.launched_at)) * 24 * 60, 0) AS duration_min,
   ROUND((julianday('now') - julianday(t.last_event_at)) * 24 * 60, 1) AS idle_min,
-  COALESCE(u.total_cost, 0) AS total_cost,
-  COALESCE(u.session_count, 0) AS session_count,
   pr.state AS pr_state,
   pr.ci_status,
   pr.merge_state AS merge_status,
@@ -135,16 +133,7 @@ SELECT
   t.updated_at
 FROM teams t
 LEFT JOIN projects p ON p.id = t.project_id
-LEFT JOIN pull_requests pr ON pr.team_id = t.id
-LEFT JOIN (
-  SELECT
-    team_id,
-    ROUND(SUM(COALESCE(json_extract(raw_output, '$.total_cost_usd'), 0)), 4) AS total_cost,
-    COUNT(*) AS session_count
-  FROM usage_snapshots
-  WHERE raw_output IS NOT NULL AND json_extract(raw_output, '$.total_cost_usd') IS NOT NULL
-  GROUP BY team_id
-) u ON u.team_id = t.id;
+LEFT JOIN pull_requests pr ON pr.team_id = t.id;
 
 -- ---------------------------------------------------------------------------
 -- USAGE SNAPSHOTS — usage percentage tracking (replaces cost tracking)

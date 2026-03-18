@@ -23,13 +23,6 @@ function truncate(str: string, maxLen: number): string {
   return str.slice(0, maxLen - 1) + '\u2026';
 }
 
-/** Format cost in USD */
-function formatCost(cost: number): string {
-  if (cost === 0) return '--';
-  if (cost < 0.01) return '<$0.01';
-  return `$${cost.toFixed(2)}`;
-}
-
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -121,13 +114,6 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
       <td className="px-4 whitespace-nowrap">
         <span className={`text-sm ${activityColor}`} title={team.lastEventAt ?? undefined}>
           {activityLabel}
-        </span>
-      </td>
-
-      {/* Cost */}
-      <td className="px-4 whitespace-nowrap">
-        <span className="text-sm text-dark-muted" title={team.totalCost > 0 ? `$${team.totalCost.toFixed(4)} (${team.sessionCount} session${team.sessionCount !== 1 ? 's' : ''})` : undefined}>
-          {formatCost(team.totalCost)}
         </span>
       </td>
 

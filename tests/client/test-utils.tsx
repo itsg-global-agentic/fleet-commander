@@ -45,8 +45,6 @@ export function makeTeam(overrides: Partial<TeamDashboardRow> = {}): TeamDashboa
     lastEventAt: '2025-01-01T00:05:00Z',
     durationMin: 5,
     idleMin: 0,
-    totalCost: 0.50,
-    sessionCount: 1,
     prState: null,
     ciStatus: null,
     mergeStatus: null,

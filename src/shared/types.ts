@@ -225,8 +225,6 @@ export interface TeamDashboardRow {
   lastEventAt: string | null;
   durationMin: number;
   idleMin: number | null;
-  totalCost: number;
-  sessionCount: number;
   prState: PRState | null;
   ciStatus: CIStatus | null;
   mergeStatus: MergeStatus | null;

@@ -1425,8 +1425,6 @@ export class FleetDatabase {
       lastEventAt: utcify(row.last_event_at as string | null),
       durationMin: row.duration_min as number,
       idleMin: row.idle_min as number | null,
-      totalCost: row.total_cost as number,
-      sessionCount: row.session_count as number,
       prState: (row.pr_state as PRState | null) ?? null,
       ciStatus: (row.ci_status as CIStatus | null) ?? null,
       mergeStatus: row.merge_status as MergeStatus | null,

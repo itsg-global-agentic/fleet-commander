@@ -528,8 +528,6 @@ describe('v_team_dashboard view', () => {
     expect(row.worktreeName).toBe('kea-100');
     expect(row.status).toBe('running');
     expect(row.phase).toBe('implementing');
-    expect(row.totalCost).toBe(0);
-    expect(row.sessionCount).toBe(0);
   });
 
   it('includes PR info when associated', () => {
@@ -565,7 +563,6 @@ describe('v_team_dashboard view', () => {
 
     const rows = db.getTeamDashboard();
     expect(rows).toHaveLength(1);
-    expect(rows[0].totalCost).toBe(0);
     expect(rows[0].prState).toBeNull();
   });
 });
