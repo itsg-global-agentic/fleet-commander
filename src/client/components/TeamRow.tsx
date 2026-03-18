@@ -53,10 +53,11 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
   const isActive = team.status === 'running' || team.status === 'stuck' || team.status === 'idle' || team.status === 'launching';
   const title = team.issueTitle ? truncate(team.issueTitle, 40) : 'Untitled';
 
-  // Last activity — minutes since last event
+  // Last activity — minutes since last event (skip for terminal teams)
+  const isTerminal = team.status === 'done' || team.status === 'failed';
   let activityLabel = '—';
   let activityColor = 'text-dark-muted';
-  if (team.lastEventAt) {
+  if (team.lastEventAt && !isTerminal) {
     const agoMs = Date.now() - new Date(team.lastEventAt).getTime();
     const agoMin = Math.floor(agoMs / 60000);
     if (agoMin < 1) {
