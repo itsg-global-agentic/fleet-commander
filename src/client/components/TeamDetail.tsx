@@ -310,7 +310,7 @@ export function TeamDetail() {
                       <span className="text-dark-muted">
                         Duration: <span className="text-dark-text">{formatDuration(detail.durationMin)}</span>
                       </span>
-                      {detail.lastEventAt && (
+                      {detail.lastEventAt && !isStopped && (
                         <span className="text-dark-muted">
                           Last activity: <span className="text-dark-text">
                             {(() => {
