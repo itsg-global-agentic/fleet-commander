@@ -221,7 +221,7 @@ class GitHubPoller {
     const rawState = data.state?.toLowerCase() ?? 'open';
     const state: PRState = isMerged ? 'merged' : (['draft', 'open', 'merged', 'closed'].includes(rawState) ? rawState as PRState : 'open');
     const rawMerge = data.mergeStateStatus?.toLowerCase() ?? 'unknown';
-    const mergeState: MergeStatus = (['clean', 'behind', 'blocked', 'dirty', 'unknown'].includes(rawMerge) ? rawMerge as MergeStatus : 'unknown');
+    const mergeState: MergeStatus = (['clean', 'behind', 'blocked', 'dirty', 'unstable', 'has_hooks', 'draft', 'unknown'].includes(rawMerge) ? rawMerge as MergeStatus : 'unknown');
 
     // Derive CI status from statusCheckRollup
     const checks: GHCheckRun[] = data.statusCheckRollup ?? [];

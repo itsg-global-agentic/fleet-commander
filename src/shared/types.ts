@@ -19,7 +19,7 @@ export type PRState = 'draft' | 'open' | 'merged' | 'closed';
 export type CIStatus = 'none' | 'pending' | 'passing' | 'failing';
 
 /** PR merge readiness status (from GitHub mergeStateStatus) */
-export type MergeStatus = 'unknown' | 'clean' | 'behind' | 'blocked' | 'dirty';
+export type MergeStatus = 'unknown' | 'clean' | 'behind' | 'blocked' | 'dirty' | 'unstable' | 'has_hooks' | 'draft';
 
 /** Project status */
 export type ProjectStatus = 'active' | 'paused' | 'archived';
