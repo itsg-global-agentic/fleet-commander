@@ -15,10 +15,12 @@ import type {
 import fs from 'fs';
 import path from 'path';
 import { getTeamManager } from '../services/team-manager.js';
+import { getIssueFetcher } from '../services/issue-fetcher.js';
+import { githubPoller } from '../services/github-poller.js';
 import { getDatabase } from '../db.js';
 import { sseBroker } from '../services/sse-broker.js';
 import config from '../config.js';
-import type { TeamPhase } from '../../shared/types.js';
+import type { TeamPhase, IssueDependencyInfo } from '../../shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Request body / param interfaces
@@ -79,6 +81,29 @@ function summarize(e: Record<string, unknown>): string {
 }
 
 // ---------------------------------------------------------------------------
+// Dependency check helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Check whether an issue has unresolved dependencies.
+ * Returns the dependency info, or null if dependencies cannot be determined
+ * (which is treated as "no blockers" — permissive fallback).
+ */
+function checkDependencies(projectId: number, issueNumber: number): IssueDependencyInfo | null {
+  try {
+    const fetcher = getIssueFetcher();
+    return fetcher.fetchDependenciesForIssue(projectId, issueNumber);
+  } catch (err) {
+    console.error(
+      `[Teams] Dependency check failed for issue #${issueNumber}:`,
+      err instanceof Error ? err.message : err
+    );
+    // Permissive fallback: if we can't check, allow launch
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
 
@@ -111,6 +136,25 @@ const teamsRoutes: FastifyPluginCallback = (
             error: 'Bad Request',
             message: 'issueNumber is required and must be a positive integer',
           });
+        }
+
+        // Dependency check — block launch if unresolved dependencies exist
+        if (!force) {
+          const depInfo = checkDependencies(projectId, issueNumber);
+          if (depInfo && !depInfo.resolved) {
+            // Track for resolution detection in the poller
+            const blockerNumbers = depInfo.blockedBy
+              .filter((b) => b.state === 'open')
+              .map((b) => b.number);
+            githubPoller.trackBlockedIssue(projectId, issueNumber, blockerNumbers);
+
+            return reply.code(409).send({
+              error: 'Blocked by Dependencies',
+              message: `Issue #${issueNumber} is blocked by ${depInfo.openCount} unresolved dependency${depInfo.openCount !== 1 ? 'ies' : ''}`,
+              dependencies: depInfo,
+              hint: 'Set force: true to bypass dependency check',
+            });
+          }
         }
 
         const manager = getTeamManager();
@@ -168,9 +212,43 @@ const teamsRoutes: FastifyPluginCallback = (
           }
         }
 
+        // Dependency check for batch launch: check each issue, separate blocked from launchable
+        const blocked: Array<{ issueNumber: number; dependencies: IssueDependencyInfo }> = [];
+        const launchable: Array<{ number: number; title?: string }> = [];
+
+        // Build set of issue numbers in this batch for intra-batch ordering
+        const batchNumbers = new Set(issues.map((i) => i.number));
+
+        for (const issue of issues) {
+          const depInfo = checkDependencies(projectId, issue.number);
+          if (depInfo && !depInfo.resolved) {
+            // Check if all open blockers are in this same batch (intra-batch dependency)
+            const allBlockersInBatch = depInfo.blockedBy
+              .filter((b) => b.state === 'open')
+              .every((b) => batchNumbers.has(b.number));
+
+            if (allBlockersInBatch) {
+              // Defer: will be launched after its blockers (handled by ordering)
+              launchable.push(issue);
+            } else {
+              blocked.push({ issueNumber: issue.number, dependencies: depInfo });
+            }
+          } else {
+            launchable.push(issue);
+          }
+        }
+
         const manager = getTeamManager();
-        const teams = await manager.launchBatch(projectId, issues, prompt, delayMs, headless);
-        return reply.code(201).send(teams);
+        const teams = launchable.length > 0
+          ? await manager.launchBatch(projectId, launchable, prompt, delayMs, headless)
+          : [];
+
+        // Return launched teams plus any blocked issues
+        const response = {
+          launched: teams,
+          blocked: blocked.length > 0 ? blocked : undefined,
+        };
+        return reply.code(201).send(response);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         request.log.error(err, 'Failed to launch batch');

@@ -45,7 +45,7 @@ fleet-commander/
         github-poller.ts    # gh CLI polling (PRs, CI, merges) every 30s
         issue-fetcher.ts    # GraphQL issue fetch with 60s cache
         stuck-detector.ts   # Idle (3min) and stuck (5min) detection
-        sse-broker.ts       # SSE connection management, 13 event types, 30s heartbeat
+        sse-broker.ts       # SSE connection management, 14 event types, 30s heartbeat
         usage-tracker.ts    # Usage percentage polling
         startup-recovery.ts # Recover team state on server restart
         cleanup.ts          # Worktree and branch cleanup
@@ -182,7 +182,7 @@ Team ID format: `{project_slug}-{issue_number}` (used as worktree name).
 
 ## SSE Event Types
 
-The SSE broker emits 13 event types:
+The SSE broker emits 14 event types:
 
 1. `team_status_changed`
 2. `team_event`
@@ -197,6 +197,7 @@ The SSE broker emits 13 event types:
 11. `project_cleanup`
 12. `snapshot`
 13. `heartbeat` (every 30s)
+14. `dependency_resolved`
 
 ## Environment Variables
 

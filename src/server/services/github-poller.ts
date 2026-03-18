@@ -71,6 +71,14 @@ class GitHubPoller {
   private isPolling = false;
 
   /**
+   * In-memory tracking of previously-blocked issues.
+   * Maps "projectId:issueNumber" -> array of blocking issue numbers.
+   * Used to detect when all blockers close so we can broadcast dependency_resolved.
+   * Lost on restart, which is acceptable since we do NOT auto-launch.
+   */
+  private previouslyBlocked = new Map<string, { projectId: number; issueNumber: number; blockerNumbers: number[] }>();
+
+  /**
    * Start the polling loop. Uses adaptive intervals:
    * - Normal: config.githubPollIntervalMs (default 30s)
    * - Fast: 10s when teams are awaiting PR detection or have pending CI
@@ -210,6 +218,9 @@ class GitHubPoller {
       }
 
       this.needsFastPoll = wantFast;
+
+      // Check dependency resolution for previously-blocked issues
+      await this.checkDependencyResolution();
     } finally {
       this.isPolling = false;
     }
@@ -457,6 +468,73 @@ class GitHubPoller {
         }
       }
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: check dependencies for previously-blocked issues
+  // -------------------------------------------------------------------------
+
+  /**
+   * Check dependency resolution for issues that were previously blocked.
+   * When all blockers close, broadcasts a `dependency_resolved` SSE event.
+   * Does NOT auto-launch — the user must manually trigger launch.
+   */
+  private async checkDependencyResolution(): Promise<void> {
+    if (this.previouslyBlocked.size === 0) return;
+
+    try {
+      const { getIssueFetcher } = await import('./issue-fetcher.js');
+      const fetcher = getIssueFetcher();
+
+      for (const [key, entry] of this.previouslyBlocked) {
+        try {
+          const deps = fetcher.fetchDependenciesForIssue(entry.projectId, entry.issueNumber);
+          if (deps && deps.resolved) {
+            // All blockers are now closed — broadcast resolution event
+            sseBroker.broadcast('dependency_resolved', {
+              issue_number: entry.issueNumber,
+              project_id: entry.projectId,
+              previously_blocked_by: entry.blockerNumbers,
+            });
+
+            console.log(
+              `[GitHubPoller] Dependencies resolved for issue #${entry.issueNumber} (project ${entry.projectId})`
+            );
+
+            // Remove from tracking
+            this.previouslyBlocked.delete(key);
+          }
+        } catch (err) {
+          // Log and continue — don't let one failure stop others
+          console.error(
+            `[GitHubPoller] Failed to check dependencies for ${key}:`,
+            err instanceof Error ? err.message : err
+          );
+        }
+      }
+    } catch (err) {
+      console.error(
+        '[GitHubPoller] Failed to import issue-fetcher for dependency check:',
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  /**
+   * Register an issue as blocked by dependencies.
+   * Called externally when a launch is blocked by the dependency check.
+   */
+  trackBlockedIssue(projectId: number, issueNumber: number, blockerNumbers: number[]): void {
+    const key = `${projectId}:${issueNumber}`;
+    this.previouslyBlocked.set(key, { projectId, issueNumber, blockerNumbers });
+  }
+
+  /**
+   * Remove an issue from blocked tracking (e.g. when force-launched).
+   */
+  untrackBlockedIssue(projectId: number, issueNumber: number): void {
+    const key = `${projectId}:${issueNumber}`;
+    this.previouslyBlocked.delete(key);
   }
 
   // -------------------------------------------------------------------------

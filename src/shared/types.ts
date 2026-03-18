@@ -316,6 +316,36 @@ export interface MessageEdge {
 }
 
 // ---------------------------------------------------------------------------
+// Issue Dependencies (GitHub issue dependency tracking)
+// ---------------------------------------------------------------------------
+
+/** A single dependency reference (blocking issue) */
+export interface DependencyRef {
+  /** Issue number of the blocker */
+  number: number;
+  /** Repository owner (e.g. "octocat") */
+  owner: string;
+  /** Repository name (e.g. "hello-world") */
+  repo: string;
+  /** Current state of the blocking issue */
+  state: 'open' | 'closed';
+  /** Issue title */
+  title: string;
+}
+
+/** Dependency info for an issue */
+export interface IssueDependencyInfo {
+  /** The issue these dependencies belong to */
+  issueNumber: number;
+  /** Issues that block this one */
+  blockedBy: DependencyRef[];
+  /** Whether all blockers are resolved (closed) */
+  resolved: boolean;
+  /** Number of open (unresolved) blockers */
+  openCount: number;
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard View (v_team_dashboard)
 // ---------------------------------------------------------------------------
 

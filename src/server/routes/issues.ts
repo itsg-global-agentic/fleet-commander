@@ -52,6 +52,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       const project = db.getProject(entry.projectId);
       const cloned = structuredClone(entry.tree);
       fetcher.enrichWithTeamInfo(cloned, entry.projectId);
+      fetcher.enrichWithDependencies(cloned, entry.projectId);
       return {
         projectId: entry.projectId,
         projectName: project?.name ?? `Project #${entry.projectId}`,
@@ -103,6 +104,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       // Deep clone to avoid mutating the cache when enriching
       const cloned = structuredClone(issues);
       fetcher.enrichWithTeamInfo(cloned, projectId);
+      fetcher.enrichWithDependencies(cloned, projectId);
 
       return {
         projectId,
@@ -194,6 +196,117 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
   );
 
   /**
+   * GET /api/projects/:projectId/issues/dependencies — Dependencies for all issues in a project
+   * Returns dependency info for all cached issues in the specified project.
+   */
+  server.get<{ Params: { projectId: string } }>(
+    '/api/projects/:projectId/issues/dependencies',
+    async (request: FastifyRequest<{ Params: { projectId: string } }>, reply: FastifyReply) => {
+      const projectId = parseInt(request.params.projectId, 10);
+
+      if (isNaN(projectId) || projectId < 1) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: 'projectId must be a positive integer',
+        });
+      }
+
+      const db = getDatabase();
+      const project = db.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({
+          error: 'Not Found',
+          message: `Project ${projectId} not found`,
+        });
+      }
+
+      if (!project.githubRepo) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: `Project ${projectId} has no GitHub repo configured`,
+        });
+      }
+
+      const fetcher = getIssueFetcher();
+      const issues = fetcher.getIssues(projectId);
+
+      // Flatten the tree to get all issue numbers
+      const allIssues = flattenIssueTree(issues);
+      const dependencies: Record<number, ReturnType<typeof fetcher.fetchDependenciesForIssue>> = {};
+
+      for (const issue of allIssues) {
+        const deps = fetcher.fetchDependenciesForIssue(projectId, issue.number);
+        if (deps) {
+          dependencies[issue.number] = deps;
+        }
+      }
+
+      return { projectId, dependencies };
+    }
+  );
+
+  /**
+   * GET /api/issues/:number/dependencies — Dependencies for a single issue
+   * Returns dependency info for the specified issue number.
+   * Requires a projectId query parameter.
+   */
+  server.get<{ Params: { number: string }; Querystring: { projectId?: string } }>(
+    '/api/issues/:number/dependencies',
+    async (
+      request: FastifyRequest<{ Params: { number: string }; Querystring: { projectId?: string } }>,
+      reply: FastifyReply,
+    ) => {
+      const issueNumber = parseInt(request.params.number, 10);
+
+      if (isNaN(issueNumber) || issueNumber <= 0) {
+        return reply.code(400).send({
+          error: 'Invalid issue number',
+          message: 'Issue number must be a positive integer',
+        });
+      }
+
+      const projectIdStr = (request.query as { projectId?: string }).projectId;
+      if (!projectIdStr) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: 'projectId query parameter is required',
+        });
+      }
+
+      const projectId = parseInt(projectIdStr, 10);
+      if (isNaN(projectId) || projectId < 1) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: 'projectId must be a positive integer',
+        });
+      }
+
+      const db = getDatabase();
+      const project = db.getProject(projectId);
+      if (!project) {
+        return reply.code(404).send({
+          error: 'Not Found',
+          message: `Project ${projectId} not found`,
+        });
+      }
+
+      const fetcher = getIssueFetcher();
+      const deps = fetcher.fetchDependenciesForIssue(projectId, issueNumber);
+
+      if (!deps) {
+        return reply.code(200).send({
+          issueNumber,
+          blockedBy: [],
+          resolved: true,
+          openCount: 0,
+        });
+      }
+
+      return deps;
+    }
+  );
+
+  /**
    * POST /api/issues/refresh — Force re-fetch from GitHub
    * Clears the cache and re-fetches the full hierarchy for all projects.
    */
@@ -216,6 +329,23 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Flatten an issue tree into a single-level array of all issues.
+ */
+function flattenIssueTree(nodes: Array<{ number: number; children: Array<unknown> }>): Array<{ number: number }> {
+  const result: Array<{ number: number }> = [];
+  const walk = (list: Array<{ number: number; children?: Array<unknown> }>): void => {
+    for (const node of list) {
+      result.push(node);
+      if (node.children && Array.isArray(node.children)) {
+        walk(node.children as Array<{ number: number; children?: Array<unknown> }>);
+      }
+    }
+  };
+  walk(nodes);
+  return result;
+}
 
 /**
  * Count total issues in a tree (recursive).

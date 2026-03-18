@@ -12,6 +12,7 @@ import type { ProjectSummary } from '../../shared/types';
 const STATUS_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'no-team', label: 'No Team' },
+  { key: 'blocked-deps', label: 'Blocked', color: '#F85149' },
   { key: 'running', label: 'Running', color: '#3FB950' },
   { key: 'idle', label: 'Idle', color: '#D29922' },
   { key: 'stuck', label: 'Stuck', color: '#F85149' },
@@ -63,6 +64,15 @@ export function IssueTreeView() {
   const [groups, setGroups] = useState<ProjectIssueGroup[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  // Dependency confirmation dialog state
+  const [depConfirm, setDepConfirm] = useState<{
+    issueNumber: number;
+    title: string;
+    projectId: number;
+    message: string;
+    blockers: string[];
+  } | null>(null);
 
   // Track pending timeouts so we can clear them on unmount
   const pendingTimeouts = useRef(new Set<ReturnType<typeof setTimeout>>());
@@ -189,8 +199,31 @@ export function IssueTreeView() {
         fetchTree();
       }, 5000);
       pendingTimeouts.current.add(tid);
-    } catch (err) {
+    } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
+
+      // Check for 409 dependency block — show confirmation dialog
+      // Use status code from ApiError (has a .status property) rather than fragile string matching
+      const errorStatus = (err as { status?: number }).status;
+      const is409 = errorStatus === 409;
+      if (is409 && resolvedProjectId) {
+        // Remove from launching state
+        setLaunchingIssues(prev => {
+          const next = new Set(prev);
+          next.delete(issueNumber);
+          return next;
+        });
+        // Extract blocker info from the error message
+        setDepConfirm({
+          issueNumber,
+          title,
+          projectId: resolvedProjectId,
+          message,
+          blockers: [], // The error message contains the details
+        });
+        return;
+      }
+
       console.error(`[IssueTree] Failed to launch team for #${issueNumber}:`, message);
       // Remove from launching state immediately on error
       setLaunchingIssues(prev => {
@@ -216,6 +249,54 @@ export function IssueTreeView() {
       pendingTimeouts.current.add(tid);
     }
   }, [api, fetchTree, launchProjectId, activeProjects.length]);
+
+  // Handle force launch (bypassing dependency check)
+  const handleForceLaunch = useCallback(async () => {
+    if (!depConfirm) return;
+    const { issueNumber, title, projectId } = depConfirm;
+    setDepConfirm(null);
+    setLaunchingIssues(prev => new Set(prev).add(issueNumber));
+
+    try {
+      await api.post('teams/launch', {
+        issueNumber,
+        issueTitle: title,
+        projectId,
+        force: true,
+      });
+      const tid = setTimeout(() => {
+        pendingTimeouts.current.delete(tid);
+        setLaunchingIssues(prev => {
+          const next = new Set(prev);
+          next.delete(issueNumber);
+          return next;
+        });
+        fetchTree();
+      }, 5000);
+      pendingTimeouts.current.add(tid);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setLaunchingIssues(prev => {
+        const next = new Set(prev);
+        next.delete(issueNumber);
+        return next;
+      });
+      setLaunchErrors(prev => {
+        const next = new Map(prev);
+        next.set(issueNumber, message);
+        return next;
+      });
+      const tid = setTimeout(() => {
+        pendingTimeouts.current.delete(tid);
+        setLaunchErrors(prev => {
+          const next = new Map(prev);
+          next.delete(issueNumber);
+          return next;
+        });
+      }, 5000);
+      pendingTimeouts.current.add(tid);
+    }
+  }, [api, depConfirm, fetchTree]);
 
   // -------------------------------------------------------------------------
   // Filter tree by search query
@@ -418,6 +499,65 @@ export function IssueTreeView() {
             fetchTree={fetchTree}
           />
         )}
+      </div>
+
+      {/* Dependency confirmation dialog */}
+      {depConfirm && (
+        <DependencyConfirmDialog
+          issueNumber={depConfirm.issueNumber}
+          message={depConfirm.message}
+          onForce={handleForceLaunch}
+          onCancel={() => setDepConfirm(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DependencyConfirmDialog — shown when launching a blocked issue
+// ---------------------------------------------------------------------------
+
+function DependencyConfirmDialog({ issueNumber, message, onForce, onCancel }: {
+  issueNumber: number;
+  message: string;
+  onForce: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-[420px] max-w-[95vw] bg-dark-surface border border-dark-border rounded-lg shadow-2xl">
+        <div className="px-5 py-4 border-b border-dark-border">
+          <h3 className="text-sm font-semibold text-dark-text flex items-center gap-2">
+            <svg className="w-4 h-4 text-[#F85149]" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.25 7.25a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Z" />
+              <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z" />
+            </svg>
+            Issue #{issueNumber} has unresolved dependencies
+          </h3>
+        </div>
+        <div className="px-5 py-4">
+          <p className="text-sm text-dark-muted mb-3">
+            {message}
+          </p>
+          <p className="text-xs text-dark-muted">
+            You can force launch to bypass the dependency check, but the issue may not be ready to work on.
+          </p>
+        </div>
+        <div className="flex items-center justify-end gap-3 px-5 py-3 border-t border-dark-border">
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 text-sm rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onForce}
+            className="px-4 py-1.5 text-sm font-medium rounded border border-[#F85149]/40 text-[#F85149] bg-[#F85149]/10 hover:bg-[#F85149]/20 transition-colors"
+          >
+            Force Launch
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -721,6 +861,7 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
 function matchesStatusFilter(node: IssueNode, filter: string): boolean {
   if (filter === 'all') return true;
   if (filter === 'no-team') return !node.activeTeam;
+  if (filter === 'blocked-deps') return !!(node.dependencies && !node.dependencies.resolved);
   return node.activeTeam?.status === filter;
 }
 

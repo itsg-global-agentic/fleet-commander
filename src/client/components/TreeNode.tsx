@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
 import { PlayIcon } from './Icons';
-import type { TeamStatus, PrioritizedIssue } from '../../shared/types';
+import type { TeamStatus, PrioritizedIssue, IssueDependencyInfo } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors IssueNode from the server issue-fetcher)
@@ -19,6 +19,7 @@ export interface IssueNode {
   prReferences?: { number: number; state: string }[];
   children: IssueNode[];
   activeTeam?: { id: number; status: string } | null;
+  dependencies?: IssueDependencyInfo;
 }
 
 // ---------------------------------------------------------------------------
@@ -66,6 +67,40 @@ function IssueStateBadge({ state }: { state: 'open' | 'closed' }) {
         <path d="M11.28 6.78a.75.75 0 0 0-1.06-1.06L7.25 8.69 5.78 7.22a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0l3.5-3.5Z" />
         <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z" />
       </svg>
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Blocked badge (dependency blocker indicator)
+// ---------------------------------------------------------------------------
+
+function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
+  if (dependencies.resolved || dependencies.openCount === 0) return null;
+
+  const blockerLabels = dependencies.blockedBy
+    .filter((d) => d.state === 'open')
+    .map((d) => {
+      // Show owner/repo#N for cross-repo, just #N for same-repo
+      const prefix = d.owner && d.repo ? `${d.owner}/${d.repo}` : '';
+      return prefix ? `${prefix}#${d.number}` : `#${d.number}`;
+    })
+    .join(', ');
+
+  const tooltipText = `Blocked by: ${blockerLabels}`;
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded text-xs font-medium cursor-default"
+      style={{ backgroundColor: 'rgba(248, 81, 73, 0.15)', color: '#F85149' }}
+      title={tooltipText}
+    >
+      {/* Shield/block icon */}
+      <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M4.25 7.25a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Z" />
+        <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z" />
+      </svg>
+      {dependencies.openCount} blocked
     </span>
   );
 }
@@ -214,6 +249,13 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
         {hasActiveTeam && (
           <span className="shrink-0 ml-1">
             <StatusBadge status={node.activeTeam!.status as TeamStatus} />
+          </span>
+        )}
+
+        {/* Blocked badge for unresolved dependencies */}
+        {node.dependencies && !node.dependencies.resolved && (
+          <span className="shrink-0 ml-1">
+            <BlockedBadge dependencies={node.dependencies} />
           </span>
         )}
 

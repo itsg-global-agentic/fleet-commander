@@ -30,7 +30,8 @@ export type SSEEventType =
   | 'project_removed'
   | 'project_cleanup'
   | 'snapshot'
-  | 'heartbeat';
+  | 'heartbeat'
+  | 'dependency_resolved';
 
 /** Payload shapes for each event type */
 export interface SSEEventPayloads {
@@ -47,6 +48,7 @@ export interface SSEEventPayloads {
   project_cleanup: { project_id: number; removed_count: number; failed_count: number };
   snapshot: { teams: unknown[] };
   heartbeat: { timestamp: string };
+  dependency_resolved: { issue_number: number; project_id: number; previously_blocked_by: number[] };
 }
 
 // ---------------------------------------------------------------------------
