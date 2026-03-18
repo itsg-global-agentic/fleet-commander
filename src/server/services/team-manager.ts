@@ -1699,31 +1699,10 @@ export class TeamManager {
               events.shift();
             }
 
-            // Extract cost from result events and persist as usage snapshot
+            // Log cost from result events (usage snapshots are written by usage-tracker)
             if (event.type === 'result' && (event as any).total_cost_usd != null) {
               const costUsd = (event as any).total_cost_usd as number;
-              const usage = (event as any).usage as Record<string, unknown> | undefined;
-              const sessionId = (event as any).session_id as string | undefined;
-
               console.log(`[TeamManager] Team ${teamId} cost: $${costUsd.toFixed(4)}`);
-
-              db.insertUsageSnapshot({
-                teamId,
-                sessionId: sessionId || undefined,
-                dailyPercent: 0,
-                weeklyPercent: 0,
-                sonnetPercent: 0,
-                extraPercent: 0,
-                rawOutput: JSON.stringify({ total_cost_usd: costUsd, usage }),
-              });
-
-              sseBroker.broadcast('usage_updated', {
-                daily_percent: 0,
-                weekly_percent: 0,
-                sonnet_percent: 0,
-                extra_percent: 0,
-                zone: getUsageZone(),
-              }, teamId);
             }
 
             // Broadcast interesting events via SSE
@@ -1759,32 +1738,10 @@ export class TeamManager {
               events.shift();
             }
 
-            // Extract cost from result events (the result event is often the
-            // last line CC emits, so it may arrive as the final partial chunk)
+            // Log cost from result events (usage snapshots are written by usage-tracker)
             if (event.type === 'result' && (event as any).total_cost_usd != null) {
               const costUsd = (event as any).total_cost_usd as number;
-              const usage = (event as any).usage as Record<string, unknown> | undefined;
-              const sessionId = (event as any).session_id as string | undefined;
-
               console.log(`[TeamManager] Team ${teamId} cost: $${costUsd.toFixed(4)}`);
-
-              db.insertUsageSnapshot({
-                teamId,
-                sessionId: sessionId || undefined,
-                dailyPercent: 0,
-                weeklyPercent: 0,
-                sonnetPercent: 0,
-                extraPercent: 0,
-                rawOutput: JSON.stringify({ total_cost_usd: costUsd, usage }),
-              });
-
-              sseBroker.broadcast('usage_updated', {
-                daily_percent: 0,
-                weekly_percent: 0,
-                sonnet_percent: 0,
-                extra_percent: 0,
-                zone: getUsageZone(),
-              }, teamId);
             }
           } catch {
             console.log(`[CC:${logPrefix}:raw] ${trimmed.substring(0, 200)}`);
