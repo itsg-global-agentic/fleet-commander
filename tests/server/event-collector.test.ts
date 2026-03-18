@@ -18,11 +18,13 @@ import {
 
 function createMockDb(overrides?: Partial<EventCollectorDb>): EventCollectorDb {
   let nextEventId = 1;
+  let nextMsgId = 1;
   return {
     getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
     insertEvent: vi.fn().mockImplementation(() => ({ id: nextEventId++ })),
     updateTeam: vi.fn(),
     insertTransition: vi.fn(),
+    insertAgentMessage: vi.fn().mockImplementation(() => ({ id: nextMsgId++ })),
     ...overrides,
   };
 }
@@ -526,5 +528,125 @@ describe('Edge cases', () => {
         agentName: null,
       }),
     );
+  });
+});
+
+// =============================================================================
+// Agent message routing (SendMessage capture)
+// =============================================================================
+
+describe('Agent message routing', () => {
+  it('creates agent_message record for SendMessage events with msg_to', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      tool_name: 'SendMessage',
+      agent_type: 'coordinator',
+      session_id: 'sess-abc',
+      msg_to: 'dev-typescript',
+      msg_summary: 'Implement the feature',
+      message: 'Full message content here',
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith({
+      teamId: 1,
+      eventId: 1,
+      sender: 'coordinator',
+      recipient: 'dev-typescript',
+      summary: 'Implement the feature',
+      content: 'Full message content here',
+      sessionId: 'sess-abc',
+    });
+  });
+
+  it('does not create agent_message for non-SendMessage events', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      tool_name: 'Bash',
+      agent_type: 'coordinator',
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertAgentMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not create agent_message when msg_to is missing', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      tool_name: 'SendMessage',
+      agent_type: 'coordinator',
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertAgentMessage).not.toHaveBeenCalled();
+  });
+
+  it('handles broadcast messages (msg_to = "*")', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      tool_name: 'SendMessage',
+      agent_type: 'coordinator',
+      msg_to: '*',
+      message: 'Team-wide broadcast',
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        recipient: '*',
+        content: 'Team-wide broadcast',
+      }),
+    );
+  });
+
+  it('uses "unknown" as sender when agent_type is missing', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      tool_name: 'SendMessage',
+      agent_type: undefined,
+      msg_to: 'dev-typescript',
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: 'unknown',
+        recipient: 'dev-typescript',
+      }),
+    );
+  });
+
+  it('silently handles insertAgentMessage failures', () => {
+    const db = createMockDb({
+      insertAgentMessage: vi.fn().mockImplementation(() => {
+        throw new Error('DB constraint violation');
+      }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      tool_name: 'SendMessage',
+      agent_type: 'coordinator',
+      msg_to: 'dev-typescript',
+    });
+
+    // Should not throw — failure is silently caught
+    const result = processEvent(payload, db, sse);
+    expect(result.processed).toBe(true);
   });
 });

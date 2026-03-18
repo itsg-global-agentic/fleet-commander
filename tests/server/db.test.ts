@@ -64,6 +64,7 @@ describe('Schema', () => {
     expect(names).toContain('events');
     expect(names).toContain('pull_requests');
     expect(names).toContain('commands');
+    expect(names).toContain('agent_messages');
     expect(names).toContain('schema_version');
   });
 
@@ -80,8 +81,8 @@ describe('Schema', () => {
     expect(() => db.initSchema()).not.toThrow();
   });
 
-  it('sets schema version to 4', () => {
-    expect(db.getSchemaVersion()).toBe(4);
+  it('sets schema version to 5', () => {
+    expect(db.getSchemaVersion()).toBe(5);
   });
 });
 
@@ -873,6 +874,130 @@ describe('Team Roster', () => {
     expect(roles['reviewer']).toBe('Reviewer');
     expect(roles['dev-csharp']).toBe('Developer (csharp)');
     expect(roles['some-agent']).toBe('some-agent');
+  });
+});
+
+// =============================================================================
+// Agent Messages CRUD
+// =============================================================================
+
+describe('Agent Messages CRUD', () => {
+  beforeEach(() => {
+    db.insertTeam({ issueNumber: 100, worktreeName: 'kea-100', status: 'running', phase: 'implementing' });
+    db.insertEvent({ teamId: 1, eventType: 'ToolUse', toolName: 'SendMessage', agentName: 'coordinator' });
+  });
+
+  it('inserts an agent message', () => {
+    const msg = db.insertAgentMessage({
+      teamId: 1,
+      eventId: 1,
+      sender: 'coordinator',
+      recipient: 'dev-typescript',
+      summary: 'Implement feature X',
+      content: 'Full message content',
+      sessionId: 'sess-abc',
+    });
+
+    expect(msg.id).toBe(1);
+    expect(msg.teamId).toBe(1);
+    expect(msg.eventId).toBe(1);
+    expect(msg.sender).toBe('coordinator');
+    expect(msg.recipient).toBe('dev-typescript');
+    expect(msg.summary).toBe('Implement feature X');
+    expect(msg.content).toBe('Full message content');
+    expect(msg.sessionId).toBe('sess-abc');
+    expect(msg.createdAt).toBeTruthy();
+  });
+
+  it('inserts an agent message with minimal fields', () => {
+    const msg = db.insertAgentMessage({
+      teamId: 1,
+      eventId: 1,
+      sender: 'coordinator',
+      recipient: '*',
+    });
+
+    expect(msg.sender).toBe('coordinator');
+    expect(msg.recipient).toBe('*');
+    expect(msg.summary).toBeNull();
+    expect(msg.content).toBeNull();
+    expect(msg.sessionId).toBeNull();
+  });
+
+  it('gets agent messages by team ordered by created_at DESC', () => {
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'coordinator', recipient: 'dev-ts', summary: 'First' });
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'dev-ts', recipient: 'coordinator', summary: 'Second' });
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'coordinator', recipient: 'dev-ts', summary: 'Third' });
+
+    const messages = db.getAgentMessages(1);
+    expect(messages).toHaveLength(3);
+    // DESC order: Third, Second, First
+    expect(messages[0].summary).toBe('Third');
+    expect(messages[2].summary).toBe('First');
+  });
+
+  it('gets agent messages with limit', () => {
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'coordinator', recipient: 'dev-ts' });
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'dev-ts', recipient: 'coordinator' });
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'coordinator', recipient: 'dev-ts' });
+
+    const messages = db.getAgentMessages(1, 2);
+    expect(messages).toHaveLength(2);
+  });
+
+  it('returns empty array when no messages exist', () => {
+    const messages = db.getAgentMessages(1);
+    expect(messages).toHaveLength(0);
+  });
+
+  it('returns agent message summary with counts per sender/recipient pair', () => {
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'coordinator', recipient: 'dev-ts' });
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'coordinator', recipient: 'dev-ts' });
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'dev-ts', recipient: 'coordinator' });
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'coordinator', recipient: 'reviewer' });
+
+    const summary = db.getAgentMessageSummary(1);
+    expect(summary).toHaveLength(3);
+
+    const coordToDevTs = summary.find(s => s.sender === 'coordinator' && s.recipient === 'dev-ts');
+    expect(coordToDevTs).toBeDefined();
+    expect(coordToDevTs!.count).toBe(2);
+
+    const devTsToCoord = summary.find(s => s.sender === 'dev-ts' && s.recipient === 'coordinator');
+    expect(devTsToCoord).toBeDefined();
+    expect(devTsToCoord!.count).toBe(1);
+  });
+
+  it('returns empty summary when no messages exist', () => {
+    const summary = db.getAgentMessageSummary(1);
+    expect(summary).toHaveLength(0);
+  });
+
+  it('excludes messages from other teams', () => {
+    db.insertTeam({ issueNumber: 200, worktreeName: 'kea-200', status: 'running', phase: 'implementing' });
+    db.insertEvent({ teamId: 2, eventType: 'ToolUse', toolName: 'SendMessage', agentName: 'coordinator' });
+
+    db.insertAgentMessage({ teamId: 1, eventId: 1, sender: 'coordinator', recipient: 'dev-ts' });
+    db.insertAgentMessage({ teamId: 2, eventId: 2, sender: 'coordinator', recipient: 'dev-py' });
+
+    const messages1 = db.getAgentMessages(1);
+    expect(messages1).toHaveLength(1);
+    expect(messages1[0].recipient).toBe('dev-ts');
+
+    const messages2 = db.getAgentMessages(2);
+    expect(messages2).toHaveLength(1);
+    expect(messages2[0].recipient).toBe('dev-py');
+  });
+
+  it('agent message timestamps end with Z', () => {
+    const msg = db.insertAgentMessage({
+      teamId: 1,
+      eventId: 1,
+      sender: 'coordinator',
+      recipient: 'dev-ts',
+    });
+
+    expect(msg.createdAt).toMatch(/T.*Z$/);
   });
 });
 

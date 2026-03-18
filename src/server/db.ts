@@ -25,6 +25,7 @@ import type {
   MessageTemplate,
   TeamTransition,
   TeamMember,
+  AgentMessage,
 } from '../shared/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -226,6 +227,16 @@ export interface ProjectFilter {
   status?: ProjectStatus;
 }
 
+export interface AgentMessageInsert {
+  teamId: number;
+  eventId: number;
+  sender: string;
+  recipient: string;
+  summary?: string | null;
+  content?: string | null;
+  sessionId?: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Database class
 // ---------------------------------------------------------------------------
@@ -295,6 +306,9 @@ export class FleetDatabase {
     // Add project_groups table and group_id column to projects if missing
     this.addProjectGroupsTable();
     this.addGroupIdColumn();
+
+    // Add agent_messages table if missing (v5 migration)
+    this.addAgentMessagesTable();
 
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
@@ -574,6 +588,27 @@ export class FleetDatabase {
       }
     } catch {
       // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
+  private addAgentMessagesTable(): void {
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_messages (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          team_id         INTEGER NOT NULL REFERENCES teams(id),
+          event_id        INTEGER REFERENCES events(id),
+          sender          TEXT NOT NULL,
+          recipient       TEXT NOT NULL,
+          summary         TEXT,
+          content         TEXT,
+          session_id      TEXT,
+          created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_messages_team ON agent_messages(team_id);
+      `);
+    } catch {
+      // Table may already exist — safe to ignore
     }
   }
 
@@ -1095,6 +1130,58 @@ export class FleetDatabase {
   }
 
   // -------------------------------------------------------------------------
+  // Agent Messages (inter-agent message routing)
+  // -------------------------------------------------------------------------
+
+  insertAgentMessage(data: AgentMessageInsert): AgentMessage {
+    const stmt = this.db.prepare(`
+      INSERT INTO agent_messages (team_id, event_id, sender, recipient, summary, content, session_id)
+      VALUES (@teamId, @eventId, @sender, @recipient, @summary, @content, @sessionId)
+    `);
+
+    const info = stmt.run({
+      teamId: data.teamId,
+      eventId: data.eventId,
+      sender: data.sender,
+      recipient: data.recipient,
+      summary: data.summary ?? null,
+      content: data.content ?? null,
+      sessionId: data.sessionId ?? null,
+    });
+
+    const row = this.db.prepare('SELECT * FROM agent_messages WHERE id = ?').get(
+      Number(info.lastInsertRowid)
+    ) as Record<string, unknown>;
+    return this.mapAgentMessageRow(row);
+  }
+
+  getAgentMessages(teamId: number, limit?: number): AgentMessage[] {
+    const sql = limit
+      ? 'SELECT * FROM agent_messages WHERE team_id = ? ORDER BY created_at DESC, id DESC LIMIT ?'
+      : 'SELECT * FROM agent_messages WHERE team_id = ? ORDER BY created_at DESC, id DESC';
+
+    const stmt = this.db.prepare(sql);
+    const rows = (limit ? stmt.all(teamId, limit) : stmt.all(teamId)) as Record<string, unknown>[];
+    return rows.map((r) => this.mapAgentMessageRow(r));
+  }
+
+  getAgentMessageSummary(teamId: number): Array<{ sender: string; recipient: string; count: number }> {
+    const sql = `
+      SELECT sender, recipient, COUNT(*) AS count
+      FROM agent_messages
+      WHERE team_id = ?
+      GROUP BY sender, recipient
+      ORDER BY count DESC
+    `;
+    const rows = this.db.prepare(sql).all(teamId) as Array<{ sender: string; recipient: string; count: number }>;
+    return rows.map((r) => ({
+      sender: r.sender,
+      recipient: r.recipient,
+      count: r.count,
+    }));
+  }
+
+  // -------------------------------------------------------------------------
   // Pull Requests
   // -------------------------------------------------------------------------
 
@@ -1493,6 +1580,7 @@ export class FleetDatabase {
 
   deleteTeamsByProject(projectId: number): void {
     this.db.transaction((pid: number) => {
+      this.db.prepare('DELETE FROM agent_messages WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
       this.db.prepare('DELETE FROM team_transitions WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
       this.db.prepare('DELETE FROM events WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
       this.db.prepare('DELETE FROM commands WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
@@ -1512,6 +1600,7 @@ export class FleetDatabase {
    */
   deleteTeamAndRelated(teamId: number): void {
     this.db.transaction((id: number) => {
+      this.db.prepare('DELETE FROM agent_messages WHERE team_id = ?').run(id);
       this.db.prepare('DELETE FROM team_transitions WHERE team_id = ?').run(id);
       this.db.prepare('DELETE FROM events WHERE team_id = ?').run(id);
       this.db.prepare('DELETE FROM commands WHERE team_id = ?').run(id);
@@ -1532,6 +1621,7 @@ export class FleetDatabase {
    */
   factoryReset(defaultTemplates: { id: string; template: string }[]): number {
     this.db.transaction(() => {
+      this.db.prepare('DELETE FROM agent_messages').run();
       this.db.prepare('DELETE FROM team_transitions').run();
       this.db.prepare('DELETE FROM events').run();
       this.db.prepare('DELETE FROM commands').run();
@@ -1708,6 +1798,20 @@ export class FleetDatabase {
       prState: (row.pr_state as PRState | null) ?? null,
       ciStatus: (row.ci_status as CIStatus | null) ?? null,
       mergeStatus: row.merge_status as MergeStatus | null,
+    };
+  }
+
+  private mapAgentMessageRow(row: Record<string, unknown>): AgentMessage {
+    return {
+      id: row.id as number,
+      teamId: row.team_id as number,
+      eventId: row.event_id as number,
+      sender: row.sender as string,
+      recipient: row.recipient as string,
+      summary: (row.summary as string | null) ?? null,
+      content: (row.content as string | null) ?? null,
+      sessionId: (row.session_id as string | null) ?? null,
+      createdAt: utcify(row.created_at as string),
     };
   }
 }

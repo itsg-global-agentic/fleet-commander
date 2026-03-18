@@ -76,6 +76,21 @@ ERROR=$(extract_json_string "error")
 TOOL_USE_ID=$(extract_json_string "tool_use_id")
 STOP_REASON=$(extract_json_string "stop_reason")
 
+# ── Extract SendMessage routing fields from tool_input ────────────
+# When tool_name is "SendMessage", the hook stdin contains a tool_input
+# object with "to" and optional "summary" fields. We extract these for
+# inter-agent message routing. Silent failure on parse errors.
+MSG_TO=""
+MSG_SUMMARY=""
+if [ "$TOOL_NAME" = "SendMessage" ]; then
+    # tool_input is a nested JSON object; extract "to" and "summary" from it
+    TOOL_INPUT=$(printf '%s' "$STDIN_JSON" | grep -o '"tool_input"[[:space:]]*:[[:space:]]*{[^}]*}' | head -1 | sed 's/^"tool_input"[[:space:]]*:[[:space:]]*//')
+    if [ -n "$TOOL_INPUT" ]; then
+        MSG_TO=$(printf '%s' "$TOOL_INPUT" | grep -o '"to"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*:[[:space:]]*"//;s/"$//')
+        MSG_SUMMARY=$(printf '%s' "$TOOL_INPUT" | grep -o '"summary"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*:[[:space:]]*"//;s/"$//')
+    fi
+fi
+
 # ── Build timestamp ───────────────────────────────────────────────
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown")
 
@@ -110,6 +125,8 @@ PAYLOAD="${PAYLOAD}$(json_field "error" "$ERROR")"
 PAYLOAD="${PAYLOAD}$(json_field "tool_use_id" "$TOOL_USE_ID")"
 PAYLOAD="${PAYLOAD}$(json_field "stop_reason" "$STOP_REASON")"
 PAYLOAD="${PAYLOAD}$(json_field "worktree_root" "$WORKTREE_ROOT")"
+PAYLOAD="${PAYLOAD}$(json_field "msg_to" "$MSG_TO")"
+PAYLOAD="${PAYLOAD}$(json_field "msg_summary" "$MSG_SUMMARY")"
 # Remove trailing comma, close brace
 PAYLOAD=$(printf '%s' "$PAYLOAD" | sed 's/,$//')
 PAYLOAD="${PAYLOAD}}"

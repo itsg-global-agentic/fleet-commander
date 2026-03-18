@@ -44,6 +44,8 @@ const eventsRoutes: FastifyPluginCallback = (
           tool_input: body.tool_input ? String(body.tool_input) : undefined,
           stop_reason: body.stop_reason ? String(body.stop_reason) : undefined,
           worktree_root: body.worktree_root ? String(body.worktree_root) : undefined,
+          msg_to: body.msg_to ? String(body.msg_to) : undefined,
+          msg_summary: body.msg_summary ? String(body.msg_summary) : undefined,
         };
 
         const db = getDatabase();
