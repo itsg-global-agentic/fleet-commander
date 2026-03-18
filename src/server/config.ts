@@ -34,6 +34,7 @@ const config = Object.freeze({
 
   idleThresholdMin: safeParseInt(process.env['FLEET_IDLE_THRESHOLD_MIN'] || '3', 'FLEET_IDLE_THRESHOLD_MIN'),
   stuckThresholdMin: safeParseInt(process.env['FLEET_STUCK_THRESHOLD_MIN'] || '5', 'FLEET_STUCK_THRESHOLD_MIN'),
+  launchTimeoutMin: safeParseInt(process.env['FLEET_LAUNCH_TIMEOUT_MIN'] || '5', 'FLEET_LAUNCH_TIMEOUT_MIN'),
   maxUniqueCiFailures: safeParseInt(process.env['FLEET_MAX_CI_FAILURES'] || '3', 'FLEET_MAX_CI_FAILURES'),
 
   usageRedDailyPct: safeParseInt(process.env['FLEET_USAGE_RED_DAILY_PCT'] || '85', 'FLEET_USAGE_RED_DAILY_PCT'),
@@ -80,6 +81,7 @@ export function validateConfig(): void {
     ['issuePollIntervalMs', config.issuePollIntervalMs],
     ['stuckCheckIntervalMs', config.stuckCheckIntervalMs],
     ['usagePollIntervalMs', config.usagePollIntervalMs],
+    ['launchTimeoutMin', config.launchTimeoutMin],
     ['maxUniqueCiFailures', config.maxUniqueCiFailures],
   ];
   for (const [name, value] of positiveIntegers) {

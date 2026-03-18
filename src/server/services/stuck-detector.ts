@@ -8,8 +8,9 @@
 // (single source of truth for CI status).
 //
 // State machine transitions (from docs/state-machines.md):
-//   running -> idle   after IDLE_THRESHOLD_MIN  (3 min default)
-//   idle    -> stuck  after STUCK_THRESHOLD_MIN (5 min default)
+//   running   -> idle    after IDLE_THRESHOLD_MIN    (3 min default)
+//   idle      -> stuck   after STUCK_THRESHOLD_MIN   (5 min default)
+//   launching -> failed  after LAUNCH_TIMEOUT_MIN    (5 min default)
 // =============================================================================
 
 import type { TeamStatus } from '../../shared/types.js';
@@ -59,6 +60,50 @@ class StuckDetector {
     const now = Date.now();
 
     for (const team of activeTeams) {
+      // --- Launch timeout detection ----------------------------------------
+      // Teams stuck in 'launching' (CC process hangs without crashing or
+      // sending any events) are transitioned to 'failed' after the timeout.
+
+      if (team.status === 'launching' && team.launchedAt) {
+        const launchedTime = new Date(team.launchedAt).getTime();
+        const launchMinutes = (now - launchedTime) / 60_000;
+
+        if (launchMinutes > config.launchTimeoutMin) {
+          db.insertTransition({
+            teamId: team.id,
+            fromStatus: 'launching',
+            toStatus: 'failed',
+            trigger: 'timer',
+            reason: `Launch timeout after ${Math.round(launchMinutes)} minutes`,
+          });
+          db.updateTeam(team.id, { status: 'failed' });
+
+          sseBroker.broadcast(
+            'team_status_changed',
+            {
+              team_id: team.id,
+              status: 'failed',
+              previous_status: 'launching',
+              idle_minutes: Math.round(launchMinutes),
+            },
+            team.id,
+          );
+
+          // Kill the hung process (best-effort — it may already be dead)
+          try {
+            const manager = getTeamManager();
+            manager.stop(team.id).catch(() => {});
+          } catch {
+            // ignore — process may not exist
+          }
+
+          console.log(
+            `[StuckDetector] Team ${team.id} failed — launch timeout after ${Math.round(launchMinutes)} min`
+          );
+          continue;
+        }
+      }
+
       // --- Idle / stuck detection based on time since last event -----------
 
       if (team.lastEventAt) {

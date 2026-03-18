@@ -206,6 +206,7 @@ The SSE broker emits 13 event types:
 | `FLEET_HOST` | `127.0.0.1` | Network interface to bind to |
 | `FLEET_IDLE_THRESHOLD_MIN` | `3` | Minutes before idle status |
 | `FLEET_STUCK_THRESHOLD_MIN` | `5` | Minutes before stuck status |
+| `FLEET_LAUNCH_TIMEOUT_MIN` | `5` | Minutes before a launching team is marked failed |
 | `FLEET_MAX_CI_FAILURES` | `3` | Unique CI failures before blocking |
 | `FLEET_GITHUB_POLL_MS` | `30000` | GitHub poll interval |
 | `FLEET_DB_PATH` | `./fleet.db` | Database file location |

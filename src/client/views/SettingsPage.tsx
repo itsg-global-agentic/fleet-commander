@@ -10,6 +10,7 @@ interface SettingsResponse {
   port: number;
   idleThresholdMin: number;
   stuckThresholdMin: number;
+  launchTimeoutMin: number;
   maxUniqueCiFailures: number;
   githubPollIntervalMs: number;
   issuePollIntervalMs: number;
@@ -91,6 +92,13 @@ const SETTING_GROUPS: SettingGroup[] = [
         label: 'Stuck Threshold',
         envVar: 'FLEET_STUCK_THRESHOLD_MIN',
         description: 'Minutes before a team is considered stuck',
+        format: (v) => `${v} min`,
+      },
+      {
+        key: 'launchTimeoutMin',
+        label: 'Launch Timeout',
+        envVar: 'FLEET_LAUNCH_TIMEOUT_MIN',
+        description: 'Minutes before a launching team is marked failed',
         format: (v) => `${v} min`,
       },
       {

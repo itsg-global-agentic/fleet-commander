@@ -284,6 +284,7 @@ const systemRoutes: FastifyPluginCallback = (
           port: config.port,
           idleThresholdMin: config.idleThresholdMin,
           stuckThresholdMin: config.stuckThresholdMin,
+          launchTimeoutMin: config.launchTimeoutMin,
           maxUniqueCiFailures: config.maxUniqueCiFailures,
           githubPollIntervalMs: config.githubPollIntervalMs,
           issuePollIntervalMs: config.issuePollIntervalMs,
