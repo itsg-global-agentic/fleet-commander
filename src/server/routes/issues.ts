@@ -39,19 +39,36 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
   /**
    * GET /api/issues — Full hierarchy tree (cached, all projects)
    * Returns the complete issue tree enriched with active team info.
+   * Also returns `groups` — issues grouped by project — so the client
+   * can render collapsible project sections when "All Projects" is selected.
    */
   server.get('/api/issues', async (_request: FastifyRequest, _reply: FastifyReply) => {
     const fetcher = getIssueFetcher();
-    const issues = fetcher.getIssues();
+    const db = getDatabase();
+    const projects = db.getProjects({ status: 'active' });
 
-    // Deep clone to avoid mutating the cache when enriching
-    const cloned = structuredClone(issues);
-    fetcher.enrichWithTeamInfo(cloned);
+    // Build per-project groups
+    const groups = projects.map((project) => {
+      const issues = fetcher.getIssues(project.id);
+      const cloned = structuredClone(issues);
+      fetcher.enrichWithTeamInfo(cloned, project.id);
+      return {
+        projectId: project.id,
+        projectName: project.name,
+        tree: cloned,
+        cachedAt: fetcher.getCachedAt(project.id),
+        count: countIssues(cloned),
+      };
+    });
+
+    // Also return a flat merged tree for backward compatibility
+    const allIssues = groups.flatMap((g) => g.tree);
 
     return {
-      tree: cloned,
+      tree: allIssues,
+      groups,
       cachedAt: fetcher.getCachedAt(),
-      count: countIssues(cloned),
+      count: countIssues(allIssues),
     };
   });
 

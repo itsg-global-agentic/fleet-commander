@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import React from 'react';
 import { useApi } from '../hooks/useApi';
 import { useFleet } from '../context/FleetContext';
 import { TreeNode, type IssueNode } from '../components/TreeNode';
@@ -22,8 +23,17 @@ const STATUS_FILTERS = [
 // API response shape from GET /api/issues
 // ---------------------------------------------------------------------------
 
+interface ProjectIssueGroup {
+  projectId: number;
+  projectName: string;
+  tree: IssueNode[];
+  cachedAt: string | null;
+  count: number;
+}
+
 interface IssueTreeResponse {
   tree: IssueNode[];
+  groups?: ProjectIssueGroup[];
   cachedAt: string | null;
   count: number;
 }
@@ -51,6 +61,7 @@ export function IssueTreeView() {
   const [launchingIssues, setLaunchingIssues] = useState<Set<number>>(new Set());
   const [launchErrors, setLaunchErrors] = useState<Map<number, string>>(new Map());
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
+  const [groups, setGroups] = useState<ProjectIssueGroup[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
@@ -82,6 +93,7 @@ export function IssueTreeView() {
         : 'issues';
       const data = await api.get<IssueTreeResponse>(endpoint);
       setTree(data.tree);
+      setGroups(data.groups ?? []);
       setCachedAt(data.cachedAt);
       setIssueCount(data.count);
     } catch (err) {
@@ -120,8 +132,11 @@ export function IssueTreeView() {
   // Launch team for an issue (play button)
   // -------------------------------------------------------------------------
 
-  const handleLaunch = useCallback(async (issueNumber: number, title: string) => {
-    if (!launchProjectId) {
+  const handleLaunch = useCallback(async (issueNumber: number, title: string, contextProjectId?: number) => {
+    // Use the project from the grouped context if provided, otherwise fall back to launchProjectId
+    const resolvedProjectId = contextProjectId ?? launchProjectId;
+
+    if (!resolvedProjectId) {
       const message = activeProjects.length > 1
         ? 'Multiple projects exist — select one from the top bar first'
         : 'Select a project first';
@@ -153,7 +168,7 @@ export function IssueTreeView() {
       await api.post('teams/launch', {
         issueNumber,
         issueTitle: title,
-        projectId: launchProjectId,
+        projectId: resolvedProjectId,
       });
       // Don't immediately remove from launchingIssues — let it persist
       // so the user sees feedback until the tree refreshes with the active team badge.
@@ -196,6 +211,17 @@ export function IssueTreeView() {
   // -------------------------------------------------------------------------
 
   const filteredTree = useMemo(() => filterTree(tree, search, statusFilter), [tree, search, statusFilter]);
+
+  // Filtered groups for the "All Projects" grouped view
+  const filteredGroups = useMemo(() => {
+    if (selectedProjectId !== null || groups.length === 0) return [];
+    return groups
+      .map((g) => ({
+        ...g,
+        tree: filterTree(g.tree, search, statusFilter),
+      }))
+      .filter((g) => g.tree.length > 0);
+  }, [groups, search, statusFilter, selectedProjectId]);
 
   // -------------------------------------------------------------------------
   // Loading state
@@ -353,6 +379,20 @@ export function IssueTreeView() {
               Clear filters
             </button>
           </div>
+        ) : selectedProjectId === null && filteredGroups.length > 0 ? (
+          /* Grouped view — issues organized by project */
+          <div className="space-y-1">
+            {filteredGroups.map((group) => (
+              <ProjectGroup
+                key={group.projectId}
+                group={group}
+                onLaunch={handleLaunch}
+                launchingIssues={launchingIssues}
+                launchErrors={launchErrors}
+                forceExpand={!!search || statusFilter !== 'all'}
+              />
+            ))}
+          </div>
         ) : (
           <div className="space-y-0">
             {filteredTree.map((node) => (
@@ -369,6 +409,67 @@ export function IssueTreeView() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ProjectGroup — collapsible project section header with nested issues
+// ---------------------------------------------------------------------------
+
+interface ProjectGroupProps {
+  group: { projectId: number; projectName: string; tree: IssueNode[]; count: number };
+  onLaunch: (issueNumber: number, title: string, projectId?: number) => Promise<void>;
+  launchingIssues: Set<number>;
+  launchErrors: Map<number, string>;
+  forceExpand: boolean;
+}
+
+function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand }: ProjectGroupProps) {
+  const [expanded, setExpanded] = React.useState(true);
+
+  return (
+    <div>
+      {/* Project section header */}
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full py-2 px-2 rounded hover:bg-dark-surface/60 transition-colors text-left"
+      >
+        {/* Expand/collapse arrow */}
+        <span className={`w-4 h-4 flex items-center justify-center text-dark-muted shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}>
+          <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+          </svg>
+        </span>
+        {/* Repo icon */}
+        <svg className="w-4 h-4 text-dark-muted shrink-0" viewBox="0 0 16 16" fill="currentColor">
+          <path d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.25.25 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z" />
+        </svg>
+        <span className="text-sm font-semibold text-dark-text truncate">
+          {group.projectName}
+        </span>
+        <span className="text-xs text-dark-muted shrink-0">
+          {countNodes(group.tree)} issue{countNodes(group.tree) !== 1 ? 's' : ''}
+        </span>
+      </button>
+
+      {/* Issue tree within this project group */}
+      {expanded && (
+        <div className="ml-2 border-l border-dark-border/40 pl-1">
+          {group.tree.map((node) => (
+            <TreeNode
+              key={node.number}
+              node={node}
+              depth={0}
+              onLaunch={onLaunch}
+              launchingIssues={launchingIssues}
+              launchErrors={launchErrors}
+              forceExpand={forceExpand}
+              projectId={group.projectId}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

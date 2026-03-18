@@ -77,13 +77,15 @@ function IssueStateBadge({ state }: { state: 'open' | 'closed' }) {
 interface TreeNodeProps {
   node: IssueNode;
   depth: number;
-  onLaunch: (issueNumber: number, title: string) => Promise<void>;
+  onLaunch: (issueNumber: number, title: string, projectId?: number) => Promise<void>;
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
   forceExpand?: boolean;
+  /** When set, the play button uses this project instead of requiring the user to select one. */
+  projectId?: number;
 }
 
-export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, forceExpand }: TreeNodeProps) {
+export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, forceExpand, projectId }: TreeNodeProps) {
   const [expanded, setExpanded] = useState(depth < 2);
   const isExpanded = forceExpand || expanded;
   const hasChildren = node.children.length > 0;
@@ -94,7 +96,7 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
   const handleLaunch = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (launching) return;
-    await onLaunch(node.number, node.title);
+    await onLaunch(node.number, node.title, projectId);
   };
 
   // Find first PR reference for PRBadge
@@ -221,6 +223,7 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
               launchingIssues={launchingIssues}
               launchErrors={launchErrors}
               forceExpand={forceExpand}
+              projectId={projectId}
             />
           ))}
         </div>
