@@ -203,6 +203,18 @@ export function ProjectsPage() {
       });
   }, [editingPromptId, api]);
 
+  // Close prompt editor on Escape key (document-level listener)
+  useEffect(() => {
+    if (editingPromptId === null) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        setEditingPromptId(null);
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [editingPromptId]);
+
   const handleSavePrompt = useCallback(async () => {
     if (editingPromptId === null) return;
     setPromptSaving(true);
