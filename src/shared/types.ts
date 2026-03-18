@@ -218,11 +218,16 @@ export interface CCQueryResult<T> {
   error?: string;
 }
 
+/** Issue category determined by AI prioritization */
+export type IssueCategory = 'critical-bug' | 'bug' | 'perf' | 'feature' | 'refactor' | 'cleanup';
+
 /** A single issue with computed priority from CC analysis */
 export interface PrioritizedIssue {
   number: number;
   title: string;
+  /** Priority score from 1 (highest) to 10 (lowest) */
   priority: number;
+  category: IssueCategory;
   reason: string;
 }
 
