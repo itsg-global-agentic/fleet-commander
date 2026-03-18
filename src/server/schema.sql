@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS teams (
   pid             INTEGER,
   session_id      TEXT,
   pr_number       INTEGER,
+  custom_prompt   TEXT,                            -- custom prompt override (persisted for queued teams)
   launched_at     TEXT,
   stopped_at      TEXT,
   last_event_at   TEXT,

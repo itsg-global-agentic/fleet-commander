@@ -235,7 +235,7 @@ export class TeamManager {
     const activeCount = db.getActiveTeamCountByProject(projectId);
     if (activeCount >= project.maxActiveTeams) {
       // Queue this team instead of launching
-      return this.queueTeam(db, project, projectId, issueNumber, issueTitle, headless);
+      return this.queueTeam(db, project, projectId, issueNumber, issueTitle, headless, prompt);
     }
 
     // If no title provided, fetch from GitHub
@@ -1063,6 +1063,7 @@ export class TeamManager {
     issueNumber: number,
     issueTitle?: string,
     headless?: boolean,
+    prompt?: string,
   ): Promise<Team> {
     // Fetch title from GitHub if needed
     if (!issueTitle && project.githubRepo) {
@@ -1098,6 +1099,7 @@ export class TeamManager {
         pid: null,
         sessionId: null,
         issueTitle: issueTitle ?? null,
+        customPrompt: prompt ?? null,
         launchedAt: now,
         stoppedAt: null,
         lastEventAt: null,
@@ -1119,6 +1121,7 @@ export class TeamManager {
       branchName,
       status: 'queued',
       phase: 'init',
+      customPrompt: prompt ?? null,
       launchedAt: now,
     });
 
@@ -1284,7 +1287,7 @@ export class TeamManager {
     }
 
     // ── Step 3: Spawn Claude Code ──
-    const resolvedPrompt = this.resolvePromptFromFile(project, team.issueNumber);
+    const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, team.issueNumber);
     const args: string[] = [];
     args.push('--worktree', team.worktreeName);
     args.push('--input-format', 'stream-json');   // Bidirectional: receive messages via stdin

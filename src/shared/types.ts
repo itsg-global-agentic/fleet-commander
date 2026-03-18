@@ -91,6 +91,7 @@ export interface Team {
   worktreeName: string;
   branchName: string | null;
   prNumber: number | null;
+  customPrompt: string | null;
   launchedAt: string | null;
   stoppedAt: string | null;
   lastEventAt: string | null;

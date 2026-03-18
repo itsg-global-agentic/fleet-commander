@@ -56,6 +56,7 @@ export interface TeamInsert {
   pid?: number | null;
   sessionId?: string | null;
   prNumber?: number | null;
+  customPrompt?: string | null;
   launchedAt?: string | null;
 }
 
@@ -67,6 +68,7 @@ export interface TeamUpdate {
   pid?: number | null;
   sessionId?: string | null;
   prNumber?: number | null;
+  customPrompt?: string | null;
   launchedAt?: string | null;
   stoppedAt?: string | null;
   lastEventAt?: string | null;
@@ -210,6 +212,9 @@ export class FleetDatabase {
 
     // Add model column to projects if missing (for existing databases)
     this.addModelColumn();
+
+    // Add custom_prompt column to teams if missing (for existing databases)
+    this.addCustomPromptColumn();
 
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
@@ -386,6 +391,18 @@ export class FleetDatabase {
     }
   }
 
+  private addCustomPromptColumn(): void {
+    try {
+      const columns = this.db.prepare("PRAGMA table_info(teams)").all() as Array<{ name: string }>;
+      const hasColumn = columns.some((c) => c.name === 'custom_prompt');
+      if (!hasColumn) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN custom_prompt TEXT');
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
   /**
    * Get the current schema version.
    */
@@ -536,8 +553,8 @@ export class FleetDatabase {
   insertTeam(data: TeamInsert): Team {
     const now = new Date().toISOString();
     const stmt = this.db.prepare(`
-      INSERT INTO teams (issue_number, issue_title, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, launched_at, created_at, updated_at)
-      VALUES (@issueNumber, @issueTitle, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @launchedAt, @createdAt, @updatedAt)
+      INSERT INTO teams (issue_number, issue_title, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, launched_at, created_at, updated_at)
+      VALUES (@issueNumber, @issueTitle, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @launchedAt, @createdAt, @updatedAt)
     `);
 
     const info = stmt.run({
@@ -551,6 +568,7 @@ export class FleetDatabase {
       pid: data.pid ?? null,
       sessionId: data.sessionId ?? null,
       prNumber: data.prNumber ?? null,
+      customPrompt: data.customPrompt ?? null,
       launchedAt: data.launchedAt ?? null,
       createdAt: now,
       updatedAt: now,
@@ -670,6 +688,10 @@ export class FleetDatabase {
     if (fields.prNumber !== undefined) {
       setClauses.push('pr_number = @prNumber');
       params.prNumber = fields.prNumber;
+    }
+    if (fields.customPrompt !== undefined) {
+      setClauses.push('custom_prompt = @customPrompt');
+      params.customPrompt = fields.customPrompt;
     }
     if (fields.launchedAt !== undefined) {
       setClauses.push('launched_at = @launchedAt');
@@ -1273,6 +1295,7 @@ export class FleetDatabase {
       worktreeName: row.worktree_name as string,
       branchName: row.branch_name as string | null,
       prNumber: row.pr_number as number | null,
+      customPrompt: (row.custom_prompt as string | null) ?? null,
       launchedAt: (row.launched_at as string | null) ?? null,
       stoppedAt: row.stopped_at as string | null,
       lastEventAt: row.last_event_at as string | null,
