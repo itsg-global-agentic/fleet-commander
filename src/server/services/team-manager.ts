@@ -21,6 +21,7 @@ import { findGitBash } from '../utils/find-git-bash.js';
 import { resolveClaudePath } from '../utils/resolve-claude-path.js';
 import type { Team, Project } from '../../shared/types.js';
 import { getUsageZone } from './usage-tracker.js';
+import { resolveMessage } from '../utils/resolve-message.js';
 
 const execAsync = promisify(execCallback);
 
@@ -85,6 +86,7 @@ export class TeamManager {
   private parsedEvents: Map<number, StreamEvent[]> = new Map();
   private tokenCounters: Map<number, TokenCounter> = new Map();
   private _processingQueue = new Set<number>();
+  private shutdownTimers: Map<number, NodeJS.Timeout> = new Map();
 
   // -------------------------------------------------------------------------
   // syncWithOrigin — fetch + pull before creating a worktree
@@ -422,6 +424,13 @@ export class TeamManager {
       throw new Error(`Team ${teamId} not found`);
     }
 
+    // Cancel any pending merge-shutdown timer for this team
+    const pendingTimer = this.shutdownTimers.get(teamId);
+    if (pendingTimer) {
+      clearTimeout(pendingTimer);
+      this.shutdownTimers.delete(teamId);
+    }
+
     // Queued teams have no process — just cancel them directly
     if (team.status === 'queued') {
       db.insertTransition({
@@ -620,6 +629,9 @@ export class TeamManager {
   // -------------------------------------------------------------------------
 
   async stopAll(): Promise<Team[]> {
+    // Clear any pending merge-shutdown timers before force-stopping
+    this.clearShutdownTimers();
+
     const db = getDatabase();
     const activeTeams = db.getActiveTeams();
     const results: Team[] = [];
@@ -998,6 +1010,108 @@ export class TeamManager {
 
   getStdinPipe(teamId: number): Writable | undefined {
     return this.stdinPipes.get(teamId);
+  }
+
+  // -------------------------------------------------------------------------
+  // gracefulShutdown — notify TL of merge, wait grace period, then kill
+  // -------------------------------------------------------------------------
+
+  /**
+   * Gracefully shut down a team after its PR is merged.
+   * 1. Send pr_merged_shutdown message to TL via stdin
+   * 2. Wait graceMs for the process to exit on its own
+   * 3. If still alive: close stdin, wait 10s, then force kill
+   *
+   * Race-condition safe: the process exit handler already does cleanup,
+   * so all timer callbacks re-check childProcesses.has() before acting.
+   */
+  gracefulShutdown(teamId: number, prNumber: number, graceMs: number): void {
+    // Clear any existing shutdown timer for this team
+    const existing = this.shutdownTimers.get(teamId);
+    if (existing) {
+      clearTimeout(existing);
+      this.shutdownTimers.delete(teamId);
+    }
+
+    // Step 1: Send the shutdown message via stdin
+    const msg = resolveMessage('pr_merged_shutdown', {
+      PR_NUMBER: String(prNumber),
+    });
+    if (msg) {
+      this.sendMessage(teamId, msg);
+    }
+    console.log(`[TeamManager] Graceful shutdown initiated for team ${teamId} (PR #${prNumber}, grace=${graceMs}ms)`);
+
+    // Step 2: Set grace period timer
+    const graceTimer = setTimeout(() => {
+      this.shutdownTimers.delete(teamId);
+
+      // Re-check: process may have exited during grace period
+      if (!this.childProcesses.has(teamId)) {
+        console.log(`[TeamManager] Team ${teamId} already exited during grace period`);
+        return;
+      }
+
+      console.log(`[TeamManager] Grace period expired for team ${teamId} — closing stdin`);
+
+      // Step 3: Close stdin to signal CC to finish
+      const stdin = this.stdinPipes.get(teamId);
+      if (stdin && !stdin.destroyed) {
+        try {
+          stdin.end();
+        } catch {
+          // stdin.end() failed — proceed to force kill
+        }
+      }
+      this.stdinPipes.delete(teamId);
+
+      // Step 4: Wait 10s then force kill if still alive
+      const killTimer = setTimeout(() => {
+        if (!this.childProcesses.has(teamId)) {
+          console.log(`[TeamManager] Team ${teamId} exited after stdin close`);
+          return;
+        }
+
+        console.log(`[TeamManager] Force-killing team ${teamId} after merge shutdown`);
+        const db = getDatabase();
+        const team = db.getTeam(teamId);
+        if (team?.pid) {
+          this.killProcess(team.pid);
+        }
+
+        // Clean up maps — the exit handler may also fire, but
+        // childProcesses.delete is idempotent
+        this.flushTokenCounters(teamId);
+        this.childProcesses.delete(teamId);
+        this.outputBuffers.delete(teamId);
+        this.parsedEvents.delete(teamId);
+        this.tokenCounters.delete(teamId);
+
+        // Set stoppedAt and broadcast
+        if (team && !team.stoppedAt) {
+          db.updateTeam(teamId, {
+            pid: null,
+            stoppedAt: new Date().toISOString(),
+          });
+        }
+        sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
+      }, 10_000);
+      if (killTimer.unref) killTimer.unref();
+    }, graceMs);
+
+    if (graceTimer.unref) graceTimer.unref();
+    this.shutdownTimers.set(teamId, graceTimer);
+  }
+
+  /**
+   * Clear all active shutdown timers. Called during server shutdown
+   * to prevent dangling timers.
+   */
+  clearShutdownTimers(): void {
+    for (const [teamId, timer] of this.shutdownTimers) {
+      clearTimeout(timer);
+    }
+    this.shutdownTimers.clear();
   }
 
   // -------------------------------------------------------------------------

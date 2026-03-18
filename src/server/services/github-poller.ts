@@ -339,19 +339,8 @@ class GitHubPoller {
           }
         }
 
-        // Notify team when PR is merged
-        if (isMerged && existing.state !== 'merged') {
-          try {
-            const { getTeamManager } = await import('./team-manager.js');
-            const manager = getTeamManager();
-            const msg = resolveMessage('pr_merged', {
-              PR_NUMBER: String(prNumber),
-            });
-            if (msg) manager.sendMessage(teamId, msg);
-          } catch (err) {
-            console.error(`[GitHubPoller] Failed to send merge notification to team ${teamId}:`, err);
-          }
-        }
+        // Merge notification is now handled by gracefulShutdown below
+        // (sends pr_merged_shutdown instead of pr_merged to avoid duplicates)
       }
     } else {
       // First time we see this PR — insert it
@@ -411,7 +400,14 @@ class GitHubPoller {
         mergedAt: new Date().toISOString(),
       });
 
-      // Graceful close is handled by team-manager, not here
+      // Initiate graceful shutdown: notify TL, wait grace period, then kill
+      try {
+        const { getTeamManager } = await import('./team-manager.js');
+        const manager = getTeamManager();
+        manager.gracefulShutdown(teamId, prNumber, config.mergeShutdownGraceMs);
+      } catch (err) {
+        console.error(`[GitHubPoller] Failed to initiate graceful shutdown for team ${teamId}:`, err);
+      }
     }
 
     // If CI has exceeded the maximum unique failure threshold, mark team as blocked + stuck

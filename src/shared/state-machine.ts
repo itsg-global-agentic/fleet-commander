@@ -270,7 +270,8 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     to: 'done',
     trigger: 'poller',
     triggerLabel: 'PR merged',
-    description: 'PR has been merged on GitHub',
+    description:
+      'PR has been merged on GitHub. Sends pr_merged_shutdown message to TL, waits grace period (default 2min), then closes stdin and force-kills if still alive.',
     condition: 'PR merge event detected',
     hookEvent: null,
   },

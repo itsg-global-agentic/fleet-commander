@@ -36,6 +36,13 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
     placeholders: ['PR_NUMBER'],
   },
   {
+    id: 'pr_merged_shutdown',
+    template:
+      'PR #{{PR_NUMBER}} has been merged successfully. Shut down all subagents immediately and exit. Do not start new work.',
+    description: 'Sent to TL when PR is merged to trigger graceful shutdown',
+    placeholders: ['PR_NUMBER'],
+  },
+  {
     id: 'ci_blocked',
     template:
       'STOP. {{FAIL_COUNT}} unique CI failure types on PR #{{PR_NUMBER}}. Wait for my instructions.',

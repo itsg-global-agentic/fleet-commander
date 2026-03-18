@@ -55,6 +55,8 @@ const config = Object.freeze({
   // FC's own hooks/ directory (source for copying into project worktrees)
   fcHooksDir: path.join(fleetCommanderRoot, 'hooks'),
 
+  mergeShutdownGraceMs: safeParseInt(process.env['FLEET_MERGE_SHUTDOWN_GRACE_MS'] || '120000', 'FLEET_MERGE_SHUTDOWN_GRACE_MS'),
+
   ccQueryModel: process.env['FLEET_CC_QUERY_MODEL'] || 'sonnet',
   ccQueryTimeoutMs: safeParseInt(process.env['FLEET_CC_QUERY_TIMEOUT_MS'] || '30000', 'FLEET_CC_QUERY_TIMEOUT_MS'),
 
@@ -83,6 +85,7 @@ export function validateConfig(): void {
     ['usagePollIntervalMs', config.usagePollIntervalMs],
     ['launchTimeoutMin', config.launchTimeoutMin],
     ['maxUniqueCiFailures', config.maxUniqueCiFailures],
+    ['mergeShutdownGraceMs', config.mergeShutdownGraceMs],
   ];
   for (const [name, value] of positiveIntegers) {
     if (isNaN(value) || value <= 0) {
