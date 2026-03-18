@@ -5,17 +5,7 @@ import { LaunchDialog } from './LaunchDialog';
 import { ProjectSelector } from './ProjectSelector';
 import { useApi } from '../hooks/useApi';
 import { RocketIcon } from './Icons';
-
-// Status colors from PRD
-const STATUS_COLORS: Record<string, string> = {
-  running: '#3FB950',
-  stuck: '#F85149',
-  idle: '#D29922',
-  done: '#56D4DD',
-  failed: '#F85149',
-  launching: '#58A6FF',
-  queued: '#D29922',
-};
+import { STATUS_COLORS } from '../utils/constants';
 
 /** Base colors per usage category */
 const USAGE_BASE_COLORS: Record<string, string> = {

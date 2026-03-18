@@ -1,20 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { TeamDashboardRow, TeamStatus } from '../../shared/types';
+import type { TeamDashboardRow } from '../../shared/types';
+import { STATUS_COLORS } from '../utils/constants';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Status -> bar color */
-const BAR_COLORS: Record<TeamStatus, string> = {
-  running: '#3FB950',
-  idle: '#D29922',
-  launching: '#58A6FF',
-  queued: '#8B949E',
-  done: '#56D4DD',
-  failed: '#F85149',
-  stuck: '#F85149',
-};
 
 /** Format duration in minutes to "Xh Ym" or "Xm" */
 function formatDuration(minutes: number): string {
@@ -127,7 +117,7 @@ export function TeamTimeline({ teams }: TeamTimelineProps) {
           const leftPct = ((startMs - rangeStart) / rangeTotal) * 100;
           const widthPct = ((endMs - startMs) / rangeTotal) * 100;
           const clampedWidth = Math.max(widthPct, 0.5); // minimum visible width
-          const color = BAR_COLORS[team.status] ?? '#8B949E';
+          const color = STATUS_COLORS[team.status] ?? '#8B949E';
           const isHovered = hoveredId === team.id;
           const title = team.issueTitle ? truncate(team.issueTitle, 30) : 'Untitled';
 

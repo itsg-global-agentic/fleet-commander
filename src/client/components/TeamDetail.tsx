@@ -7,19 +7,7 @@ import { EventTimeline } from './EventTimeline';
 import { TeamOutput } from './TeamOutput';
 import { CommandInput } from './CommandInput';
 import type { TeamDetail as TeamDetailType, TeamTransition } from '../../shared/types';
-
-// ---------------------------------------------------------------------------
-// Status color map (duplicated from StatusBadge for inline use)
-// ---------------------------------------------------------------------------
-const STATUS_COLORS: Record<string, string> = {
-  queued: '#8B949E',
-  running: '#3FB950',
-  stuck: '#F85149',
-  idle: '#D29922',
-  done: '#56D4DD',
-  failed: '#F85149',
-  launching: '#58A6FF',
-};
+import { STATUS_COLORS } from '../utils/constants';
 
 // ---------------------------------------------------------------------------
 // Helpers

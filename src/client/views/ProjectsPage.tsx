@@ -614,7 +614,7 @@ export function ProjectsPage() {
             if (e.target === e.currentTarget) setEditingPromptId(null);
           }}
         >
-          <div className="w-[600px] max-w-[95vw] max-h-[80vh] bg-dark-surface border border-dark-border rounded-lg shadow-2xl flex flex-col">
+          <div className="w-[600px] max-w-[95vw] max-h-[80vh] bg-dark-surface border border-dark-border rounded-lg shadow-2xl flex flex-col" role="dialog" aria-modal="true">
             {/* Header */}
             <div className="flex items-center justify-between px-5 py-4 border-b border-dark-border shrink-0">
               <h2 className="text-base font-semibold text-dark-text">Edit Launch Prompt</h2>
