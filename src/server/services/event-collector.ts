@@ -77,12 +77,35 @@ export interface SseBroker {
   broadcast<T extends SSEEventType>(event: T, data: SSEEventPayloads[T], teamId?: number): void;
 }
 
+/** Optional team message sender for advisory messages (e.g., crash detection) */
+export interface TeamMessageSender {
+  sendMessage(teamId: number, message: string): boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Throttle state — module-level, persists across requests
 // ---------------------------------------------------------------------------
 
 /** Track last tool_use event time per team for throttling */
 const lastToolUseByTeam = new Map<string, number>();
+
+// ---------------------------------------------------------------------------
+// Subagent tracking for early crash detection
+// ---------------------------------------------------------------------------
+
+/** Track subagent start events: key = "teamWorktree:subagentName", value = { timestamp, eventCount } */
+interface SubagentTracker {
+  startTime: number;
+  eventCount: number;
+}
+
+const subagentTrackers = new Map<string, SubagentTracker>();
+
+/** Minimum duration (ms) for a subagent to be considered healthy */
+const SUBAGENT_MIN_DURATION_MS = 120_000; // 2 minutes
+
+/** Minimum event count for a subagent to be considered having done meaningful work */
+const SUBAGENT_MIN_EVENTS = 5;
 
 /** Throttle window: tool_use events from the same team within this period are deduplicated */
 const TOOL_USE_THROTTLE_MS = 5000; // 5 seconds
@@ -132,6 +155,7 @@ export function processEvent(
   payload: EventPayload,
   db: EventCollectorDb,
   sse: SseBroker,
+  messageSender?: TeamMessageSender,
 ): ProcessEventResult {
   // ── Validate required fields ─────────────────────────────────────
   if (!payload.event || !payload.team) {
@@ -259,6 +283,53 @@ export function processEvent(
     timestamp: payload.timestamp || nowIso,
   });
 
+  // ── Subagent crash detection (advisory) ───────────────────────
+  // Track SubagentStart/SubagentStop pairs. If a subagent stops very
+  // quickly (< 2 min) with minimal events (< 5), it likely crashed.
+  // Send an advisory message to the TL so they can decide to respawn.
+  const evtLower = payload.event.toLowerCase();
+
+  if (evtLower === 'subagent_start') {
+    const agentName = payload.teammate_name || payload.agent_type || 'unknown';
+    const trackerKey = `${payload.team}:${agentName}`;
+    subagentTrackers.set(trackerKey, { startTime: now, eventCount: 0 });
+  }
+
+  // Increment event count for any tracked subagent on this team
+  if (payload.agent_type || payload.teammate_name) {
+    const agentName = payload.teammate_name || payload.agent_type || 'unknown';
+    const trackerKey = `${payload.team}:${agentName}`;
+    const tracker = subagentTrackers.get(trackerKey);
+    if (tracker) {
+      tracker.eventCount++;
+    }
+  }
+
+  if (evtLower === 'subagent_stop' && messageSender) {
+    const agentName = payload.teammate_name || payload.agent_type || 'unknown';
+    const trackerKey = `${payload.team}:${agentName}`;
+    const tracker = subagentTrackers.get(trackerKey);
+
+    if (tracker) {
+      const durationMs = now - tracker.startTime;
+      const durationSec = Math.round(durationMs / 1000);
+
+      if (durationMs < SUBAGENT_MIN_DURATION_MS && tracker.eventCount < SUBAGENT_MIN_EVENTS) {
+        const crashMsg =
+          `Subagent '${agentName}' appears to have crashed (${durationSec}s after start, ${tracker.eventCount} events). Consider respawning.`;
+        try {
+          messageSender.sendMessage(teamId, crashMsg);
+          console.log(`[EventCollector] Subagent crash advisory sent for ${agentName} on team ${teamId}`);
+        } catch {
+          // Non-critical — silently ignore send failures
+        }
+      }
+
+      // Clean up tracker regardless of crash detection
+      subagentTrackers.delete(trackerKey);
+    }
+  }
+
   // ── Capture inter-agent message routing ───────────────────────
   // When a SendMessage tool call is received with a msg_to field,
   // record the message in the agent_messages table for routing visibility.
@@ -302,4 +373,9 @@ export class EventCollectorError extends Error {
 /** Reset all throttle state. Intended for use in tests only. */
 export function resetThrottleState(): void {
   lastToolUseByTeam.clear();
+}
+
+/** Reset subagent tracking state. Intended for use in tests only. */
+export function resetSubagentTrackers(): void {
+  subagentTrackers.clear();
 }

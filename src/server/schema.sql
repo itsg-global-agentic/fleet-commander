@@ -209,6 +209,10 @@ INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
    'STOP. {{FAIL_COUNT}} unique CI failure types on PR #{{PR_NUMBER}}. Wait for my instructions.',
    'Tell TL the team is blocked due to repeated CI failures');
 INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
+  ('idle_nudge',
+   'FC status check: You''ve been idle for {{IDLE_MINUTES}} minutes. If waiting for subagents, run TaskList to verify they are still active. If a phase just completed, proceed to the next step.',
+   'Nudge sent to TL when team transitions to idle to prompt a status check');
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('stuck_nudge',
    'Hey, you have been idle for a while on issue #{{ISSUE_NUMBER}}. What is the status? Do you need help?',
    'Nudge sent to TL when team transitions to stuck');

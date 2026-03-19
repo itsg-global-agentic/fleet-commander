@@ -272,3 +272,97 @@ describe('Existing idle/stuck detection', () => {
     expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { status: 'stuck' });
   });
 });
+
+// =============================================================================
+// Idle nudge message
+// =============================================================================
+
+describe('Idle nudge message', () => {
+  it('sends idle_nudge message when running -> idle and resolveMessage returns a message', async () => {
+    const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+    const mockedResolveMessage = vi.mocked(resolveMessage);
+    mockedResolveMessage.mockReturnValue('FC status check: idle for 4 minutes');
+
+    const team = makeTeam({
+      status: 'running',
+      lastEventAt: minutesAgo(4), // 4 min ago, past the 3 min idle threshold
+    });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+
+    stuckDetector.check();
+
+    expect(mockedResolveMessage).toHaveBeenCalledWith('idle_nudge', {
+      IDLE_MINUTES: '4',
+    });
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(1, 'FC status check: idle for 4 minutes');
+
+    // Reset mock to default
+    mockedResolveMessage.mockReturnValue(null);
+  });
+
+  it('does NOT send idle_nudge message when resolveMessage returns null (template disabled)', async () => {
+    const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+    const mockedResolveMessage = vi.mocked(resolveMessage);
+    mockedResolveMessage.mockReturnValue(null);
+
+    const team = makeTeam({
+      status: 'running',
+      lastEventAt: minutesAgo(4),
+    });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+
+    stuckDetector.check();
+
+    // Transition should still happen
+    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { status: 'idle' });
+    // But no message sent
+    expect(mockManager.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('sends stuck_nudge message when idle -> stuck and resolveMessage returns a message', async () => {
+    const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+    const mockedResolveMessage = vi.mocked(resolveMessage);
+    // idle->stuck only calls resolveMessage once (for stuck_nudge, not idle_nudge)
+    mockedResolveMessage.mockReturnValue('Hey, you have been idle for a while');
+
+    const team = makeTeam({
+      status: 'idle',
+      lastEventAt: minutesAgo(6),
+    });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+
+    stuckDetector.check();
+
+    expect(mockedResolveMessage).toHaveBeenCalledWith('stuck_nudge', {
+      ISSUE_NUMBER: '100',
+    });
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(1, 'Hey, you have been idle for a while');
+
+    // Reset mock to default
+    mockedResolveMessage.mockReturnValue(null);
+  });
+
+  it('skips idle_nudge when team has pending CI on PR', async () => {
+    const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+    const mockedResolveMessage = vi.mocked(resolveMessage);
+    mockedResolveMessage.mockReturnValue('FC status check: idle');
+
+    const team = makeTeam({
+      status: 'running',
+      lastEventAt: minutesAgo(4),
+      prNumber: 42,
+    });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({ ciStatus: 'pending' });
+
+    stuckDetector.check();
+
+    // Transition should be skipped entirely (CI pending)
+    expect(mockDb.updateTeam).not.toHaveBeenCalled();
+    expect(mockManager.sendMessage).not.toHaveBeenCalled();
+
+    // Reset mocks
+    mockedResolveMessage.mockReturnValue(null);
+    mockDb.getPullRequest.mockReturnValue(undefined);
+  });
+});

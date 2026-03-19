@@ -50,6 +50,14 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
     placeholders: ['PR_NUMBER', 'FAIL_COUNT'],
   },
   {
+    id: 'idle_nudge',
+    template:
+      'FC status check: You\'ve been idle for {{IDLE_MINUTES}} minutes. If waiting for subagents, run TaskList to verify they are still active. If a phase just completed, proceed to the next step.',
+    description:
+      'Sent to TL when team transitions to idle to prompt a status check',
+    placeholders: ['IDLE_MINUTES'],
+  },
+  {
     id: 'stuck_nudge',
     template:
       'Hey, you have been idle for a while on issue #{{ISSUE_NUMBER}}. What is the status? Do you need help?',

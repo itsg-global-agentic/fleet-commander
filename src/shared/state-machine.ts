@@ -73,7 +73,8 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     to: 'idle',
     trigger: 'timer',
     triggerLabel: 'Idle threshold exceeded',
-    description: 'No hook events received within the idle threshold period',
+    description:
+      'No hook events received within the idle threshold period. Sends idle_nudge message to TL prompting a subagent status check.',
     condition: 'lastEventAt + idleThresholdMin < now',
     hookEvent: null,
   },

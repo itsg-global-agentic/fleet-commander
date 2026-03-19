@@ -6,10 +6,12 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   processEvent,
   resetThrottleState,
+  resetSubagentTrackers,
   EventCollectorError,
   type EventPayload,
   type EventCollectorDb,
   type SseBroker,
+  type TeamMessageSender,
 } from '../../src/server/services/event-collector.js';
 
 // ---------------------------------------------------------------------------
@@ -51,8 +53,15 @@ function makePayload(overrides?: Partial<EventPayload>): EventPayload {
 // Setup
 // ---------------------------------------------------------------------------
 
+function createMockMessageSender(): TeamMessageSender & { sendMessage: ReturnType<typeof vi.fn> } {
+  return {
+    sendMessage: vi.fn().mockReturnValue(true),
+  };
+}
+
 beforeEach(() => {
   resetThrottleState();
+  resetSubagentTrackers();
 });
 
 // =============================================================================
@@ -802,5 +811,212 @@ describe('Agent message routing', () => {
     // Should not throw — failure is silently caught
     const result = processEvent(payload, db, sse);
     expect(result.processed).toBe(true);
+  });
+});
+
+// =============================================================================
+// Subagent crash detection
+// =============================================================================
+
+describe('Subagent crash detection', () => {
+  it('sends advisory message when subagent stops quickly with few events', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const sender = createMockMessageSender();
+
+    // SubagentStart
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev', agent_type: 'coordinator' }),
+      db,
+      sse,
+      sender,
+    );
+
+    // SubagentStop immediately (within 2 min, < 5 events)
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-dev', agent_type: 'coordinator' }),
+      db,
+      sse,
+      sender,
+    );
+
+    expect(sender.sendMessage).toHaveBeenCalledWith(
+      1,
+      expect.stringContaining("Subagent 'fleet-dev' appears to have crashed"),
+    );
+  });
+
+  it('does NOT send advisory when subagent runs long enough', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const sender = createMockMessageSender();
+
+    // SubagentStart — we need to simulate passage of time
+    // Since we can't easily mock Date.now() without affecting all code,
+    // we verify the logic by checking that a subagent with many events does not trigger
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev', agent_type: 'coordinator' }),
+      db,
+      sse,
+      sender,
+    );
+
+    // Generate enough events to exceed the minimum (5)
+    for (let i = 0; i < 6; i++) {
+      processEvent(
+        makePayload({ event: 'tool_use', teammate_name: 'fleet-dev', agent_type: 'fleet-dev' }),
+        db,
+        sse,
+        sender,
+      );
+      resetThrottleState(); // Reset throttle to allow each event through
+    }
+
+    // SubagentStop — should NOT trigger crash advisory because event count >= 5
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-dev', agent_type: 'coordinator' }),
+      db,
+      sse,
+      sender,
+    );
+
+    expect(sender.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does NOT send advisory when no messageSender is provided', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    // SubagentStart without message sender
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev' }),
+      db,
+      sse,
+    );
+
+    // SubagentStop — should not crash even without messageSender
+    expect(() => {
+      processEvent(
+        makePayload({ event: 'subagent_stop', teammate_name: 'fleet-dev' }),
+        db,
+        sse,
+      );
+    }).not.toThrow();
+  });
+
+  it('tracks multiple subagents independently', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const sender = createMockMessageSender();
+
+    // Start two subagents
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev' }),
+      db,
+      sse,
+      sender,
+    );
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-reviewer' }),
+      db,
+      sse,
+      sender,
+    );
+
+    // Generate events for fleet-reviewer (enough to be healthy)
+    for (let i = 0; i < 6; i++) {
+      processEvent(
+        makePayload({ event: 'tool_use', teammate_name: 'fleet-reviewer', agent_type: 'fleet-reviewer' }),
+        db,
+        sse,
+        sender,
+      );
+      resetThrottleState();
+    }
+
+    // Stop fleet-dev (crashed — few events)
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-dev' }),
+      db,
+      sse,
+      sender,
+    );
+
+    // Should have sent crash advisory for fleet-dev
+    expect(sender.sendMessage).toHaveBeenCalledWith(
+      1,
+      expect.stringContaining("'fleet-dev'"),
+    );
+
+    sender.sendMessage.mockClear();
+
+    // Stop fleet-reviewer (healthy — many events)
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-reviewer' }),
+      db,
+      sse,
+      sender,
+    );
+
+    // Should NOT send crash advisory for fleet-reviewer
+    expect(sender.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('cleans up tracker after subagent stop', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const sender = createMockMessageSender();
+
+    // Start and immediately stop
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev' }),
+      db,
+      sse,
+      sender,
+    );
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-dev' }),
+      db,
+      sse,
+      sender,
+    );
+
+    expect(sender.sendMessage).toHaveBeenCalledTimes(1);
+    sender.sendMessage.mockClear();
+
+    // Second stop without a start — should not trigger (tracker cleaned up)
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-dev' }),
+      db,
+      sse,
+      sender,
+    );
+
+    expect(sender.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('includes duration and event count in advisory message', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const sender = createMockMessageSender();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-analyst' }),
+      db,
+      sse,
+      sender,
+    );
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-analyst' }),
+      db,
+      sse,
+      sender,
+    );
+
+    const msg = sender.sendMessage.mock.calls[0][1] as string;
+    expect(msg).toContain("Subagent 'fleet-analyst' appears to have crashed");
+    expect(msg).toContain('s after start');
+    expect(msg).toContain('events');
+    expect(msg).toContain('Consider respawning');
   });
 });

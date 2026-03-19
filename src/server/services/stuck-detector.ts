@@ -154,6 +154,19 @@ class StuckDetector {
             team.id,
           );
 
+          // When a team transitions to idle, send an idle nudge to prompt TL
+          // to check subagent status and proceed with next steps
+          if (newStatus === 'idle') {
+            const idleMsg = resolveMessage('idle_nudge', {
+              IDLE_MINUTES: String(Math.round(idleMinutes)),
+            });
+            if (idleMsg) {
+              const manager = getTeamManager();
+              manager.sendMessage(team.id, idleMsg);
+              console.log(`[StuckDetector] Idle nudge sent to team ${team.id}`);
+            }
+          }
+
           // When a team transitions to stuck, send a nudge message to the TL
           if (newStatus === 'stuck') {
             const msg = resolveMessage('stuck_nudge', {

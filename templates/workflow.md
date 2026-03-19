@@ -104,6 +104,30 @@ stateDiagram-v2
 
 ---
 
+## Active Monitoring Loop
+
+After spawning all 3 agents, the TL enters a continuous monitoring loop that runs throughout the entire workflow. This prevents the TL from going silent between phases.
+
+### Monitoring Rules
+
+1. **Run `TaskList` every 30-60 seconds** to check the status of all spawned agents. This is your heartbeat — never go more than 60 seconds without checking.
+2. **If any agent exits unexpectedly** (SubagentStop without sending expected output), **respawn immediately** — do not wait for the stuck detector's 5-minute threshold.
+3. **Between phases** (e.g., analyst done, waiting for dev), actively verify the next agent is alive via `TaskList`. If the agent is gone, respawn it.
+4. **After each subagent phase completes, immediately proceed** to the next action:
+   - **Analyst done** -- validate the brief -- check if dev is alive via `TaskList` -- if dev is gone, respawn it
+   - **Dev done** -- check dev output for completeness -- immediately notify reviewer if not already done by dev
+   - **Reviewer done** -- immediately proceed to PR creation (rebase, `gh pr create`, auto-merge)
+5. **Never passively wait** — if you have nothing to do, run `TaskList` to confirm all agents are healthy.
+
+### What To Do When An Agent Is Missing
+
+If `TaskList` shows an agent is no longer running:
+1. Check the last output/events from that agent
+2. If the agent completed its work (sent its deliverable), proceed to the next phase
+3. If the agent exited without delivering, respawn it with the same task plus any additional context from the failed attempt
+
+---
+
 ## Phase 1 — Analysis
 
 1. Analyst (already spawned in Phase 0) reads the issue, explores the codebase, discovers guidebooks, and produces a structured brief
@@ -323,7 +347,7 @@ Fleet Commander sends these messages directly to the TL via stdin. They arrive a
 | `ci_red` | CI fails on PR | "CI failed on PR #{PR}. Failing checks: {details}. Fix count: {N}/{max}." |
 | `ci_blocked` | Too many CI failures | "STOP. {N} unique CI failure types on PR #{PR}. Wait for instructions." |
 | `pr_merged` | PR is merged | "PR #{PR} merged. Close the issue, clean up, and finish." |
-| `nudge_idle` | Team idle 3+ min | "You have been idle for a while. What is the status?" |
+| `nudge_idle` | Team idle 3+ min | "FC status check: You've been idle for {N} minutes. If waiting for subagents, run TaskList to verify they are still active. If a phase just completed, proceed to the next step." |
 | `nudge_stuck` | Team stuck 5+ min | "You appear stuck. Report status or ask for help." |
 
 ### TL Response to FC Messages
@@ -336,7 +360,7 @@ Fleet Commander sends these messages directly to the TL via stdin. They arrive a
 
 **On `pr_merged`**: Close the issue, shut down agents (`shutdown_request` to all), finish.
 
-**On `nudge_idle`**: Report current status to FC. If waiting for a subagent, check on them.
+**On `nudge_idle`**: Run `TaskList` to verify all subagents are alive. If any agent is missing or crashed, respawn it. Report current status to FC.
 
 **On `nudge_stuck`**: Check which agent is stuck. Send a targeted nudge. If no progress after nudge, escalate to FC by reporting status.
 
@@ -448,6 +472,7 @@ Atomic commits — each commit should be a logical unit.
 | Ignoring FC messages | Always respond to ci_green, ci_red, pr_merged, nudges |
 | Respawning agent after 2 min idle | Idle is normal — only act at 5min stuck threshold |
 | TL monitors CI manually | FC handles CI monitoring and sends updates via stdin |
+| TL goes idle after spawning agents without monitoring | TL runs active monitoring loop between phases |
 
 ## Decision Summary
 
