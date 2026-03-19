@@ -9,7 +9,7 @@
 // its own github_repo. The polling loop iterates over all active projects.
 //
 // All GitHub API calls (gh CLI) are async to avoid blocking the event loop.
-// Dependency enrichment uses batched GraphQL queries and capped concurrency.
+// Dependencies are fetched inline via the blockedBy field in the main issue query.
 // =============================================================================
 
 import { exec } from 'child_process';
@@ -50,6 +50,15 @@ interface GraphQLIssueNode {
   closedByPullRequestsReferences?: {
     nodes?: Array<{ number: number; state: string }>;
   };
+  blockedBy?: {
+    nodes?: Array<{
+      number: number;
+      title: string;
+      state: string;
+      repository: { owner: { login: string }; name: string };
+    }>;
+  };
+  issueDependenciesSummary?: { totalBlockedBy: number; totalBlocking: number };
 }
 
 interface GraphQLResponse {
@@ -72,21 +81,6 @@ interface ProjectIssueCache {
   issues: IssueNode[];
   cachedAt: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// Per-issue dependency cache entry (60s TTL)
-// ---------------------------------------------------------------------------
-
-interface DependencyCacheEntry {
-  data: IssueDependencyInfo;
-  fetchedAt: number;
-}
-
-/** TTL for per-issue dependency cache entries (milliseconds) */
-const DEPENDENCY_CACHE_TTL_MS = 60_000;
-
-/** Maximum number of issues per batched GraphQL dependency query */
-const DEPENDENCY_BATCH_SIZE = 50;
 
 /** Maximum concurrent `gh api` calls for resolving issue states */
 const MAX_CONCURRENT_RESOLVE = 5;
@@ -115,6 +109,10 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String) {
         closedByPullRequestsReferences(first: 3, includeClosedPrs: true) {
           nodes { number state }
         }
+        blockedBy(first: 20) {
+          nodes { number title state repository { owner { login } name } }
+        }
+        issueDependenciesSummary { totalBlockedBy totalBlocking }
       }
     }
   }
@@ -226,8 +224,6 @@ async function runWithConcurrency<T>(
 export class IssueFetcher {
   // Per-project cache: projectId -> cache entry
   private cacheByProject: Map<number, ProjectIssueCache> = new Map();
-  // Per-issue dependency cache: "owner/repo#number" -> cached dependency info
-  private dependencyCache: Map<string, DependencyCacheEntry> = new Map();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
 
@@ -459,11 +455,10 @@ export class IssueFetcher {
   }
 
   /**
-   * Clear ALL cached issues and dependency cache (used by factory reset).
+   * Clear ALL cached issues (used by factory reset).
    */
   clearAll(): void {
     this.cacheByProject.clear();
-    this.dependencyCache.clear();
   }
 
   /**
@@ -579,56 +574,9 @@ export class IssueFetcher {
     return issues;
   }
 
-  /**
-   * Enrich issue nodes with dependency info from GitHub using batched
-   * GraphQL queries. Enriches ALL issues (not just leaf nodes) so parent
-   * issues also show inline dependency indicators. Uses per-issue caching
-   * with 60s TTL. Modifies nodes in place and returns the same array.
-   *
-   * Instead of one GraphQL call per issue, collects all issue numbers and
-   * executes batched GraphQL queries using aliases (capped at DEPENDENCY_BATCH_SIZE
-   * issues per query). State resolution for body-parsed deps uses capped concurrency.
-   */
-  async enrichWithDependencies(issues: IssueNode[], projectId: number): Promise<IssueNode[]> {
-    const db = getDatabase();
-    const project = db.getProject(projectId);
-    if (!project?.githubRepo) return issues;
-
-    const [owner, repo] = this.parseRepo(project.githubRepo);
-
-    // Flatten the tree to get all issue numbers that need dependency info
-    const allNodes = this.flattenTree(issues);
-    const now = Date.now();
-
-    // Separate issues into cached (still valid) and uncached (need fetch)
-    const uncachedNumbers: number[] = [];
-    for (const node of allNodes) {
-      const cacheKey = `${owner}/${repo}#${node.number}`;
-      const cached = this.dependencyCache.get(cacheKey);
-      if (!cached || (now - cached.fetchedAt) >= DEPENDENCY_CACHE_TTL_MS) {
-        uncachedNumbers.push(node.number);
-      }
-    }
-
-    // Fetch dependencies for uncached issues in batches
-    if (uncachedNumbers.length > 0) {
-      await this.fetchDependenciesBatched(owner, repo, uncachedNumbers);
-    }
-
-    // Apply cached dependency info to all nodes
-    for (const node of allNodes) {
-      const cacheKey = `${owner}/${repo}#${node.number}`;
-      const cached = this.dependencyCache.get(cacheKey);
-      if (cached && cached.data.blockedBy.length > 0) {
-        node.dependencies = cached.data;
-      }
-    }
-
-    return issues;
-  }
-
   // -------------------------------------------------------------------------
-  // Dependency fetching (GitHub Issue Dependencies API)
+  // Single-issue dependency fetching (used by launch check, github-poller,
+  // and per-issue dependency endpoints)
   // -------------------------------------------------------------------------
 
   /**
@@ -640,196 +588,6 @@ export class IssueFetcher {
    */
   async fetchDependencies(owner: string, repo: string, issueNumber: number): Promise<IssueDependencyInfo | null> {
     return this.fetchDependenciesFromTimeline(owner, repo, issueNumber);
-  }
-
-  /**
-   * Fetch dependencies with per-issue caching (60s TTL).
-   * Avoids re-fetching the same issue's dependencies on every enrichment cycle.
-   * Cache key is "owner/repo#number".
-   */
-  private async fetchDependenciesCached(owner: string, repo: string, issueNumber: number): Promise<IssueDependencyInfo | null> {
-    const cacheKey = `${owner}/${repo}#${issueNumber}`;
-    const now = Date.now();
-    const cached = this.dependencyCache.get(cacheKey);
-
-    if (cached && (now - cached.fetchedAt) < DEPENDENCY_CACHE_TTL_MS) {
-      return cached.data;
-    }
-
-    const result = await this.fetchDependencies(owner, repo, issueNumber);
-    if (result) {
-      this.dependencyCache.set(cacheKey, { data: result, fetchedAt: now });
-    }
-    return result;
-  }
-
-  /**
-   * Fetch dependencies for multiple issues in batched GraphQL queries.
-   * Uses aliases to query up to DEPENDENCY_BATCH_SIZE issues per request.
-   * Results are stored in the dependency cache.
-   */
-  private async fetchDependenciesBatched(
-    owner: string,
-    repo: string,
-    issueNumbers: number[],
-  ): Promise<void> {
-    // Process in batches of DEPENDENCY_BATCH_SIZE
-    for (let i = 0; i < issueNumbers.length; i += DEPENDENCY_BATCH_SIZE) {
-      const batch = issueNumbers.slice(i, i + DEPENDENCY_BATCH_SIZE);
-
-      try {
-        // Build a batched GraphQL query using aliases
-        const aliasFragments = batch.map((num) =>
-          `issue${num}: issue(number: ${num}) { number body trackedInIssues(first: 50) { nodes { number title state repository { owner { login } name } } } }`
-        );
-
-        const query = `query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { ${aliasFragments.join(' ')} } }`;
-
-        const compactQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-        const requestBody = JSON.stringify({
-          query: compactQuery,
-          variables: { owner, repo },
-        });
-
-        const { stdout } = await execAsync('gh api graphql --input -', {
-          encoding: 'utf-8',
-          timeout: 30_000,
-          env: { ...process.env },
-          // Pass the request body via stdin
-          ...({ input: requestBody } as Record<string, unknown>),
-        });
-
-        const result = JSON.parse(stdout) as {
-          data?: {
-            repository?: Record<string, {
-              number: number;
-              body: string | null;
-              trackedInIssues?: {
-                nodes?: Array<{
-                  number: number;
-                  title: string;
-                  state: string;
-                  repository: { owner: { login: string }; name: string };
-                }>;
-              };
-            } | undefined>;
-          };
-          errors?: Array<{ message: string }>;
-        };
-
-        if (result.errors?.length) {
-          console.error(
-            `[IssueFetcher] Batched dependency query had errors:`,
-            result.errors.map((e) => e.message).join(', ')
-          );
-        }
-
-        const repoData = result.data?.repository;
-        if (!repoData) continue;
-
-        // Collect all body-parsed deps that need state resolution
-        const allBodyDeps: DependencyRef[] = [];
-        const bodyDepsByIssue = new Map<number, DependencyRef[]>();
-
-        // First pass: extract tracked issues and body deps (without resolving states)
-        for (const num of batch) {
-          const issueData = repoData[`issue${num}`];
-          const now = Date.now();
-          const cacheKey = `${owner}/${repo}#${num}`;
-
-          if (!issueData) {
-            // Issue not found in the response -- store empty dep info
-            this.dependencyCache.set(cacheKey, {
-              data: this.buildEmptyDependencyInfo(num),
-              fetchedAt: now,
-            });
-            continue;
-          }
-
-          const blockedBy: DependencyRef[] = [];
-
-          // Parse tracked issues (GitHub's native tracking)
-          const trackedNodes = issueData.trackedInIssues?.nodes ?? [];
-          for (const node of trackedNodes) {
-            blockedBy.push({
-              number: node.number,
-              owner: node.repository.owner.login,
-              repo: node.repository.name,
-              state: node.state.toLowerCase() === 'open' ? 'open' : 'closed',
-              title: node.title,
-            });
-          }
-
-          // Parse body for "blocked by" or "depends on" patterns
-          if (issueData.body) {
-            const bodyDeps = parseDependenciesFromBody(issueData.body, owner, repo);
-            // Filter out duplicates from tracked issues
-            const uniqueBodyDeps = bodyDeps.filter(
-              (dep) => !blockedBy.some(
-                (b) => b.number === dep.number && b.owner === dep.owner && b.repo === dep.repo
-              )
-            );
-            if (uniqueBodyDeps.length > 0) {
-              bodyDepsByIssue.set(num, uniqueBodyDeps);
-              allBodyDeps.push(...uniqueBodyDeps);
-            }
-          }
-
-          // Store partial result (tracked deps have correct state, body deps need resolution)
-          // We'll update the cache after resolving body dep states below
-          this.dependencyCache.set(cacheKey, {
-            data: {
-              issueNumber: num,
-              blockedBy,
-              resolved: blockedBy.filter((d) => d.state === 'open').length === 0,
-              openCount: blockedBy.filter((d) => d.state === 'open').length,
-            },
-            fetchedAt: now,
-          });
-        }
-
-        // Resolve states for body-parsed deps (all at once with concurrency cap)
-        if (allBodyDeps.length > 0) {
-          await this.resolveIssueStates(allBodyDeps);
-
-          // Merge resolved body deps back into cached dependency info
-          for (const [num, bodyDeps] of bodyDepsByIssue) {
-            const cacheKey = `${owner}/${repo}#${num}`;
-            const cached = this.dependencyCache.get(cacheKey);
-            if (!cached) continue;
-
-            const combined = [...cached.data.blockedBy, ...bodyDeps];
-            const openCount = combined.filter((d) => d.state === 'open').length;
-
-            this.dependencyCache.set(cacheKey, {
-              data: {
-                issueNumber: num,
-                blockedBy: combined,
-                resolved: openCount === 0,
-                openCount,
-              },
-              fetchedAt: cached.fetchedAt,
-            });
-          }
-        }
-      } catch (err) {
-        console.error(
-          `[IssueFetcher] Batched dependency fetch failed for issues [${batch.join(', ')}]:`,
-          err instanceof Error ? err.message : err
-        );
-        // Store empty dep info for failed batch items so we don't retry immediately
-        const now = Date.now();
-        for (const num of batch) {
-          const cacheKey = `${owner}/${repo}#${num}`;
-          if (!this.dependencyCache.has(cacheKey)) {
-            this.dependencyCache.set(cacheKey, {
-              data: this.buildEmptyDependencyInfo(num),
-              fetchedAt: now,
-            });
-          }
-        }
-      }
-    }
   }
 
   /**
@@ -1049,6 +807,7 @@ export class IssueFetcher {
 
   /**
    * Map a GraphQL issue node to our IssueNode format.
+   * Includes inline dependency info from the `blockedBy` field when present.
    */
   private mapGraphQLNode(node: GraphQLIssueNode): IssueNode {
     const labels = (node.labels?.nodes ?? []).map((l) => l.name);
@@ -1079,6 +838,26 @@ export class IssueFetcher {
 
     if (prRefs.length > 0) {
       issueNode.prReferences = prRefs;
+    }
+
+    // Map inline blockedBy nodes to DependencyRef[] and populate dependencies
+    const blockedByNodes = node.blockedBy?.nodes ?? [];
+    if (blockedByNodes.length > 0) {
+      const blockedBy: DependencyRef[] = blockedByNodes.map((dep) => ({
+        number: dep.number,
+        owner: dep.repository.owner.login,
+        repo: dep.repository.name,
+        state: dep.state.toLowerCase() === 'open' ? 'open' : 'closed',
+        title: dep.title,
+      }));
+      const openCount = blockedBy.filter((d) => d.state === 'open').length;
+
+      issueNode.dependencies = {
+        issueNumber: node.number,
+        blockedBy,
+        resolved: openCount === 0,
+        openCount,
+      };
     }
 
     return issueNode;
