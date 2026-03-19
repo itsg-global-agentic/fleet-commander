@@ -65,7 +65,21 @@ sees heartbeats stop WITHOUT a SessionEnd, the team crashed.
 activity. Dashboard tracks stop frequency — many stops in quick succession
 indicates thrashing.
 
-### 1.4 SubagentStart / SubagentStop
+### 1.4 StopFailure
+
+**Why:** Fires when the agent stops due to rate limits, API errors, or other
+infrastructure failures. Unlike a normal Stop, StopFailure indicates the
+agent was forcibly halted by external constraints rather than completing its
+turn. Without this hook, rate limits and API errors are invisible to Fleet
+Commander — the dashboard only sees silence until the stuck detector fires.
+
+**Signal value:** Immediate visibility into infrastructure problems:
+- Rate limit hit → team cannot make progress until the limit resets
+- API error → potential outage or configuration issue
+- The dashboard can surface `error_details` and `last_assistant_message` so
+  the PM knows exactly why the agent stopped and what it was doing.
+
+### 1.5 SubagentStart / SubagentStop
 
 **Why:** The KEA team has 8 agent types (coordinator, analityk, csharp-dev,
 fsharp-dev, ts-dev, devops-dev, weryfikator, pr-watcher). Tracking their
@@ -77,7 +91,7 @@ each team.
 - SubagentStart with `teammate_name: "fsharp-dev"` → team needs F# work
 - SubagentStop with `teammate_name: "weryfikator"` → review phase complete
 
-### 1.5 Notification
+### 1.6 Notification
 
 **Why:** Catches idle prompts ("Your teammate is waiting") and permission
 prompts. Both indicate the team is paused waiting for external input.
@@ -85,7 +99,7 @@ prompts. Both indicate the team is paused waiting for external input.
 **Signal value:** If a team accumulates notifications without tool_use
 events, it is stuck waiting. The dashboard can flag "needs human attention."
 
-### 1.6 PreCompact
+### 1.7 PreCompact
 
 **Why:** Context compaction means the agent is running out of context window
 space. This is an early warning that the task is complex/long-running and
@@ -94,7 +108,7 @@ the agent may lose context of earlier work.
 **Signal value:** Leading indicator of complexity. Multiple PreCompact events
 for one team → the task might need to be broken down.
 
-### 1.7 PostToolUse (heartbeat)
+### 1.8 PostToolUse (heartbeat)
 
 **Why:** This is THE primary activity signal. Every time any tool completes
 (Bash, Read, Write, Edit, Grep, etc.), this hook fires. It proves the agent
@@ -106,7 +120,7 @@ It also captures WHICH tool was used, enabling activity profiling:
 - Lots of `Edit` + `Write` → agent is implementing
 - Lots of `Bash` → agent is testing/building
 
-### 1.8 PostToolUseFailure
+### 1.9 PostToolUseFailure
 
 **Why:** Tool errors (build failures, test failures, permission errors) are
 the strongest signal that a team is struggling. A burst of errors means the
@@ -166,6 +180,7 @@ Fields are omitted when empty. Per-event payloads:
 | session_start    | team, session_id, agent_type                           |
 | session_end      | team, session_id                                       |
 | stop             | team, session_id, stop_reason                          |
+| stop_failure     | team, session_id, error_details, last_assistant_message|
 | subagent_start   | team, session_id, teammate_name, agent_type            |
 | subagent_stop    | team, session_id, teammate_name, agent_type            |
 | notification     | team, session_id, message                              |
@@ -461,6 +476,7 @@ dedup by `(team, event, timestamp_rounded_to_second)`.
   on_session_start.sh        ← hook: SessionStart
   on_session_end.sh          ← hook: SessionEnd
   on_stop.sh                 ← hook: Stop
+  on_stop_failure.sh         ← hook: StopFailure
   on_subagent_start.sh       ← hook: SubagentStart
   on_subagent_stop.sh        ← hook: SubagentStop
   on_notification.sh         ← hook: Notification

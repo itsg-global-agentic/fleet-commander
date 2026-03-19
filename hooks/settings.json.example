@@ -33,6 +33,16 @@
         ]
       }
     ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/fleet-commander/on_stop_failure.sh"
+          }
+        ]
+      }
+    ],
     "SubagentStart": [
       {
         "hooks": [

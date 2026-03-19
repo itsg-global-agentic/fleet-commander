@@ -75,6 +75,8 @@ MESSAGE=$(extract_json_string "message")
 ERROR=$(extract_json_string "error")
 TOOL_USE_ID=$(extract_json_string "tool_use_id")
 STOP_REASON=$(extract_json_string "stop_reason")
+ERROR_DETAILS=$(extract_json_string "error_details")
+LAST_ASSISTANT_MESSAGE=$(extract_json_string "last_assistant_message")
 
 # ── Extract SendMessage routing fields from tool_input ────────────
 # When tool_name is "SendMessage", the hook stdin contains a tool_input
@@ -124,6 +126,8 @@ PAYLOAD="${PAYLOAD}$(json_field "message" "$MESSAGE")"
 PAYLOAD="${PAYLOAD}$(json_field "error" "$ERROR")"
 PAYLOAD="${PAYLOAD}$(json_field "tool_use_id" "$TOOL_USE_ID")"
 PAYLOAD="${PAYLOAD}$(json_field "stop_reason" "$STOP_REASON")"
+PAYLOAD="${PAYLOAD}$(json_field "error_details" "$ERROR_DETAILS")"
+PAYLOAD="${PAYLOAD}$(json_field "last_assistant_message" "$LAST_ASSISTANT_MESSAGE")"
 PAYLOAD="${PAYLOAD}$(json_field "worktree_root" "$WORKTREE_ROOT")"
 PAYLOAD="${PAYLOAD}$(json_field "msg_to" "$MSG_TO")"
 PAYLOAD="${PAYLOAD}$(json_field "msg_summary" "$MSG_SUMMARY")"

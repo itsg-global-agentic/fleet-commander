@@ -34,6 +34,7 @@ const EVENT_ICONS: Record<string, React.ReactNode> = {
   SessionStart: <PlayIcon size={14} />,
   SessionEnd: <SquareIcon size={14} />,
   Stop: <CircleStopIcon size={14} />,
+  StopFailure: <AlertTriangleIcon size={14} />,
   SubagentStart: <ArrowRightIcon size={14} />,
   SubagentStop: <ArrowLeftIcon size={14} />,
   Notification: <AlertTriangleIcon size={14} />,

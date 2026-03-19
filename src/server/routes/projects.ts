@@ -124,6 +124,7 @@ function checkInstallStatus(repoPath: string): InstallStatus {
     'on_session_start.sh',
     'on_session_end.sh',
     'on_stop.sh',
+    'on_stop_failure.sh',
     'on_subagent_start.sh',
     'on_subagent_stop.sh',
     'on_notification.sh',
