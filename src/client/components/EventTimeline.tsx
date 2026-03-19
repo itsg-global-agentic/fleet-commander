@@ -37,8 +37,8 @@ const EVENT_ICONS: Record<string, React.ReactNode> = {
   SubagentStart: <ArrowRightIcon size={14} />,
   SubagentStop: <ArrowLeftIcon size={14} />,
   Notification: <AlertTriangleIcon size={14} />,
-  tool_error: <XCircleIcon size={14} />,
-  pre_compact: <RefreshCwIcon size={14} />,
+  ToolError: <XCircleIcon size={14} />,
+  PreCompact: <RefreshCwIcon size={14} />,
   ToolUse: <SettingsIcon size={14} />,
 };
 
