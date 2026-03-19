@@ -7,6 +7,7 @@ import {
   processEvent,
   resetThrottleState,
   resetSubagentTrackers,
+  normalizeAgentName,
   EventCollectorError,
   type EventPayload,
   type EventCollectorDb,
@@ -556,7 +557,7 @@ describe('SSE broadcast', () => {
         team_id: 1,
         event_type: 'SessionStart',
         session_id: 'sess-xyz',
-        agent_name: 'kea-coordinator',
+        agent_name: 'kea-coordinator', // No fleet- prefix to strip here
         tool_name: null,
       }),
     );
@@ -792,7 +793,7 @@ describe('Edge cases', () => {
     expect(db.insertEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: null,
-        agentName: null,
+        agentName: 'team-lead', // Empty agent_type maps to "team-lead"
       }),
     );
   });
@@ -821,8 +822,8 @@ describe('Agent message routing', () => {
     expect(db.insertAgentMessage).toHaveBeenCalledWith({
       teamId: 1,
       eventId: 1,
-      sender: 'coordinator',
-      recipient: 'dev-typescript',
+      sender: 'coordinator', // already normalized (no fleet- prefix)
+      recipient: 'dev-typescript', // already normalized (no fleet- prefix)
       summary: 'Implement the feature',
       content: 'Full message content here',
       sessionId: 'sess-abc',
@@ -872,13 +873,14 @@ describe('Agent message routing', () => {
 
     expect(db.insertAgentMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        recipient: '*',
+        sender: 'coordinator',
+        recipient: '*', // "*" passes through normalization unchanged
         content: 'Team-wide broadcast',
       }),
     );
   });
 
-  it('uses "unknown" as sender when agent_type is missing', () => {
+  it('uses "team-lead" as sender when agent_type is missing', () => {
     const db = createMockDb();
     const sse = createMockSse();
     const payload = makePayload({
@@ -892,7 +894,7 @@ describe('Agent message routing', () => {
 
     expect(db.insertAgentMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        sender: 'unknown',
+        sender: 'team-lead', // Empty agent_type normalizes to "team-lead"
         recipient: 'dev-typescript',
       }),
     );
@@ -1452,8 +1454,8 @@ describe('cc_stdin payloads through processEvent', () => {
     expect(db.insertAgentMessage).toHaveBeenCalledWith({
       teamId: 1,
       eventId: 1,
-      sender: 'coordinator',
-      recipient: 'dev-typescript',
+      sender: 'coordinator', // normalized (no fleet- prefix to strip)
+      recipient: 'dev-typescript', // normalized (no fleet- prefix to strip)
       summary: 'Implement the fix',
       content: 'Full content',
       sessionId: 'sess-1',
@@ -1488,5 +1490,135 @@ describe('cc_stdin payloads through processEvent', () => {
     const insertCall = (db.insertEvent as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const storedPayload = JSON.parse(insertCall.payload);
     expect(storedPayload.tool_input).toBe(JSON.stringify(complexToolInput));
+  });
+});
+
+// =============================================================================
+// normalizeAgentName (Issue #178)
+// =============================================================================
+
+describe('normalizeAgentName', () => {
+  it('strips fleet- prefix', () => {
+    expect(normalizeAgentName('fleet-dev')).toBe('dev');
+    expect(normalizeAgentName('fleet-analyst')).toBe('analyst');
+    expect(normalizeAgentName('fleet-reviewer')).toBe('reviewer');
+  });
+
+  it('maps empty/null/undefined to "team-lead"', () => {
+    expect(normalizeAgentName(null)).toBe('team-lead');
+    expect(normalizeAgentName(undefined)).toBe('team-lead');
+    expect(normalizeAgentName('')).toBe('team-lead');
+    expect(normalizeAgentName('  ')).toBe('team-lead');
+  });
+
+  it('passes through names without fleet- prefix', () => {
+    expect(normalizeAgentName('coordinator')).toBe('coordinator');
+    expect(normalizeAgentName('dev-typescript')).toBe('dev-typescript');
+    expect(normalizeAgentName('team-lead')).toBe('team-lead');
+  });
+
+  it('trims whitespace', () => {
+    expect(normalizeAgentName(' fleet-dev ')).toBe('dev');
+    expect(normalizeAgentName(' coordinator ')).toBe('coordinator');
+  });
+});
+
+// =============================================================================
+// Agent name normalization in event processing (Issue #178)
+// =============================================================================
+
+describe('Agent name normalization in event processing', () => {
+  it('normalizes fleet- prefixed agent_type in event insertion', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      agent_type: 'fleet-dev',
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'dev', // fleet- prefix stripped
+      }),
+    );
+  });
+
+  it('normalizes fleet- prefixed agent_type in SSE broadcast', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'session_start',
+      agent_type: 'fleet-analyst',
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(sse.broadcast).toHaveBeenCalledWith(
+      'team_event',
+      expect.objectContaining({
+        agent_name: 'analyst', // fleet- prefix stripped
+      }),
+    );
+  });
+
+  it('maps missing agent_type to team-lead in event insertion', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'session_start',
+      agent_type: undefined,
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'team-lead',
+      }),
+    );
+  });
+
+  it('normalizes fleet- prefixed sender and recipient in agent messages', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      tool_name: 'SendMessage',
+      agent_type: 'fleet-analyst',
+      msg_to: 'fleet-dev',
+      msg_summary: 'Here is the brief',
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: 'analyst', // fleet- prefix stripped
+        recipient: 'dev',  // fleet- prefix stripped
+      }),
+    );
+  });
+
+  it('normalizes msg_to with fleet- prefix in agent messages', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      tool_name: 'SendMessage',
+      agent_type: 'coordinator',
+      msg_to: 'fleet-reviewer',
+      msg_summary: 'Please review',
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: 'coordinator',
+        recipient: 'reviewer', // fleet- prefix stripped
+      }),
+    );
   });
 });

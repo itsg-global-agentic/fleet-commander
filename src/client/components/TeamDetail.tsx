@@ -71,6 +71,7 @@ export function TeamDetail() {
   const [roster, setRoster] = useState<TeamMember[]>([]);
   const [activeTab, setActiveTab] = useState<'activity' | 'communication'>('activity');
   const [messageEdges, setMessageEdges] = useState<MessageEdge[]>([]);
+  const [metadataCollapsed, setMetadataCollapsed] = useState(false);
   const templateCacheRef = useRef<{ data: Array<{ id: string; template: string; enabled: boolean }>; fetchedAt: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -164,10 +165,19 @@ export function TeamDetail() {
     };
   }, [selectedTeamId, refreshKey, api]);
 
-  // Reset active tab when team changes
+  // Reset active tab and metadata collapse state when team changes
   useEffect(() => {
     setActiveTab('activity');
+    // Auto-collapse metadata for done/failed teams to give more space to content
+    setMetadataCollapsed(false);
   }, [selectedTeamId]);
+
+  // Auto-collapse metadata when team transitions to terminal state
+  useEffect(() => {
+    if (detail?.status === 'done' || detail?.status === 'failed') {
+      setMetadataCollapsed(true);
+    }
+  }, [detail?.status]);
 
   // Fetch team detail when selectedTeamId changes
   useEffect(() => {
@@ -400,20 +410,34 @@ export function TeamDetail() {
 
           {detail && (
             <>
-              {/* TOP: Metadata — scrollable if needed */}
-              <div className="shrink-0 overflow-y-auto max-h-[40%] custom-scrollbar">
-                <div className="p-5 space-y-4">
+              {/* TOP: Metadata — collapsible, auto-collapsed for done/failed */}
+              <div className="shrink-0">
+                {/* Always-visible header with collapse toggle */}
+                <div
+                  className="flex items-center justify-between px-5 py-3 cursor-pointer hover:bg-dark-border/10 transition-colors"
+                  onClick={() => setMetadataCollapsed((c) => !c)}
+                >
+                  <h3 className="text-base font-semibold text-dark-text">
+                    <span className="text-dark-muted mr-1.5">#{detail.issueNumber}</span>
+                    {detail.issueTitle ?? 'Untitled'}
+                  </h3>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <StatusBadge status={detail.status} />
+                    <svg
+                      className={`w-4 h-4 text-dark-muted transition-transform duration-200 ${metadataCollapsed ? '' : 'rotate-180'}`}
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path fillRule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 11.168l3.71-3.938a.75.75 0 111.08 1.04l-4.25 4.5a.75.75 0 01-1.08 0l-4.25-4.5a.75.75 0 01.02-1.06z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                </div>
+
+                {/* Collapsible metadata content */}
+                <div className={`overflow-y-auto custom-scrollbar transition-all duration-200 ${metadataCollapsed ? 'max-h-0 overflow-hidden' : 'max-h-[35%]'}`}>
+                <div className="px-5 pb-4 space-y-4">
                   {/* ---- Header Section ---- */}
                   <section>
-                    <h3 className="text-base font-semibold text-dark-text mb-2">
-                      <span className="text-dark-muted mr-1.5">#{detail.issueNumber}</span>
-                      {detail.issueTitle ?? 'Untitled'}
-                    </h3>
-
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <StatusBadge status={detail.status} />
-                    </div>
-
                     {/* Duration + Last Activity row */}
                     <div className="flex items-center gap-4 mt-3 text-sm">
                       <span className="text-dark-muted">
@@ -662,6 +686,7 @@ export function TeamDetail() {
                       <p className="text-sm text-dark-muted">PR #{detail.prNumber} (details loading...)</p>
                     </section>
                   )}
+                </div>
                 </div>
               </div>
 

@@ -62,14 +62,19 @@ const ROLE_MAP: Record<string, string> = {
   coordinator: 'Coordinator',
   analyst: 'Analyst',
   reviewer: 'Reviewer',
+  'team-lead': 'Team Lead',
+  tl: 'Team Lead',
+  dev: 'Developer',
 };
 
 /** Derive a human-readable role from the agent name. */
 function deriveRole(name: string): string {
   const lower = name.toLowerCase();
-  if (ROLE_MAP[lower]) return ROLE_MAP[lower];
-  if (lower.startsWith('dev-')) return `Developer (${name.slice(4)})`;
-  if (lower.includes('dev')) return 'Developer';
+  // Strip fleet- prefix for role lookup (backward compat with un-normalized data)
+  const stripped = lower.startsWith('fleet-') ? lower.slice(6) : lower;
+  if (ROLE_MAP[stripped]) return ROLE_MAP[stripped];
+  if (stripped.startsWith('dev-')) return `Developer (${name.replace(/^fleet-/i, '').slice(4)})`;
+  if (stripped.includes('dev')) return 'Developer';
   return name;
 }
 
@@ -1119,9 +1124,14 @@ export class FleetDatabase {
   // -------------------------------------------------------------------------
 
   getTeamRoster(teamId: number): TeamMember[] {
+    // Normalize agent names in SQL: strip "fleet-" prefix and coalesce empty to "team-lead"
+    // for backward compatibility with data inserted before normalization was added.
     const sql = `
       SELECT
-        agent_name AS name,
+        CASE
+          WHEN agent_name LIKE 'fleet-%' THEN SUBSTR(agent_name, 7)
+          ELSE agent_name
+        END AS name,
         MIN(created_at) AS first_seen,
         MAX(created_at) AS last_seen,
         SUM(CASE WHEN event_type = 'ToolUse' THEN 1 ELSE 0 END) AS tool_use_count,
@@ -1130,7 +1140,10 @@ export class FleetDatabase {
         SUM(CASE WHEN event_type = 'SubagentStop' THEN 1 ELSE 0 END) AS stops
       FROM events
       WHERE team_id = ? AND agent_name IS NOT NULL AND agent_name != ''
-      GROUP BY agent_name
+      GROUP BY CASE
+        WHEN agent_name LIKE 'fleet-%' THEN SUBSTR(agent_name, 7)
+        ELSE agent_name
+      END
       ORDER BY MIN(created_at) ASC
     `;
     const rows = this.db.prepare(sql).all(teamId) as Record<string, unknown>[];
@@ -1187,22 +1200,28 @@ export class FleetDatabase {
   }
 
   getAgentMessageSummary(teamId: number): MessageEdge[] {
+    // Normalize sender/recipient names: strip "fleet-" prefix for backward compat
+    // with data inserted before normalization was added.
     const sql = `
       SELECT
-        sender,
-        recipient,
+        CASE WHEN sender LIKE 'fleet-%' THEN SUBSTR(sender, 7) ELSE sender END AS sender,
+        CASE WHEN recipient LIKE 'fleet-%' THEN SUBSTR(recipient, 7) ELSE recipient END AS recipient,
         COUNT(*) AS count,
         (
           SELECT summary FROM agent_messages AS am2
           WHERE am2.team_id = am.team_id
-            AND am2.sender = am.sender
-            AND am2.recipient = am.recipient
+            AND (CASE WHEN am2.sender LIKE 'fleet-%' THEN SUBSTR(am2.sender, 7) ELSE am2.sender END)
+              = (CASE WHEN am.sender LIKE 'fleet-%' THEN SUBSTR(am.sender, 7) ELSE am.sender END)
+            AND (CASE WHEN am2.recipient LIKE 'fleet-%' THEN SUBSTR(am2.recipient, 7) ELSE am2.recipient END)
+              = (CASE WHEN am.recipient LIKE 'fleet-%' THEN SUBSTR(am.recipient, 7) ELSE am.recipient END)
           ORDER BY am2.created_at DESC, am2.id DESC
           LIMIT 1
         ) AS last_summary
       FROM agent_messages AS am
       WHERE team_id = ?
-      GROUP BY sender, recipient
+      GROUP BY
+        CASE WHEN sender LIKE 'fleet-%' THEN SUBSTR(sender, 7) ELSE sender END,
+        CASE WHEN recipient LIKE 'fleet-%' THEN SUBSTR(recipient, 7) ELSE recipient END
       ORDER BY count DESC
     `;
     const rows = this.db.prepare(sql).all(teamId) as Array<{

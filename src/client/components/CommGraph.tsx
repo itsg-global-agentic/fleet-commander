@@ -18,6 +18,17 @@ function agentColor(name: string): string {
   return AGENT_PALETTE[Math.abs(hash) % AGENT_PALETTE.length];
 }
 
+/**
+ * Normalize agent name for consistent matching between roster and message edges.
+ * Strips "fleet-" prefix and lowercases. Client-side defense in case server-side
+ * normalization hasn't been applied to historical data.
+ */
+function normalizeName(name: string): string {
+  let n = name.trim().toLowerCase();
+  if (n.startsWith('fleet-')) n = n.slice(6);
+  return n;
+}
+
 // ---------------------------------------------------------------------------
 // Layout helpers
 // ---------------------------------------------------------------------------
@@ -60,11 +71,13 @@ function layoutNodes(
     msgCounts.set(e.recipient, (msgCounts.get(e.recipient) ?? 0) + e.count);
   }
 
-  // Identify the hub: prefer "team-lead" or "coordinator", else pick the agent
-  // with the most messages. Fallback to first agent.
-  const hubCandidates = agents.filter(
-    (a) => a.name === 'team-lead' || a.name === 'coordinator',
-  );
+  // Identify the hub: prefer "team-lead" or "coordinator" by normalized name,
+  // else pick the agent with the most messages. When all counts are 0 (no edges),
+  // fall back to the first roster member (typically team-lead).
+  const hubCandidates = agents.filter((a) => {
+    const n = normalizeName(a.name);
+    return n === 'team-lead' || n === 'coordinator' || n === 'tl';
+  });
   let hub: TeamMember | undefined = hubCandidates[0];
   if (!hub) {
     // Pick the agent with highest message volume
@@ -154,15 +167,24 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
 
   const nodeMap = useMemo(() => {
     const map = new Map<string, NodePosition>();
-    for (const n of nodes) map.set(n.name, n);
+    for (const n of nodes) {
+      map.set(n.name, n);
+      // Also index by normalized name for edge matching with un-normalized data
+      map.set(normalizeName(n.name), n);
+    }
     return map;
   }, [nodes]);
 
-  // Filter edges when a node is selected
+  // Filter edges when a node is selected (compare with normalized names)
   const visibleEdges = useMemo(() => {
     if (!selectedNode) return edges;
+    const selectedNorm = normalizeName(selectedNode);
     return edges.filter(
-      (e) => e.sender === selectedNode || e.recipient === selectedNode,
+      (e) =>
+        e.sender === selectedNode ||
+        e.recipient === selectedNode ||
+        normalizeName(e.sender) === selectedNorm ||
+        normalizeName(e.recipient) === selectedNorm,
     );
   }, [edges, selectedNode]);
 
@@ -212,8 +234,9 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
 
         {/* Edges */}
         {visibleEdges.map((edge) => {
-          const from = nodeMap.get(edge.sender);
-          const to = nodeMap.get(edge.recipient);
+          // Look up by exact name first, then by normalized name for backward compat
+          const from = nodeMap.get(edge.sender) ?? nodeMap.get(normalizeName(edge.sender));
+          const to = nodeMap.get(edge.recipient) ?? nodeMap.get(normalizeName(edge.recipient));
           if (!from || !to) return null;
 
           // Shorten line to stop at node border (radius + gap)

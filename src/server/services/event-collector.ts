@@ -120,6 +120,27 @@ const SUBAGENT_MIN_EVENTS = 5;
 const TOOL_USE_THROTTLE_MS = 5000; // 5 seconds
 
 // ---------------------------------------------------------------------------
+// Agent name normalization
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize agent name for consistent matching across roster and messages.
+ *
+ * - Strips `fleet-` prefix (e.g. "fleet-dev" -> "dev", "fleet-analyst" -> "analyst")
+ * - Maps empty/null/undefined to "team-lead" (the main CC process has no agent_type)
+ * - Returns lowercase trimmed name
+ */
+export function normalizeAgentName(name: string | null | undefined): string {
+  if (!name || name.trim() === '') return 'team-lead';
+  let normalized = name.trim();
+  // Strip "fleet-" prefix for consistent cross-reference
+  if (normalized.startsWith('fleet-')) {
+    normalized = normalized.slice(6);
+  }
+  return normalized;
+}
+
+// ---------------------------------------------------------------------------
 // Event type normalization
 // ---------------------------------------------------------------------------
 
@@ -271,11 +292,16 @@ export function processEvent(
   // ── Normalize event type ─────────────────────────────────────────
   const eventType = normalizeEventType(payload.event);
 
+  // ── Normalize agent name ────────────────────────────────────────
+  // Strip "fleet-" prefix and map empty agent_type to "team-lead"
+  // so roster names and message sender/recipient names match.
+  const agentName = normalizeAgentName(payload.agent_type);
+
   // ── Insert event into database ───────────────────────────────────
   const inserted = db.insertEvent({
     teamId,
     sessionId: payload.session_id || null,
-    agentName: payload.agent_type || null,
+    agentName,
     eventType,
     toolName: payload.tool_name || null,
     payload: JSON.stringify(payload),
@@ -288,7 +314,7 @@ export function processEvent(
     team_id: teamId,
     event_type: eventType,
     session_id: payload.session_id || null,
-    agent_name: payload.agent_type || null,
+    agent_name: agentName,
     tool_name: payload.tool_name || null,
     timestamp: payload.timestamp || nowIso,
   });
@@ -300,15 +326,15 @@ export function processEvent(
   const evtLower = payload.event.toLowerCase();
 
   if (evtLower === 'subagent_start') {
-    const agentName = payload.teammate_name || payload.agent_type || 'unknown';
-    const trackerKey = `${payload.team}:${agentName}`;
+    const subagentName = payload.teammate_name || payload.agent_type || 'unknown';
+    const trackerKey = `${payload.team}:${subagentName}`;
     subagentTrackers.set(trackerKey, { startTime: now, eventCount: 0 });
   }
 
   // Increment event count for any tracked subagent on this team
   if (payload.agent_type || payload.teammate_name) {
-    const agentName = payload.teammate_name || payload.agent_type || 'unknown';
-    const trackerKey = `${payload.team}:${agentName}`;
+    const subagentName = payload.teammate_name || payload.agent_type || 'unknown';
+    const trackerKey = `${payload.team}:${subagentName}`;
     const tracker = subagentTrackers.get(trackerKey);
     if (tracker) {
       tracker.eventCount++;
@@ -316,8 +342,8 @@ export function processEvent(
   }
 
   if (evtLower === 'subagent_stop' && messageSender) {
-    const agentName = payload.teammate_name || payload.agent_type || 'unknown';
-    const trackerKey = `${payload.team}:${agentName}`;
+    const subagentName = payload.teammate_name || payload.agent_type || 'unknown';
+    const trackerKey = `${payload.team}:${subagentName}`;
     const tracker = subagentTrackers.get(trackerKey);
 
     if (tracker) {
@@ -326,10 +352,10 @@ export function processEvent(
 
       if (durationMs < SUBAGENT_MIN_DURATION_MS && tracker.eventCount < SUBAGENT_MIN_EVENTS) {
         const crashMsg =
-          `Subagent '${agentName}' appears to have crashed (${durationSec}s after start, ${tracker.eventCount} events). Consider respawning.`;
+          `Subagent '${subagentName}' appears to have crashed (${durationSec}s after start, ${tracker.eventCount} events). Consider respawning.`;
         try {
           messageSender.sendMessage(teamId, crashMsg);
-          console.log(`[EventCollector] Subagent crash advisory sent for ${agentName} on team ${teamId}`);
+          console.log(`[EventCollector] Subagent crash advisory sent for ${subagentName} on team ${teamId}`);
         } catch {
           // Non-critical — silently ignore send failures
         }
@@ -348,8 +374,8 @@ export function processEvent(
       db.insertAgentMessage({
         teamId,
         eventId,
-        sender: payload.agent_type || 'unknown',
-        recipient: payload.msg_to,
+        sender: normalizeAgentName(payload.agent_type),
+        recipient: normalizeAgentName(payload.msg_to),
         summary: payload.msg_summary || null,
         content: payload.message || null,
         sessionId: payload.session_id || null,

@@ -129,9 +129,12 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
   }, [events]);
 
   if (events.length === 0) {
+    const isTerminal = teamStatus === 'done' || teamStatus === 'failed';
     return (
       <div className="text-xs text-dark-muted italic py-2">
-        No stream events yet. Events appear when Claude Code is running.
+        {isTerminal
+          ? 'No session log captured.'
+          : 'No stream events yet. Events appear when Claude Code is running.'}
       </div>
     );
   }
