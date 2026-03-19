@@ -7,11 +7,12 @@ import { useApi } from '../hooks/useApi';
 
 interface CommandInputProps {
   teamId: number;
+  disabled?: boolean;
 }
 
 type FeedbackState = null | { type: 'success'; message: string } | { type: 'error'; message: string };
 
-export function CommandInput({ teamId }: CommandInputProps) {
+export function CommandInput({ teamId, disabled = false }: CommandInputProps) {
   const api = useApi();
   const [message, setMessage] = useState('');
   const [sending, setSending] = useState(false);
@@ -69,13 +70,13 @@ export function CommandInput({ teamId }: CommandInputProps) {
           type="text"
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          disabled={sending}
-          placeholder="Send message to team..."
+          disabled={disabled || sending}
+          placeholder={disabled ? 'Team is not running' : 'Send message to team...'}
           className="flex-1 bg-dark-base border border-dark-border rounded px-3 py-2 text-sm text-dark-text placeholder-dark-muted focus:outline-none focus:border-dark-accent transition-colors disabled:opacity-50"
         />
         <button
           type="submit"
-          disabled={sending || !message.trim()}
+          disabled={disabled || sending || !message.trim()}
           className="px-4 py-2 text-sm font-medium rounded bg-dark-accent text-white hover:bg-dark-accent/80 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
         >
           {sending ? 'Sending...' : 'Send'}

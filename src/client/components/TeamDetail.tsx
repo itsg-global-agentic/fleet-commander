@@ -725,7 +725,7 @@ export function TeamDetail() {
 
               {/* BOTTOM: Command + Actions footer */}
               <div className="shrink-0 border-t border-dark-border px-5 py-4 space-y-4">
-                <CommandInput teamId={detail.id} />
+                <CommandInput teamId={detail.id} disabled={!isActive} />
                 {/* Quick Actions */}
                 <div className="flex items-center gap-1.5 flex-wrap">
                   <span className="text-xs text-dark-muted mr-1">Quick:</span>
@@ -738,7 +738,7 @@ export function TeamDetail() {
                     <button
                       key={action.id}
                       onClick={() => handleQuickAction(action.id)}
-                      disabled={quickActionLoading !== null}
+                      disabled={!isActive || quickActionLoading !== null}
                       className="px-2.5 py-1 text-xs rounded-full border transition-colors disabled:opacity-40"
                       style={{
                         color: action.color,
