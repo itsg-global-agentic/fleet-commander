@@ -12,7 +12,7 @@
 // Dependencies are fetched inline via the blockedBy field in the main issue query.
 // =============================================================================
 
-import { exec } from 'child_process';
+import { exec, spawn } from 'child_process';
 import { promisify } from 'util';
 import config from '../config.js';
 import { getDatabase } from '../db.js';
@@ -641,12 +641,8 @@ export class IssueFetcher {
         variables: { owner, repo, issueNumber },
       });
 
-      const { stdout } = await execAsync('gh api graphql --input -', {
-        encoding: 'utf-8',
-        timeout: 15_000,
-        env: { ...process.env },
-        ...({ input: requestBody } as Record<string, unknown>),
-      });
+      // spawn + stdin pipe is used because exec does NOT support the `input` option.
+      const stdout = await this.runGHGraphQL(requestBody, 15_000);
 
       const result = JSON.parse(stdout) as {
         data?: {
@@ -831,6 +827,47 @@ export class IssueFetcher {
   }
 
   /**
+   * Execute `gh api graphql --input -` by spawning a child process and piping
+   * the request body to stdin.  Returns the raw stdout string on success.
+   *
+   * `child_process.exec` does NOT support the `input` option (only `execSync`
+   * does), so we use `spawn` with explicit stdin piping wrapped in a Promise.
+   */
+  private runGHGraphQL(requestBody: string, timeoutMs = 30_000): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn('gh', ['api', 'graphql', '--input', '-'], {
+        env: process.env,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout.on('data', (d: Buffer) => { stdout += d; });
+      child.stderr.on('data', (d: Buffer) => { stderr += d; });
+
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error(`gh api graphql timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        if (code === 0) resolve(stdout);
+        else reject(new Error(`gh api graphql failed (code ${code}): ${stderr}`));
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+
+      child.stdin.write(requestBody);
+      child.stdin.end();
+    });
+  }
+
+  /**
    * Run a single GraphQL query via `gh api graphql --input -`.
    * Returns parsed JSON or null on error.
    */
@@ -857,12 +894,8 @@ export class IssueFetcher {
       });
 
       // Use `gh api graphql` with --input - to read the JSON body from stdin.
-      const { stdout } = await execAsync('gh api graphql --input -', {
-        encoding: 'utf-8',
-        timeout: 30_000,
-        env: { ...process.env },
-        ...({ input: requestBody } as Record<string, unknown>),
-      });
+      // spawn + stdin pipe is used because exec does NOT support the `input` option.
+      const stdout = await this.runGHGraphQL(requestBody, 30_000);
 
       const parsed = JSON.parse(stdout) as GraphQLResponse;
 
