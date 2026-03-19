@@ -1,6 +1,52 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
 import type { ProjectSummary, Team, TeamStatus } from '../../shared/types';
+
+// ---------------------------------------------------------------------------
+// Flattened issue item used in the issue picker
+// ---------------------------------------------------------------------------
+
+interface IssueItem {
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+  labels: string[];
+  activeTeam?: { id: number; status: string } | null;
+}
+
+// ---------------------------------------------------------------------------
+// Issue tree node shape returned by the issues API
+// ---------------------------------------------------------------------------
+
+interface IssueTreeNode {
+  number: number;
+  title: string;
+  state: 'open' | 'closed';
+  labels: string[];
+  children: IssueTreeNode[];
+  activeTeam?: { id: number; status: string } | null;
+}
+
+/** Flatten an issue tree into a single-level array */
+function flattenIssueTree(nodes: IssueTreeNode[]): IssueItem[] {
+  const result: IssueItem[] = [];
+  const walk = (list: IssueTreeNode[]): void => {
+    for (const node of list) {
+      result.push({
+        number: node.number,
+        title: node.title,
+        state: node.state,
+        labels: node.labels,
+        activeTeam: node.activeTeam,
+      });
+      if (node.children.length > 0) {
+        walk(node.children);
+      }
+    }
+  };
+  walk(nodes);
+  return result;
+}
 
 // ---------------------------------------------------------------------------
 // Props
@@ -332,6 +378,12 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
 
+  // --- Issue picker state ---
+  const [issues, setIssues] = useState<IssueItem[]>([]);
+  const [issuesLoading, setIssuesLoading] = useState(false);
+  const [issuesError, setIssuesError] = useState<string | null>(null);
+  const [issueSearch, setIssueSearch] = useState('');
+
   // --- Usage zone state ---
   const [zone, setZone] = useState<'green' | 'yellow' | 'red'>('green');
 
@@ -376,6 +428,37 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     }
   }, [open, api]);
 
+  // Fetch issues when a project is selected
+  useEffect(() => {
+    if (!selectedProjectId) {
+      setIssues([]);
+      setIssuesError(null);
+      return;
+    }
+
+    let cancelled = false;
+    setIssuesLoading(true);
+    setIssuesError(null);
+
+    api.get<{ tree: IssueTreeNode[] }>(`projects/${selectedProjectId}/issues`)
+      .then((data) => {
+        if (cancelled) return;
+        const flat = flattenIssueTree(data.tree);
+        setIssues(flat);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        setIssuesError(message || 'Failed to fetch issues');
+        setIssues([]);
+      })
+      .finally(() => {
+        if (!cancelled) setIssuesLoading(false);
+      });
+
+    return () => { cancelled = true; };
+  }, [selectedProjectId, api]);
+
   // Reset form when dialog opens
   useEffect(() => {
     if (open) {
@@ -390,6 +473,9 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       setLaunchedTeamId(null);
       setLaunchedIssueNumber(null);
       setZone('green');
+      setIssues([]);
+      setIssuesError(null);
+      setIssueSearch('');
     }
   }, [open]);
 
@@ -414,6 +500,24 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     },
     [onClose],
   );
+
+  // --- Filtered issue list for the picker ---
+  const filteredIssues = useMemo(() => {
+    if (!issueSearch.trim()) return issues;
+    const q = issueSearch.toLowerCase().trim();
+    const numMatch = q.startsWith('#') ? parseInt(q.slice(1), 10) : (/^\d+$/.test(q) ? parseInt(q, 10) : NaN);
+    return issues.filter((issue) =>
+      (!isNaN(numMatch) && issue.number === numMatch) ||
+      issue.title.toLowerCase().includes(q) ||
+      String(issue.number).includes(q),
+    );
+  }, [issues, issueSearch]);
+
+  // --- Select an issue from the picker ---
+  const handleSelectIssue = useCallback((issue: IssueItem) => {
+    setIssueNumber(String(issue.number));
+    setIssueSearch('');
+  }, []);
 
   // --- Single launch (with optional force flag for red zone override) ---
   const handleLaunch = useCallback(async (force?: boolean) => {
@@ -490,14 +594,14 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       return;
     }
 
-    const issues = numbers.map((n) => ({ number: n }));
+    const batchIssueList = numbers.map((n) => ({ number: n }));
     const effectivePrompt = prompt.trim() || undefined;
     const projectId = selectedProjectId ? parseInt(selectedProjectId, 10) : undefined;
 
     setLoading(true);
     try {
       await api.post('teams/launch-batch', {
-        issues,
+        issues: batchIssueList,
         prompt: effectivePrompt,
         delayMs: delay,
         projectId,
@@ -545,7 +649,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
         >
           <div
             ref={dialogRef}
-            className="w-[480px] max-w-[95vw] bg-dark-surface border border-dark-border rounded-lg shadow-2xl"
+            className="w-[480px] max-w-[95vw] max-h-[90vh] flex flex-col bg-dark-surface border border-dark-border rounded-lg shadow-2xl"
             role="dialog"
             aria-modal="true"
             aria-label={showingLog ? 'Launch Progress' : 'Launch Team'}
@@ -578,7 +682,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
                 onClose={onClose}
               />
             ) : (
-              <div className="px-5 py-4 space-y-4">
+              <div className="px-5 py-4 space-y-4 overflow-y-auto">
                 {/* Project selector */}
                 {projects.length > 0 ? (
                   <div>
@@ -633,22 +737,147 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
 
                 {/* Issue input — single or batch */}
                 {!batchMode ? (
-                  <div>
-                    <label className="block text-sm text-dark-muted mb-1">
-                      Issue number <span className="text-[#F85149]">*</span>
-                    </label>
-                    <input
-                      ref={inputRef}
-                      type="text"
-                      inputMode="numeric"
-                      pattern="[0-9]*"
-                      value={issueNumber}
-                      onChange={(e) => setIssueNumber(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                      placeholder="e.g. 763"
-                      className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
-                      disabled={loading}
-                    />
+                  <div className="space-y-2">
+                    {/* Issue picker — shown when a project is selected */}
+                    {selectedProjectId && (
+                      <div>
+                        <label className="block text-sm text-dark-muted mb-1">
+                          Select issue
+                        </label>
+
+                        {issuesLoading && (
+                          <div className="flex items-center gap-2 px-3 py-2 text-xs text-dark-muted">
+                            <svg className="animate-spin h-3 w-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                            </svg>
+                            Loading issues...
+                          </div>
+                        )}
+
+                        {issuesError && (
+                          <div className="px-3 py-2 rounded border border-[#F85149]/30 bg-[#F85149]/10 text-[#F85149] text-xs">
+                            {issuesError}
+                          </div>
+                        )}
+
+                        {!issuesLoading && !issuesError && issues.length > 0 && (
+                          <>
+                            {/* Search filter for issues */}
+                            <div className="relative mb-1">
+                              <input
+                                type="text"
+                                value={issueSearch}
+                                onChange={(e) => setIssueSearch(e.target.value)}
+                                placeholder="Filter issues... (#number or title)"
+                                className="w-full px-3 py-1.5 text-xs rounded border border-dark-border bg-[#0D1117] text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+                                disabled={loading}
+                              />
+                              {issueSearch && (
+                                <button
+                                  onClick={() => setIssueSearch('')}
+                                  className="absolute right-2 top-1/2 -translate-y-1/2 text-dark-muted hover:text-dark-text transition-colors"
+                                  aria-label="Clear search"
+                                >
+                                  <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+                                    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+                                  </svg>
+                                </button>
+                              )}
+                            </div>
+
+                            {/* Scrollable issue list */}
+                            <div className="max-h-[200px] overflow-y-auto border border-dark-border rounded bg-[#0D1117]">
+                              {filteredIssues.length === 0 ? (
+                                <div className="px-3 py-2 text-xs text-dark-muted">
+                                  No issues match &ldquo;{issueSearch}&rdquo;
+                                </div>
+                              ) : (
+                                filteredIssues.map((issue) => {
+                                  const isSelected = issueNumber === String(issue.number);
+                                  const hasTeam = !!issue.activeTeam;
+                                  return (
+                                    <button
+                                      key={issue.number}
+                                      onClick={() => handleSelectIssue(issue)}
+                                      disabled={loading}
+                                      className={`w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors border-b border-dark-border/30 last:border-b-0 ${
+                                        isSelected
+                                          ? 'bg-dark-accent/15 text-dark-accent'
+                                          : 'hover:bg-dark-surface text-dark-text'
+                                      }`}
+                                    >
+                                      {/* Issue state icon */}
+                                      {issue.state === 'open' ? (
+                                        <svg className="w-3.5 h-3.5 text-[#3FB950] shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                                          <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                                          <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
+                                        </svg>
+                                      ) : (
+                                        <svg className="w-3.5 h-3.5 text-[#A371F7] shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                                          <path d="M11.28 6.78a.75.75 0 0 0-1.06-1.06L7.25 8.69 5.78 7.22a.75.75 0 0 0-1.06 1.06l2 2a.75.75 0 0 0 1.06 0l3.5-3.5Z" />
+                                          <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z" />
+                                        </svg>
+                                      )}
+
+                                      <span className="text-dark-muted shrink-0">#{issue.number}</span>
+                                      <span className="truncate">{issue.title}</span>
+
+                                      {/* Active team badge */}
+                                      {hasTeam && (
+                                        <span className="ml-auto shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-[#D29922]/15 text-[#D29922] border border-[#D29922]/30">
+                                          {issue.activeTeam!.status}
+                                        </span>
+                                      )}
+
+                                      {/* Selected checkmark */}
+                                      {isSelected && (
+                                        <svg className="w-3.5 h-3.5 text-dark-accent ml-auto shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                                        </svg>
+                                      )}
+                                    </button>
+                                  );
+                                })
+                              )}
+                            </div>
+
+                            <p className="text-xs text-dark-muted mt-1">
+                              {issues.length} issue{issues.length !== 1 ? 's' : ''} found
+                              {issueSearch && filteredIssues.length !== issues.length && ` (${filteredIssues.length} matching)`}
+                            </p>
+                          </>
+                        )}
+
+                        {!issuesLoading && !issuesError && issues.length === 0 && (
+                          <div className="px-3 py-2 text-xs text-dark-muted">
+                            No issues found for this project
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Manual issue number input (always available as fallback) */}
+                    <div>
+                      <label className="block text-sm text-dark-muted mb-1">
+                        Issue number <span className="text-[#F85149]">*</span>
+                        {selectedProjectId && issues.length > 0 && (
+                          <span className="text-dark-muted/50 text-xs ml-1">(or type manually)</span>
+                        )}
+                      </label>
+                      <input
+                        ref={inputRef}
+                        type="text"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        value={issueNumber}
+                        onChange={(e) => setIssueNumber(e.target.value)}
+                        onKeyDown={handleKeyDown}
+                        placeholder="e.g. 763"
+                        className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+                        disabled={loading}
+                      />
+                    </div>
                   </div>
                 ) : (
                   <>
