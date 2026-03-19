@@ -744,6 +744,57 @@ export class TeamManager {
   }
 
   // -------------------------------------------------------------------------
+  // forceLaunch — bypass usage gate and slot limits to launch a queued team
+  // -------------------------------------------------------------------------
+
+  async forceLaunch(teamId: number): Promise<Team> {
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw new Error(`Team ${teamId} not found`);
+    }
+
+    if (team.status !== 'queued') {
+      throw new Error(`Team ${teamId} is not queued (current status: ${team.status})`);
+    }
+
+    const projectId = team.projectId;
+    if (!projectId) {
+      throw new Error(`Team ${teamId} has no project ID`);
+    }
+
+    const project = db.getProject(projectId);
+    if (!project) {
+      throw new Error(`Project ${projectId} not found`);
+    }
+
+    // Log a warning if this exceeds maxActiveTeams
+    const activeCount = db.getActiveTeamCountByProject(projectId);
+    if (activeCount >= project.maxActiveTeams) {
+      console.warn(
+        `[TeamManager] Force-launching team ${teamId} exceeds maxActiveTeams (${activeCount}/${project.maxActiveTeams})`,
+      );
+    }
+
+    // Insert transition and update status BEFORE calling launchQueued,
+    // since launchQueued's guard at the top accepts both 'queued' and 'launching'.
+    db.insertTransition({
+      teamId,
+      fromStatus: 'queued',
+      toStatus: 'launching',
+      trigger: 'pm_action',
+      reason: 'PM force-launched team',
+    });
+    db.updateTeam(teamId, { status: 'launching' });
+    this.broadcastSnapshot();
+
+    // Delegate to the existing private launch method
+    await this.launchQueued(team);
+
+    return db.getTeam(teamId)!;
+  }
+
+  // -------------------------------------------------------------------------
   // processQueue — dequeue and launch teams when slots free up
   // -------------------------------------------------------------------------
 

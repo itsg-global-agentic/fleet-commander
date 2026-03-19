@@ -58,6 +58,16 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     hookEvent: null,
   },
   {
+    id: 'queued-launching-force',
+    from: 'queued',
+    to: 'launching',
+    trigger: 'pm_action',
+    triggerLabel: 'PM force launch',
+    description: 'PM force-launches a queued team, bypassing usage gate and slot limits',
+    condition: 'Manual PM action via API, bypasses usage gate',
+    hookEvent: null,
+  },
+  {
     id: 'launching-running',
     from: 'launching',
     to: 'running',

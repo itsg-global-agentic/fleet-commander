@@ -43,6 +43,7 @@ interface TeamRowProps {
 export function TeamRow({ team, selected, onClick }: TeamRowProps) {
   const api = useApi();
   const [stopping, setStopping] = useState(false);
+  const [forceLaunching, setForceLaunching] = useState(false);
 
   const handleStop = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -54,6 +55,19 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
       // Ignore — the SSE stream will reflect actual state
     } finally {
       setStopping(false);
+    }
+  };
+
+  const handleForceLaunch = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (forceLaunching) return;
+    setForceLaunching(true);
+    try {
+      await api.post(`teams/${team.id}/force-launch`);
+    } catch {
+      // Ignore — the SSE stream will reflect actual state
+    } finally {
+      setForceLaunching(false);
     }
   };
 
@@ -147,6 +161,16 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
       {/* Actions */}
       <td className="px-4 whitespace-nowrap">
         <span className="inline-flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+          {team.status === 'queued' && (
+            <button
+              onClick={handleForceLaunch}
+              disabled={forceLaunching}
+              className="px-2 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-[#D29922] hover:border-[#D29922]/50 transition-colors disabled:opacity-50"
+              title="Launch immediately despite usage limit"
+            >
+              {forceLaunching ? 'Launching\u2026' : 'Force Launch'}
+            </button>
+          )}
           {isActive && (
             <button
               onClick={handleStop}
