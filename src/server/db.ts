@@ -311,6 +311,9 @@ export class FleetDatabase {
     // Add agent_messages table if missing (v5 migration)
     this.addAgentMessagesTable();
 
+    // Add stream_events table if missing (v6 migration — persist session log)
+    this.addStreamEventsTable();
+
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
     // In compiled (node): __dirname is dist/server/server
@@ -607,6 +610,23 @@ export class FleetDatabase {
           created_at      TEXT NOT NULL DEFAULT (datetime('now'))
         );
         CREATE INDEX IF NOT EXISTS idx_agent_messages_team ON agent_messages(team_id);
+      `);
+    } catch {
+      // Table may already exist — safe to ignore
+    }
+  }
+
+  private addStreamEventsTable(): void {
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS stream_events (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          team_id         INTEGER NOT NULL UNIQUE REFERENCES teams(id),
+          event_data      TEXT NOT NULL,
+          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_stream_events_team ON stream_events(team_id);
       `);
     } catch {
       // Table may already exist — safe to ignore
@@ -1499,6 +1519,43 @@ export class FleetDatabase {
   }
 
   // -------------------------------------------------------------------------
+  // Stream Events (persisted session log)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Upsert (INSERT OR REPLACE) the serialized stream events for a team.
+   * @param teamId - The team ID
+   * @param eventData - JSON-serialized array of StreamEvent objects
+   */
+  upsertStreamEvents(teamId: number, eventData: string): void {
+    this.db.prepare(`
+      INSERT INTO stream_events (team_id, event_data, updated_at)
+      VALUES (@teamId, @eventData, datetime('now'))
+      ON CONFLICT(team_id) DO UPDATE SET
+        event_data = @eventData,
+        updated_at = datetime('now')
+    `).run({ teamId, eventData });
+  }
+
+  /**
+   * Get the serialized stream events JSON for a team.
+   * Returns the JSON string, or null if no persisted events exist.
+   */
+  getStreamEvents(teamId: number): string | null {
+    const row = this.db.prepare(
+      'SELECT event_data FROM stream_events WHERE team_id = ?'
+    ).get(teamId) as { event_data: string } | undefined;
+    return row?.event_data ?? null;
+  }
+
+  /**
+   * Delete persisted stream events for a specific team.
+   */
+  deleteStreamEventsByTeam(teamId: number): void {
+    this.db.prepare('DELETE FROM stream_events WHERE team_id = ?').run(teamId);
+  }
+
+  // -------------------------------------------------------------------------
   // Views / aggregations
   // -------------------------------------------------------------------------
 
@@ -1598,6 +1655,7 @@ export class FleetDatabase {
 
   deleteTeamsByProject(projectId: number): void {
     this.db.transaction((pid: number) => {
+      this.db.prepare('DELETE FROM stream_events WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
       this.db.prepare('DELETE FROM agent_messages WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
       this.db.prepare('DELETE FROM team_transitions WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
       this.db.prepare('DELETE FROM events WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
@@ -1618,6 +1676,7 @@ export class FleetDatabase {
    */
   deleteTeamAndRelated(teamId: number): void {
     this.db.transaction((id: number) => {
+      this.db.prepare('DELETE FROM stream_events WHERE team_id = ?').run(id);
       this.db.prepare('DELETE FROM agent_messages WHERE team_id = ?').run(id);
       this.db.prepare('DELETE FROM team_transitions WHERE team_id = ?').run(id);
       this.db.prepare('DELETE FROM events WHERE team_id = ?').run(id);
@@ -1639,6 +1698,7 @@ export class FleetDatabase {
    */
   factoryReset(defaultTemplates: { id: string; template: string }[]): number {
     this.db.transaction(() => {
+      this.db.prepare('DELETE FROM stream_events').run();
       this.db.prepare('DELETE FROM agent_messages').run();
       this.db.prepare('DELETE FROM team_transitions').run();
       this.db.prepare('DELETE FROM events').run();

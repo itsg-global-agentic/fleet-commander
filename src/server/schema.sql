@@ -245,5 +245,18 @@ CREATE TABLE IF NOT EXISTS agent_messages (
 
 CREATE INDEX IF NOT EXISTS idx_agent_messages_team ON agent_messages(team_id);
 
--- Insert schema version 5 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (5);
+-- ---------------------------------------------------------------------------
+-- STREAM EVENTS — persisted parsed stream events (session log) per team
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS stream_events (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id         INTEGER NOT NULL UNIQUE REFERENCES teams(id),
+  event_data      TEXT NOT NULL,                    -- JSON-serialized array of StreamEvent objects
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_stream_events_team ON stream_events(team_id);
+
+-- Insert schema version 6 (or upgrade from earlier versions)
+INSERT OR IGNORE INTO schema_version (version) VALUES (6);

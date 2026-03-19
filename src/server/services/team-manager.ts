@@ -469,6 +469,7 @@ export class TeamManager {
 
     // Clean up child process reference
     this.flushTokenCounters(teamId);
+    this.persistParsedEvents(teamId);
     this.childProcesses.delete(teamId);
     this.outputBuffers.delete(teamId);
     this.parsedEvents.delete(teamId);
@@ -968,7 +969,40 @@ export class TeamManager {
   // -------------------------------------------------------------------------
 
   getParsedEvents(teamId: number): StreamEvent[] {
-    return this.parsedEvents.get(teamId) ?? [];
+    // Check in-memory buffer first (for running teams)
+    const inMemory = this.parsedEvents.get(teamId);
+    if (inMemory && inMemory.length > 0) {
+      return inMemory;
+    }
+
+    // Fall back to persisted events in DB (for done/failed/restarted teams)
+    try {
+      const db = getDatabase();
+      const json = db.getStreamEvents(teamId);
+      if (json) {
+        return JSON.parse(json) as StreamEvent[];
+      }
+    } catch (err) {
+      console.error(`[TeamManager] Failed to load persisted stream events for team ${teamId}:`, err);
+    }
+
+    return [];
+  }
+
+  /**
+   * Persist the in-memory parsed events for a team to the database.
+   * Called before clearing the in-memory buffer on process exit/stop.
+   */
+  private persistParsedEvents(teamId: number): void {
+    const events = this.parsedEvents.get(teamId);
+    if (!events || events.length === 0) return;
+
+    try {
+      const db = getDatabase();
+      db.upsertStreamEvents(teamId, JSON.stringify(events));
+    } catch (err) {
+      console.error(`[TeamManager] Failed to persist stream events for team ${teamId}:`, err);
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1082,6 +1116,7 @@ export class TeamManager {
         // Clean up maps — the exit handler may also fire, but
         // childProcesses.delete is idempotent
         this.flushTokenCounters(teamId);
+        this.persistParsedEvents(teamId);
         this.childProcesses.delete(teamId);
         this.outputBuffers.delete(teamId);
         this.parsedEvents.delete(teamId);
@@ -1328,6 +1363,7 @@ export class TeamManager {
     child.on('exit', (code, signal) => {
       console.log(`[TeamManager] Process exited for team ${teamId} (code=${code}, signal=${signal})`);
       this.flushTokenCounters(teamId);
+      this.persistParsedEvents(teamId);
       this.childProcesses.delete(teamId);
       this.stdinPipes.delete(teamId);
       this.outputBuffers.delete(teamId);
@@ -1368,6 +1404,7 @@ export class TeamManager {
     child.on('error', (err) => {
       console.error(`[TeamManager] ERROR: process error for team ${teamId}:`, err.message);
       this.flushTokenCounters(teamId);
+      this.persistParsedEvents(teamId);
       this.childProcesses.delete(teamId);
       this.stdinPipes.delete(teamId);
       this.outputBuffers.delete(teamId);

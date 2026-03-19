@@ -81,8 +81,8 @@ describe('Schema', () => {
     expect(() => db.initSchema()).not.toThrow();
   });
 
-  it('sets schema version to 5', () => {
-    expect(db.getSchemaVersion()).toBe(5);
+  it('sets schema version to 6', () => {
+    expect(db.getSchemaVersion()).toBe(6);
   });
 });
 
@@ -998,6 +998,119 @@ describe('Agent Messages CRUD', () => {
     });
 
     expect(msg.createdAt).toMatch(/T.*Z$/);
+  });
+});
+
+// =============================================================================
+// Stream Events (persisted session log)
+// =============================================================================
+
+describe('Stream Events', () => {
+  beforeEach(() => {
+    db.insertTeam({ issueNumber: 100, worktreeName: 'kea-100', status: 'running', phase: 'implementing' });
+  });
+
+  it('upserts stream events for a team', () => {
+    const events = JSON.stringify([
+      { type: 'assistant', timestamp: '2025-01-01T00:00:00Z', message: { content: [{ type: 'text', text: 'Hello' }] } },
+    ]);
+
+    db.upsertStreamEvents(1, events);
+
+    const stored = db.getStreamEvents(1);
+    expect(stored).toBe(events);
+  });
+
+  it('returns null when no stream events exist', () => {
+    const stored = db.getStreamEvents(1);
+    expect(stored).toBeNull();
+  });
+
+  it('overwrites existing stream events on upsert', () => {
+    const events1 = JSON.stringify([{ type: 'assistant', timestamp: '2025-01-01T00:00:00Z' }]);
+    const events2 = JSON.stringify([
+      { type: 'assistant', timestamp: '2025-01-01T00:00:00Z' },
+      { type: 'tool_use', timestamp: '2025-01-01T00:01:00Z' },
+    ]);
+
+    db.upsertStreamEvents(1, events1);
+    db.upsertStreamEvents(1, events2);
+
+    const stored = db.getStreamEvents(1);
+    expect(stored).toBe(events2);
+    const parsed = JSON.parse(stored!);
+    expect(parsed).toHaveLength(2);
+  });
+
+  it('deletes stream events for a team', () => {
+    const events = JSON.stringify([{ type: 'assistant' }]);
+    db.upsertStreamEvents(1, events);
+    expect(db.getStreamEvents(1)).not.toBeNull();
+
+    db.deleteStreamEventsByTeam(1);
+    expect(db.getStreamEvents(1)).toBeNull();
+  });
+
+  it('isolates stream events between teams', () => {
+    db.insertTeam({ issueNumber: 200, worktreeName: 'kea-200', status: 'running', phase: 'implementing' });
+
+    const events1 = JSON.stringify([{ type: 'assistant', team: 1 }]);
+    const events2 = JSON.stringify([{ type: 'tool_use', team: 2 }]);
+
+    db.upsertStreamEvents(1, events1);
+    db.upsertStreamEvents(2, events2);
+
+    expect(db.getStreamEvents(1)).toBe(events1);
+    expect(db.getStreamEvents(2)).toBe(events2);
+  });
+
+  it('cascade deletes stream events with deleteTeamAndRelated', () => {
+    const events = JSON.stringify([{ type: 'assistant' }]);
+    db.upsertStreamEvents(1, events);
+    expect(db.getStreamEvents(1)).not.toBeNull();
+
+    db.deleteTeamAndRelated(1);
+    expect(db.getStreamEvents(1)).toBeNull();
+  });
+
+  it('cascade deletes stream events with deleteTeamsByProject', () => {
+    const project = db.insertProject({ name: 'test-proj', repoPath: '/tmp/test-proj' });
+    const team = db.insertTeam({ issueNumber: 300, worktreeName: 'test-proj-300', projectId: project.id });
+    const events = JSON.stringify([{ type: 'result' }]);
+    db.upsertStreamEvents(team.id, events);
+    expect(db.getStreamEvents(team.id)).not.toBeNull();
+
+    db.deleteTeamsByProject(project.id);
+    expect(db.getStreamEvents(team.id)).toBeNull();
+  });
+
+  it('cascade deletes stream events with factoryReset', () => {
+    const events = JSON.stringify([{ type: 'assistant' }]);
+    db.upsertStreamEvents(1, events);
+    expect(db.getStreamEvents(1)).not.toBeNull();
+
+    db.factoryReset([]);
+    // After factory reset, team 1 is deleted, so getStreamEvents should return null
+    expect(db.getStreamEvents(1)).toBeNull();
+  });
+});
+
+// =============================================================================
+// Schema includes stream_events table
+// =============================================================================
+
+describe('Schema includes stream_events', () => {
+  it('creates stream_events table on fresh DB', () => {
+    const tables = db.raw
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+      .all() as { name: string }[];
+
+    const names = tables.map((t) => t.name);
+    expect(names).toContain('stream_events');
+  });
+
+  it('sets schema version to 6', () => {
+    expect(db.getSchemaVersion()).toBe(6);
   });
 });
 
