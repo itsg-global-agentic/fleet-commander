@@ -48,6 +48,28 @@ function getEventIcon(eventType: string): React.ReactNode {
 }
 
 // ---------------------------------------------------------------------------
+// Payload error extraction
+// ---------------------------------------------------------------------------
+
+function extractPayloadError(payload: string | null): string | null {
+  if (!payload) return null;
+  try {
+    const parsed: unknown = JSON.parse(payload);
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'error' in parsed &&
+      typeof (parsed as { error: unknown }).error === 'string'
+    ) {
+      return (parsed as { error: string }).error;
+    }
+  } catch {
+    // Malformed JSON — ignore
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
@@ -157,6 +179,15 @@ export function EventTimeline({ teamId, refreshKey, onCountChange }: EventTimeli
                   agent: {evt.agentName}
                 </span>
               )}
+              {evt.eventType === 'ToolError' && (() => {
+                const errorMsg = extractPayloadError(evt.payload);
+                if (!errorMsg) return null;
+                return (
+                  <span className="text-xs text-[#F85149] block mt-0.5 line-clamp-2">
+                    {errorMsg}
+                  </span>
+                );
+              })()}
             </div>
 
             {/* Timestamp */}
