@@ -32,29 +32,32 @@ The coordinator's only essential functions are: routing briefs from analyst to d
                     |     TL      |  (CC main process)
                     | orchestrator|
                     +------+------+
-                   / spawn  |  spawn \
+                   / spawn  |  spawn \  (all 3 spawned immediately)
                   /         |         \
            +-----+    +----+----+    +--------+
            |Analyst|   |   Dev   |   |Reviewer|
            +---+---+   +----+---+   +----+---+
-               |             ^   \        ^  |
-               |   brief     |    \       |  |
-               +---> TL -----+     +------+  |
-                     attach        p2p loop  |
-                     to dev         (direct)  |
-                                              |
-                                    final approval --> TL
+               |  brief     ^   \        ^  |
+               +----------->|    \       |  |
+               +--- CC -----|---->\      |  |
+               +---> TL     |     +------+  |
+                            |     p2p loop  |
+                            |      (direct) |
+                            |               |
+                                  final approval --> TL
 ```
 
 **Shape:** The flow forms a diamond: TL at top, analyst and reviewer on the sides, dev at the bottom where work converges. Hence "Diamond."
+
+**Parallel spawn:** All 3 agents are spawned immediately at startup. Dev enters warm-up (read-only) and reviewer enters pre-read (read-only) while analyst works. Analyst sends brief directly to dev and CCs reviewer via SendMessage.
 
 ### The Three Agents
 
 | Agent | Role | Tools | Lifecycle |
 |-------|------|-------|-----------|
-| **analyst** | Investigate codebase, produce structured brief with guidebook recommendations | Read-only: Glob, Grep, Read, Bash (read-only), LS | Spawned first. Exits after delivering brief. |
-| **dev** | Implement changes, write tests, fix review feedback, create commits | Full: Glob, Grep, Read, Edit, Write, Bash, Agent | Spawned second with brief attached. Long-lived. |
-| **reviewer** | Two-pass code review (quality + acceptance), direct feedback to dev | Read-only: Glob, Grep, Read, Bash (read-only), LS | Spawned third when dev signals ready. May persist for multiple rounds. |
+| **analyst** | Investigate codebase, produce structured brief with guidebook recommendations. Sends brief directly to dev + reviewer + TL. | Read-only: Glob, Grep, Read, Bash (read-only), LS | Spawned immediately at startup. Exits after delivering brief. |
+| **dev** | Warm-up phase (read-only) until brief arrives, then implements changes, writes tests, fixes review feedback, creates commits | Full: Glob, Grep, Read, Edit, Write, Bash, Agent | Spawned immediately at startup. Warm-up phase until brief arrives. Long-lived. |
+| **reviewer** | Pre-read phase (read-only) until review request arrives, then two-pass code review (quality + acceptance), direct feedback to dev | Read-only: Glob, Grep, Read, Bash (read-only), LS | Spawned immediately at startup. Pre-read phase until dev sends review request. May persist for multiple rounds. |
 
 ### TL Role (CC Main Process)
 
@@ -79,24 +82,42 @@ The TL absorbs all orchestration that the coordinator used to do:
 
 ## Communication Flows
 
-### Flow 1: TL -> Analyst (spawn + context)
+### Flow 0: TL -> All 3 Agents (parallel spawn at startup)
 
 ```
-TL spawns analyst via Agent tool with prompt:
-  "Analyze issue #N in {project}. Read CLAUDE.md first.
-   Produce a structured brief (ISSUE/TYPE/FILES/SCOPE/RISKS/BLOCKED).
-   Include a GUIDEBOOKS section listing which .claude/agents/*.md or
-   project guidebooks the dev should read for this task."
+TL spawns ALL 3 agents simultaneously via Agent tool:
+
+  Analyst:
+    "Analyze issue #N in {project}. Read CLAUDE.md first.
+     Produce a structured brief.
+     Send the brief directly to 'dev' AND 'reviewer' via SendMessage (CC both).
+     Also send to TL for validation."
+
+  Dev:
+    "Issue #N. Branch: {branch}. Base: {base}.
+     WARM-UP: Read CLAUDE.md, guidebooks, explore codebase.
+     Wait for analyst brief via SendMessage from 'analyst'.
+     After brief arrives: implement, test, commit, push.
+     Send review request to 'reviewer' via SendMessage when ready."
+
+  Reviewer:
+    "Issue #N. Base: {base}.
+     PRE-READ: Read CLAUDE.md, guidebooks, familiarize with codebase.
+     Wait for review request via SendMessage from 'dev'.
+     After request arrives: two-pass review, send feedback to dev directly."
 ```
 
-The analyst is a **synchronous subagent call** -- TL blocks until the analyst returns its brief as the Agent tool result. No message routing needed.
+All three are **long-lived subagents** spawned in parallel. TL monitors all three.
 
-### Flow 2: Analyst -> TL (brief return)
+### Flow 1: Analyst -> Dev + Reviewer + TL (brief delivery via SendMessage)
 
-The analyst's output IS the Agent tool return value. The brief arrives directly in TL's context. No SendMessage needed.
+The analyst sends the brief to **three recipients** via `SendMessage`:
+1. `dev` — triggers dev's transition from warm-up to implementation
+2. `reviewer` — gives reviewer early context on what to expect
+3. TL — for validation and workflow state tracking
 
 ```
-Brief format (extended with GUIDEBOOKS):
+Brief format:
   ISSUE: #N {title}
   TYPE: {language/framework}
   FILES:
@@ -109,40 +130,23 @@ Brief format (extended with GUIDEBOOKS):
     - docs/api-patterns.md -- REST API patterns used in this project
 ```
 
-### Flow 3: TL -> Dev (spawn + brief + guidebooks)
+### Flow 2: Dev warm-up -> implementation (triggered by brief)
 
-```
-TL spawns dev via Agent tool with prompt:
-  "Implement the following for issue #N:
+Dev receives the analyst's brief via `SendMessage`. This triggers the transition:
+- Parse the brief for additional guidebook paths — read any not yet read during warm-up
+- Create branch, implement, test, commit, push
+- Send review request to `reviewer` via `SendMessage`
 
-   {full brief from analyst}
+### Flow 3: Dev -> Reviewer + TL (ready for review signal)
 
-   Read the guidebooks listed above before starting implementation.
-   When done: commit, push, then write a REVIEW_READY signal.
+Dev signals "ready for review" by sending to **two recipients**:
 
-   REVIEW PROTOCOL:
-   - After you push, a reviewer will be spawned to review your code.
-   - The reviewer may send you feedback directly via SendMessage.
-   - Address feedback, commit, push, and reply to the reviewer directly.
-   - After 2 feedback rounds with no resolution, escalate to TL.
-   - You may exchange up to 3 total review rounds (initial + 2 fixes)."
-```
+1. **Reviewer** (via `SendMessage`) — triggers reviewer's transition from pre-read to active review. Includes branch name, changed files, and focus areas.
+2. **TL** (via `SendMessage`) — for workflow state tracking: `"Ready for review. Branch: feat/N-desc."`
 
-Dev is spawned as a **long-lived subagent** (not synchronous). TL monitors it.
+The reviewer is already spawned and in pre-read phase. No spawning needed — the `SendMessage` is the trigger.
 
-### Flow 4: Dev -> TL (ready for review signal)
-
-The dev signals "ready for review" by either:
-
-**Option A (preferred): TaskUpdate**
-Dev calls `TaskUpdate` with status "review_ready" and includes the branch name and changed file list.
-
-**Option B (fallback): SendMessage**
-Dev sends a message to TL: `"Ready for review. Branch: feat/N-desc. Changed files: [list]"`
-
-TL watches for this signal to spawn the reviewer.
-
-### Flow 5: Dev <-> Reviewer (DIRECT p2p)
+### Flow 4: Dev <-> Reviewer (DIRECT p2p)
 
 This is the core innovation. After the first review round, dev and reviewer talk directly.
 
@@ -161,7 +165,7 @@ Reviewer -> Dev (via SendMessage):
   "APPROVE -- all issues resolved, acceptance criteria met."
 ```
 
-### Flow 6: Dev -> TL (work complete)
+### Flow 5: Dev -> TL (work complete)
 
 After reviewer approves, dev sends final status to TL:
 ```
@@ -169,7 +173,7 @@ After reviewer approves, dev sends final status to TL:
  Reviewer verdict: APPROVE"
 ```
 
-### Flow 7: Reviewer -> TL (final approval)
+### Flow 6: Reviewer -> TL (final approval)
 
 Reviewer sends approval to TL as well (belt and suspenders):
 ```
@@ -184,25 +188,18 @@ TL receives approval from both dev and reviewer, then creates the PR.
 
 ### Q1: How does dev know to talk to reviewer directly instead of through TL?
 
-**The dev's spawn prompt explicitly instructs this.** The REVIEW PROTOCOL section in the dev's prompt (Flow 3 above) tells the dev:
+**The dev's spawn prompt explicitly instructs this.** The dev is spawned with instructions to send the review request directly to `reviewer` via SendMessage. Since all agents are spawned at the same time, the dev knows the reviewer's name (`reviewer`) from the spawn prompt — no separate introduction needed.
 
-> "The reviewer may send you feedback directly via SendMessage. Address feedback, commit, push, and reply to the reviewer directly."
-
-The dev knows the reviewer's agent name because TL tells the dev when spawning the reviewer:
-
-```
-TL -> Dev (via SendMessage after spawning reviewer):
-  "Reviewer spawned as 'reviewer'. They will review your changes on
-   branch feat/N-desc. Communicate directly with them for feedback rounds."
-```
+The dev's prompt includes:
+> "Send review request to 'reviewer' via SendMessage when ready. The reviewer may send you feedback directly via SendMessage. Address feedback, commit, push, and reply to the reviewer directly."
 
 ### Q2: How does reviewer know to send feedback to dev instead of TL?
 
 **The reviewer's spawn prompt explicitly instructs this.** The reviewer is spawned with:
 
 ```
-"Review the changes on branch {branch} for issue #N.
- Changed files: [list from dev's signal]
+"PRE-READ: Read CLAUDE.md, guidebooks, familiarize with codebase.
+ Wait for review request via SendMessage from 'dev'.
 
  FEEDBACK PROTOCOL:
  - Send your verdict directly to 'dev' via SendMessage.
@@ -210,6 +207,8 @@ TL -> Dev (via SendMessage after spawning reviewer):
  - If APPROVE: send approval to both 'dev' and TL.
  - You may do up to 3 review rounds total."
 ```
+
+Since all agents are spawned simultaneously, the reviewer knows the dev's name (`dev`) from the spawn prompt.
 
 ### Q3: What happens if dev and reviewer get into infinite loop?
 
@@ -267,9 +266,9 @@ The existing `TeamPhase` type maps to Diamond stages:
 
 | Phase | Diamond Stage | Active Agents |
 |-------|--------------|---------------|
-| `init` | TL preparing to spawn | TL only |
-| `analyzing` | Analyst investigating | TL + analyst |
-| `implementing` | Dev building | TL + dev |
+| `init` | TL spawns all 3 agents in parallel | TL + analyst + dev (warm-up) + reviewer (pre-read) |
+| `analyzing` | Analyst investigating; dev in warm-up; reviewer in pre-read | TL + analyst + dev (warm-up) + reviewer (pre-read) |
+| `implementing` | Dev building; reviewer in pre-read | TL + dev + reviewer (pre-read) |
 | `reviewing` | Dev + reviewer in p2p loop | TL + dev + reviewer |
 | `pr` | TL creating PR, waiting for CI | TL (+ dev if CI fix needed) |
 | `done` | Complete | TL closing out |
@@ -282,22 +281,28 @@ The existing `TeamPhase` type maps to Diamond stages:
 ```
 TL                    Analyst              Dev                  Reviewer
 |                       |                   |                      |
+|== spawn all 3 agents simultaneously ============================>|
 |-- spawn (issue ctx) ->|                   |                      |
-|                       |-- read CLAUDE.md  |                      |
-|                       |-- explore code    |                      |
-|                       |-- trace deps      |                      |
-|<-- brief + guidebooks-|                   |                      |
-|       (agent return)  X (exits)           |                      |
+|-- spawn (warm-up) ----|------------------>|                      |
+|-- spawn (pre-read) ---|-------------------|--------------------->|
+|                       |                   |                      |
+|                       |-- read CLAUDE.md  |-- read CLAUDE.md     |-- read CLAUDE.md
+|                       |-- explore code    |-- read guidebooks    |-- read guidebooks
+|                       |-- trace deps      |-- explore codebase   |-- explore codebase
+|                       |-- produce brief   |   (warm-up phase)    |   (pre-read phase)
+|                       |                   |                      |
+|                       |-- brief to dev -->|                      |
+|                       |-- brief CC -------|--------------------->|
+|<-- brief to TL -------|                   |                      |
+|       (validate)      X (exits)           |                      |
 |                                           |                      |
-|-- spawn (brief + review protocol) ------->|                      |
-|                                           |-- read guidebooks    |
+|                                           |-- create branch      |
 |                                           |-- implement          |
 |                                           |-- test locally       |
 |                                           |-- commit + push      |
-|<-------- "ready for review" ------------- |                      |
 |                                           |                      |
-|-- spawn (branch + files) -------------------------------->------>|
-|-- "reviewer spawned as 'reviewer'" ------>|                      |
+|                                           |-- review request --->|
+|<-------- "ready for review" ------------- |                      |
 |                                           |                      |
 |                                           |<-- REJECT (issues) --|
 |                                           |-- fix + push         |
@@ -325,8 +330,10 @@ TL                    Analyst              Dev                  Reviewer
 
 ```
 Analyst brief: BLOCKED=yes -> {reason}
-TL: Skip dev and reviewer entirely.
+TL: Send shutdown_request to dev and reviewer (they were in warm-up/pre-read).
     Comment on issue. Transition to BLOCKED.
+    Token cost: dev and reviewer consumed warm-up tokens (reading CLAUDE.md, guidebooks)
+    but this is minimal compared to implementation/review tokens.
 ```
 
 ### 2. Dev crashes or exits unexpectedly
@@ -378,9 +385,9 @@ TL: Still spawns one generalist dev.
     (first dev does part A, second dev does part B, then reviewer reviews all).
 ```
 
-### 7. Dev finishes before reviewer is ready
+### 7. Dev finishes before reviewer completes pre-read
 
-Normal case. Dev signals "ready for review" and waits. TL spawns reviewer. Dev is idle during review -- this is expected. FC's idle detection should not penalize dev for waiting during review.
+Normal case. Dev sends review request to reviewer via SendMessage. The reviewer may still be completing pre-read (reading guidebooks, exploring codebase). The reviewer transitions to active review upon receiving the SendMessage. Dev is idle during review — this is expected. FC's idle detection should not penalize dev for waiting during review.
 
 ### 8. FC sends stuck_nudge during p2p
 
@@ -401,9 +408,9 @@ TL: Check which agent is idle.
 | File | Change |
 |------|--------|
 | `templates/workflow.md` | Replace 4-agent team structure with 3-agent Diamond. Remove coordinator references. TL becomes orchestrator. |
-| `templates/agents/fleet-analyst.md` | Add GUIDEBOOKS section to brief format. Change "report to coordinator" -> "return brief as output." |
-| `templates/agents/fleet-dev-generic.md` | Add REVIEW PROTOCOL section for p2p communication. Remove "report to coordinator" -> "signal TL when done, talk to reviewer directly." |
-| `templates/agents/fleet-reviewer.md` | Add FEEDBACK PROTOCOL for direct p2p with dev. Remove "report to coordinator" -> "send verdict to dev and TL." |
+| `templates/agents/fleet-analyst.md` | Send brief to dev + reviewer + TL via SendMessage (3 recipients). Analyst knows all agent names from spawn. |
+| `templates/agents/fleet-dev.md` | Add Warm-Up Phase (read-only until brief arrives). Send review request directly to reviewer. |
+| `templates/agents/fleet-reviewer.md` | Add Pre-Read Phase (read-only until review request arrives). FEEDBACK PROTOCOL for direct p2p with dev. |
 | `templates/agents/fleet-coordinator.md` | **DELETE** (or archive). No longer needed. |
 | `prompts/default-prompt.md` | Update TL instructions: no coordinator spawn, TL owns orchestration. |
 
@@ -435,7 +442,7 @@ The Diamond architecture is entirely a **prompt-level change**. Fleet Commander'
 |--------|-------------------|-------------------|
 | Agents per team | 4 (coordinator + analyst + dev + reviewer) | 3 (analyst + dev + reviewer) |
 | Message hops for review feedback | 3 (reviewer -> coordinator -> dev) | 1 (reviewer -> dev) |
-| Message hops for brief delivery | 3 (analyst -> coordinator -> dev) | 1 (analyst -> TL -> dev via spawn prompt) |
+| Message hops for brief delivery | 3 (analyst -> coordinator -> dev) | 1 (analyst -> dev via SendMessage, direct) |
 | Orchestration overhead | ~12.6% of tool calls wasted on coordinator | 0% (TL orchestrates natively) |
 | Bash error rate from orchestration | 27.7% (coordinator) | Near 0% (TL does fewer, simpler commands) |
 | Token consumption | 4 agent contexts | 3 agent contexts (25% reduction) |
@@ -448,6 +455,7 @@ The Diamond architecture is entirely a **prompt-level change**. Fleet Commander'
 - **50% faster review rounds** (direct p2p vs two-hop routing)
 - **~15% fewer errors** (removing coordinator's 27.7% Bash error rate)
 - **Simpler debugging** (fewer message hops to trace in event log)
+- **Faster overall cycle time** — dev and reviewer frontload context-gathering during analyst phase (parallel warm-up/pre-read eliminates sequential wait)
 
 ---
 
@@ -455,11 +463,11 @@ The Diamond architecture is entirely a **prompt-level change**. Fleet Commander'
 
 ### Phase 1: Template changes (no server changes)
 
-1. Write new `fleet-analyst.md` with GUIDEBOOKS section
-2. Write new `fleet-dev-generic.md` with REVIEW PROTOCOL
-3. Write new `fleet-reviewer.md` with FEEDBACK PROTOCOL
-4. Write new `workflow.md` with Diamond structure (TL as orchestrator)
-5. Update `default-prompt.md` for Diamond TL role
+1. Update `fleet-analyst.md` — brief sent directly to dev + reviewer + TL via SendMessage
+2. Update `fleet-dev.md` — add Warm-Up Phase (read-only until brief arrives via SendMessage)
+3. Update `fleet-reviewer.md` — add Pre-Read Phase (read-only until review request arrives via SendMessage)
+4. Update `workflow.md` — parallel spawn of all 3 agents at Phase 0, decoupled from phase transitions
+5. Update `default-prompt.md` — TL spawns all 3 agents immediately
 6. Archive `fleet-coordinator.md` (move to `templates/archive/`)
 
 ### Phase 2: Test on one project

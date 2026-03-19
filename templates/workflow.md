@@ -22,23 +22,25 @@ User: claude --worktree {{project_slug}}-{N}
 
 **Role of TL (main agent = You):**
 1. Read this workflow and understand the team structure
-2. Spawn `fleet-analyst` and send it the issue number
-3. Wait for the Analyst's brief
-4. Spawn `fleet-dev` with the brief + guidebook list (the TYPE field tells the dev which guidebooks to read)
-5. Once dev reports "ready for review", spawn `fleet-reviewer`
-6. Let dev and reviewer communicate peer-to-peer — DO NOT relay messages between them
-7. Only intervene if: escalation after 3 review rounds, agent stuck (5min idle), or final PR creation
-8. When review passes: rebase, create PR, set auto-merge
-9. Respond to FC messages (ci_green, ci_red, pr_merged, nudge_idle, nudge_stuck)
-10. On pr_merged: close issue, shut down agents, finish
+2. **Spawn ALL 3 agents immediately** — `fleet-analyst`, `fleet-dev`, and `fleet-reviewer` — in parallel at startup
+3. Analyst analyzes the issue and sends brief directly to dev (and CCs reviewer) via `SendMessage`
+4. Dev enters warm-up phase (reads CLAUDE.md, guidebooks, explores codebase) while waiting for the brief
+5. Reviewer enters pre-read phase (reads CLAUDE.md, guidebooks, familiarizes with codebase) while waiting for review request
+6. Once dev receives the brief, it transitions to implementation
+7. Once dev reports "ready for review" to reviewer, reviewer transitions to active review
+8. Let dev and reviewer communicate peer-to-peer — DO NOT relay messages between them
+9. Only intervene if: escalation after 3 review rounds, agent stuck (5min idle), or final PR creation
+10. When review passes: rebase, create PR, set auto-merge
+11. Respond to FC messages (ci_green, ci_red, pr_merged, nudge_idle, nudge_stuck)
+12. On pr_merged: close issue, shut down agents, finish
 
 ## Team Composition — Diamond (3 Agents)
 
 | Agent | subagent_type | name | Role | Spawn |
 |-------|---------------|------|------|-------|
-| **Analyst** | `fleet-analyst` | `analyst` | Analyzes issue + codebase, produces structured brief with guidebook paths | Phase 1 only |
-| **Dev** | `fleet-dev` | `dev` | Implements code, writes tests, pushes commits. Reads guidebooks for specialization. Communicates with reviewer directly during review. | Phase 2 onward |
-| **Reviewer** | `fleet-reviewer` | `reviewer` | Two-pass code review. Sends feedback directly to dev. Reports final verdict to TL. | Phase 3 onward |
+| **Analyst** | `fleet-analyst` | `analyst` | Analyzes issue + codebase, produces structured brief with guidebook paths. Sends brief directly to dev and CCs reviewer. | Phase 0 (immediate) |
+| **Dev** | `fleet-dev` | `dev` | Warm-up phase (read-only) until brief arrives, then implements code, writes tests, pushes commits. Communicates with reviewer directly during review. | Phase 0 (immediate) |
+| **Reviewer** | `fleet-reviewer` | `reviewer` | Pre-read phase (read-only) until review request arrives, then two-pass code review. Sends feedback directly to dev. Reports final verdict to TL. | Phase 0 (immediate) |
 
 There is NO coordinator agent. The TL orchestrates all three agents directly.
 
@@ -46,10 +48,12 @@ All agents use `model: inherit` — they run on the same model as the TL.
 
 ### Agent Lifecycle
 
-- **Analyst** is spawned first and dismissed after delivering the brief. It does not persist.
-- **Dev** is spawned after the brief and persists through implementation, review rounds, and CI fixes.
-- **Reviewer** is spawned when dev reports "ready for review" and persists through all review rounds.
+- **All 3 agents are spawned immediately at startup** (Phase 0). No agent waits for another to finish before being spawned.
+- **Analyst** analyzes the issue, produces the brief, sends it directly to dev (and CCs reviewer) via `SendMessage`, then exits. It does not persist.
+- **Dev** enters a **warm-up phase** on spawn: reads CLAUDE.md, reads guidebooks from the task prompt, explores the codebase. When the analyst's brief arrives via `SendMessage`, dev transitions to implementation. Dev persists through implementation, review rounds, and CI fixes.
+- **Reviewer** enters a **pre-read phase** on spawn: reads CLAUDE.md, reads guidebooks, familiarizes with the codebase and issue context. When dev sends a review request via `SendMessage`, reviewer transitions to active review. Reviewer persists through all review rounds.
 - Dev and Reviewer communicate **peer-to-peer** — TL does not relay messages between them.
+- **Token efficiency**: Dev and reviewer use their wait time productively (warm-up / pre-read), so spawning them early does not waste tokens — it frontloads context-gathering that would happen anyway.
 
 ### TYPE to Guidebook Mapping
 
@@ -69,10 +73,11 @@ All implementation work is assigned to the single `fleet-dev` agent. The Analyst
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Analyzing : start (spawn analyst)
-    Analyzing --> Implementing : brief OK (spawn dev)
+    [*] --> Setup : start (spawn all 3 agents)
+    Setup --> Analyzing : agents spawned
+    Analyzing --> Implementing : brief OK (analyst sends brief to dev)
     Analyzing --> Blocked : BLOCKED in brief
-    Implementing --> Reviewing : dev reports "ready for review" (spawn reviewer)
+    Implementing --> Reviewing : dev reports "ready for review" to reviewer
     Reviewing --> Implementing : REJECT (dev fixes, max 3 rounds)
     Reviewing --> PR : APPROVE (TL creates PR)
     PR --> Done : CI GREEN + merge
@@ -83,19 +88,31 @@ stateDiagram-v2
     Done --> [*]
 ```
 
+**All 3 agents are spawned during Setup.** Phase transitions are logical — they represent which agent is actively doing primary work, not when agents are spawned.
+
 **Blocked can be entered from any active state** when the team cannot proceed (missing info, unresolvable conflicts, repeated failures).
+
+---
+
+## Phase 0 — Setup (Parallel Spawn)
+
+1. **TL spawns ALL 3 agents immediately in parallel:**
+   - `fleet-analyst` — with the issue number and project context
+   - `fleet-dev` — with the issue number, target branch name, and guidebook list from the task prompt. Dev enters **warm-up phase** (reads CLAUDE.md, guidebooks, explores codebase).
+   - `fleet-reviewer` — with the issue number and base branch. Reviewer enters **pre-read phase** (reads CLAUDE.md, guidebooks, familiarizes with codebase).
+2. Dev and reviewer are productive during their wait — they frontload context-gathering that would otherwise happen after the brief arrives.
 
 ---
 
 ## Phase 1 — Analysis
 
-1. **TL spawns `fleet-analyst`** with the issue number
-2. Analyst reads the issue, explores the codebase, discovers guidebooks, and produces a structured brief
-3. Brief arrives via `SendMessage` from analyst to TL
+1. Analyst (already spawned in Phase 0) reads the issue, explores the codebase, discovers guidebooks, and produces a structured brief
+2. **Analyst sends the brief directly to dev via `SendMessage`** AND **CCs reviewer** (sends the brief to reviewer too via a second `SendMessage`)
+3. Brief also arrives to TL (analyst sends to TL as well for validation)
 4. TL validates the brief has all required fields (see format below)
 5. TL evaluates the brief:
-   - `BLOCKED=yes` → state Blocked, comment on issue, STOP
-   - `BLOCKED=no` → proceed to Phase 2
+   - `BLOCKED=yes` → state Blocked, comment on issue, shut down dev and reviewer, STOP
+   - `BLOCKED=no` → proceed to Phase 2 (dev already has the brief and transitions from warm-up to implementation)
    - Missing required fields → ask Analyst to redo with specific gaps identified
 
 ### Brief Format
@@ -134,43 +151,45 @@ no | yes — {reason}
 If the Analyst is unresponsive for >5 minutes or produces an unusable brief:
 1. TL performs a quick analysis directly: read `CLAUDE.md`, scan the issue, identify key files
 2. Produce a minimal brief (Key Files + What Needs to Change + Type is enough)
-3. Proceed to Phase 2 with the self-generated brief
-4. Do NOT spend more than a few minutes on this — a good-enough brief is better than a perfect one
+3. **Send the brief to dev and reviewer via `SendMessage`** — they are already spawned and waiting in warm-up/pre-read
+4. Proceed to Phase 2
+5. Do NOT spend more than a few minutes on this — a good-enough brief is better than a perfect one
 
 ---
 
 ## Phase 2 — Implementation
 
-1. **TL spawns `fleet-dev`** with the brief and guidebook list (the TYPE field determines which guidebooks the dev should read)
-2. **TL spawns the dev agent** with this context in the task:
-   - The full Analyst brief
-   - The list of guidebook paths from the brief (dev reads these first)
-   - The target branch name (see Branch Naming below)
-   - Issue number and title
-3. Dev reads guidebooks, implements, tests locally, commits atomically
-4. Dev reports to TL: "Ready for review. Branch: `{branch}`"
-5. TL transitions to Phase 3
+1. Dev (already spawned in Phase 0, in warm-up phase) receives the analyst's brief via `SendMessage`
+2. Dev transitions from warm-up to implementation — guidebooks and CLAUDE.md are already read from warm-up
+3. Dev implements, tests locally, commits atomically
+4. **Dev sends review request directly to reviewer via `SendMessage`** (reviewer is already spawned and in pre-read phase)
+5. Dev also notifies TL: "Ready for review. Branch: `{branch}`"
+6. TL transitions to Phase 3
 
-### Dev Task Format (sent via TaskCreate)
+### Dev Task Format (sent via TaskCreate at spawn)
 
 ```
 ISSUE: #{N} {title}
 BRANCH: {feat|fix|test}/{N}-{short-desc}
 BASE: {{BASE_BRANCH}}
 
-BRIEF:
-{paste the full analyst brief here}
+GUIDEBOOKS (read these during warm-up):
+{list of known guidebook paths from project conventions, e.g., CLAUDE.md}
 
-GUIDEBOOKS (read these before implementing):
-{list of paths from brief}
+WARM-UP INSTRUCTIONS (start immediately, before brief arrives):
+1. Read CLAUDE.md in the project root
+2. Read each guidebook file listed above
+3. Explore the codebase — understand relevant files, patterns, test structure
+4. Wait for the analyst's brief to arrive via SendMessage from "analyst"
 
-INSTRUCTIONS:
-1. Read each guidebook file listed above
+IMPLEMENTATION INSTRUCTIONS (after brief arrives via SendMessage):
+1. Parse the analyst's brief for any additional guidebook paths — read those too
 2. Implement the changes described in the brief
-3. Follow conventions from CLAUDE.md
+3. Follow conventions from CLAUDE.md and guidebooks
 4. Run build + tests locally before reporting ready
 5. Commit atomically: "Issue #{N}: {description}"
-6. Report "Ready for review. Branch: {branch}" when done
+6. Send review request directly to "reviewer" via SendMessage
+7. Also report "Ready for review. Branch: {branch}" to TL
 ```
 
 ### Mixed-Language Work
@@ -191,10 +210,10 @@ For mixed-type issues (e.g., C# backend + TypeScript frontend):
 
 ## Phase 3 — Review (Peer-to-Peer)
 
-1. **TL spawns `fleet-reviewer`** with the branch name and issue number
-2. **TL tells dev**: "Reviewer is available as `reviewer`. When review feedback arrives, address it and re-request review directly."
-3. **TL tells reviewer**: "Dev is available as `dev`. Send rejection feedback directly to dev. Send your final APPROVE/REJECT verdict to me (TL)."
-4. **TL steps back.** The dev↔reviewer loop runs peer-to-peer:
+1. Reviewer (already spawned in Phase 0, in pre-read phase) receives the review request from dev via `SendMessage`
+2. Reviewer transitions from pre-read to active review — CLAUDE.md and guidebooks are already read from pre-read
+3. **Dev and reviewer already know each other's names** (set at spawn time). No TL introduction needed.
+4. **TL steps back.** The dev-reviewer loop runs peer-to-peer:
    - Reviewer performs two-pass review (code quality + acceptance)
    - **REJECT** → reviewer sends actionable feedback directly to dev → dev fixes and re-requests review from reviewer directly
    - **APPROVE** → reviewer notifies TL with the final verdict
@@ -203,18 +222,26 @@ For mixed-type issues (e.g., C# backend + TypeScript frontend):
    - **Agent stuck** (5min idle) → TL sends a nudge
    - **Escalation request** from either agent → TL steps in
 
-### Reviewer Task Format (sent via TaskCreate)
+### Reviewer Task Format (sent via TaskCreate at spawn)
 
 ```
 ISSUE: #{N} {title}
-BRANCH: {branch-name}
+BRANCH: (will be provided by dev when ready for review)
 BASE: {{BASE_BRANCH}}
 
-Review the changes on this branch against the base branch.
+PRE-READ INSTRUCTIONS (start immediately, before review request arrives):
+1. Read CLAUDE.md in the project root
+2. Read any guidebook files listed below
+3. Familiarize yourself with the codebase: structure, patterns, conventions
+4. Read the GitHub issue for acceptance criteria
+5. Wait for the dev's review request to arrive via SendMessage from "dev"
+
+REVIEW INSTRUCTIONS (after review request arrives via SendMessage):
+Review the changes on the branch against the base branch.
 Two-pass review: code quality + acceptance criteria from the issue.
 
 PEERS:
-- Dev agent name: {dev-agent-name}
+- Dev agent name: dev
 - Send rejection feedback DIRECTLY to dev via SendMessage
 - Send final APPROVE or REJECT verdict to TL (me)
 
@@ -415,7 +442,9 @@ Atomic commits — each commit should be a logical unit.
 | Dev pushes without rebase | ALWAYS rebase on {{BASE_BRANCH}} before push |
 | Dev creates the PR | TL creates the PR after APPROVE |
 | Spawning a coordinator / 4th agent | Diamond team is exactly 3 agents: analyst, dev, reviewer |
-| Spawning all agents at once | Spawn each agent when its phase begins |
+| Spawning agents sequentially (waiting for each phase) | Spawn all 3 agents immediately at startup — they warm up in parallel |
+| Dev starts implementing before brief arrives | Dev must stay in warm-up (read-only) until analyst's brief arrives via SendMessage |
+| Reviewer starts reviewing before dev sends review request | Reviewer must stay in pre-read (read-only) until dev's review request arrives via SendMessage |
 | Ignoring FC messages | Always respond to ci_green, ci_red, pr_merged, nudges |
 | Respawning agent after 2 min idle | Idle is normal — only act at 5min stuck threshold |
 | TL monitors CI manually | FC handles CI monitoring and sends updates via stdin |
@@ -423,15 +452,18 @@ Atomic commits — each commit should be a logical unit.
 ## Decision Summary
 
 ```
-Phase 1: TL → spawn Analyst → receive brief → validate
-Phase 2: TL → spawn Dev (fleet-dev + guidebooks from brief) → dev implements → dev reports "ready for review"
-Phase 3: TL → spawn Reviewer → reviewer + dev iterate p2p → reviewer reports verdict to TL
+Phase 0: TL → spawn ALL 3 agents in parallel (analyst, dev, reviewer)
+         Dev enters warm-up (read-only). Reviewer enters pre-read (read-only).
+Phase 1: Analyst analyzes → sends brief to dev + reviewer + TL → analyst exits
+Phase 2: Dev receives brief → transitions to implementation → sends review request to reviewer
+Phase 3: Reviewer receives review request → transitions to active review → dev + reviewer iterate p2p → reviewer reports verdict to TL
 Phase 4: TL → rebase → create PR → set auto-merge → FC monitors CI
 Phase 5: TL → close issue → shutdown agents → finish
 ```
 
 Edge cases:
-- Analyst fails → TL does quick analysis themselves
+- Analyst fails → TL does quick analysis, sends brief to dev and reviewer manually
+- Analyst declares BLOCKED → TL shuts down dev and reviewer (they were warming up)
 - Dev stuck → TL nudges, then restarts with more context
 - 3 rejections → TL arbitrates: simplify, override nits, restart dev, or abort
 - Dev/Reviewer disagree → TL arbitrates after round 2

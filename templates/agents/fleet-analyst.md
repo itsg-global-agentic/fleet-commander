@@ -144,7 +144,15 @@ If in doubt: it is a RISK, not a BLOCKER. Only flag BLOCKED when the work litera
 
 ### 10. Produce the Brief
 
-Send the structured brief to the TL using `SendMessage`. The brief MUST follow the exact format below — the TL parses it to extract guidebook paths and assign developers.
+Send the structured brief to **all three recipients** using `SendMessage`:
+
+1. **Dev agent** (`dev`) — the dev is already spawned and in warm-up phase, waiting for your brief to begin implementation. Send the brief to dev first.
+2. **Reviewer agent** (`reviewer`) — the reviewer is already spawned and in pre-read phase. Sending the brief gives the reviewer early context on what to expect during review.
+3. **TL** — the TL validates the brief and manages the overall workflow.
+
+You MUST send the brief to all three. The dev and reviewer are spawned in parallel with you — they are waiting for your brief to arrive via `SendMessage`.
+
+The brief MUST follow the exact format below — the TL parses it to extract guidebook paths and assign developers.
 
 ## Brief Format
 
