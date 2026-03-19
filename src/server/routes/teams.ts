@@ -862,12 +862,19 @@ const teamsRoutes: FastifyPluginCallback = (
           // PM message delivery and the agent's next hook event (#190)
           db.updateTeam(teamId, { lastEventAt: new Date().toISOString() });
           request.log.info(`[Teams] Message delivered to team ${teamId} via stdin`);
+        } else {
+          request.log.warn(`[Teams] Message not delivered to team ${teamId} — no stdin pipe`);
+          return reply.code(422).send({
+            ...command,
+            error: 'Unprocessable Entity',
+            message: 'Team is not running \u2014 message not delivered',
+          });
         }
 
         return reply.code(201).send({
           ...command,
-          // Override status if delivered via stdin
-          ...(delivered ? { status: 'delivered' as const, deliveredAt: new Date().toISOString() } : {}),
+          status: 'delivered' as const,
+          deliveredAt: new Date().toISOString(),
         });
       } catch (err: unknown) {
         request.log.error(err, 'Failed to send message to team');

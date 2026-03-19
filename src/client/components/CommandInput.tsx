@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { useApi } from '../hooks/useApi';
+import { useApi, ApiError } from '../hooks/useApi';
 
 // ---------------------------------------------------------------------------
 // Component
@@ -10,7 +10,7 @@ interface CommandInputProps {
   disabled?: boolean;
 }
 
-type FeedbackState = null | { type: 'success'; message: string } | { type: 'error'; message: string };
+type FeedbackState = null | { type: 'success'; message: string } | { type: 'warning'; message: string } | { type: 'error'; message: string };
 
 export function CommandInput({ teamId, disabled = false }: CommandInputProps) {
   const api = useApi();
@@ -55,8 +55,12 @@ export function CommandInput({ teamId, disabled = false }: CommandInputProps) {
       // Refocus the input after successful send
       inputRef.current?.focus();
     } catch (err) {
-      const errMsg = err instanceof Error ? err.message : 'Failed to send message';
-      showFeedback({ type: 'error', message: errMsg });
+      if (err instanceof ApiError && err.status === 422) {
+        showFeedback({ type: 'warning', message: 'Team is not running \u2014 message not delivered' });
+      } else {
+        const errMsg = err instanceof Error ? err.message : 'Failed to send message';
+        showFeedback({ type: 'error', message: errMsg });
+      }
     } finally {
       setSending(false);
     }
@@ -89,7 +93,9 @@ export function CommandInput({ teamId, disabled = false }: CommandInputProps) {
           className={`mt-2 text-xs px-2 py-1 rounded ${
             feedback.type === 'success'
               ? 'text-[#3FB950] bg-[#3FB950]/10'
-              : 'text-[#F85149] bg-[#F85149]/10'
+              : feedback.type === 'warning'
+                ? 'text-[#D29922] bg-[#D29922]/10'
+                : 'text-[#F85149] bg-[#F85149]/10'
           }`}
         >
           {feedback.message}
