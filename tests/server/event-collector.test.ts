@@ -173,7 +173,7 @@ describe('Invalid payload rejection', () => {
 // =============================================================================
 
 describe('State transitions', () => {
-  it('transitions idle -> running on any event', () => {
+  it('transitions idle -> running on non-dormancy event', () => {
     const db = createMockDb({
       getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
     });
@@ -189,7 +189,7 @@ describe('State transitions', () => {
     );
   });
 
-  it('transitions stuck -> running on any event', () => {
+  it('transitions stuck -> running on non-dormancy event', () => {
     const db = createMockDb({
       getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'stuck', phase: 'implementing' }),
     });
@@ -203,6 +203,160 @@ describe('State transitions', () => {
       expect.objectContaining({ status: 'running' }),
     );
   });
+
+  // --- Dormancy event filtering (Issue #193) ---
+
+  it('does NOT transition idle -> running on stop event', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'stop' });
+
+    processEvent(payload, db, sse);
+
+    // Should NOT have called updateTeam with status: 'running'
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+    expect(db.insertTransition).not.toHaveBeenCalled();
+  });
+
+  it('does NOT transition idle -> running on session_end event', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'session_end' });
+
+    processEvent(payload, db, sse);
+
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+    expect(db.insertTransition).not.toHaveBeenCalled();
+  });
+
+  it('does NOT transition stuck -> running on stop event', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'stuck', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'stop' });
+
+    processEvent(payload, db, sse);
+
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+    expect(db.insertTransition).not.toHaveBeenCalled();
+  });
+
+  it('does NOT transition stuck -> running on session_end event', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'stuck', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'session_end' });
+
+    processEvent(payload, db, sse);
+
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+    expect(db.insertTransition).not.toHaveBeenCalled();
+  });
+
+  it('still updates lastEventAt for dormancy events on idle teams', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'stop' });
+
+    processEvent(payload, db, sse);
+
+    // lastEventAt should still be updated even though status did not change
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ lastEventAt: expect.any(String) }),
+    );
+  });
+
+  it('still updates lastEventAt for dormancy events on stuck teams', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'stuck', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'session_end' });
+
+    processEvent(payload, db, sse);
+
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ lastEventAt: expect.any(String) }),
+    );
+  });
+
+  it('still inserts DB event and broadcasts SSE for dormancy events on idle teams', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'stop' });
+
+    const result = processEvent(payload, db, sse);
+
+    expect(result.processed).toBe(true);
+    expect(db.insertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'Stop' }),
+    );
+    expect(sse.broadcast).toHaveBeenCalledWith(
+      'team_event',
+      expect.objectContaining({ event_type: 'Stop' }),
+    );
+  });
+
+  // --- Non-dormancy events that DO trigger recovery ---
+
+  const nonDormancyRecoveryEvents = [
+    'tool_use',
+    'session_start',
+    'subagent_start',
+    'subagent_stop',
+    'notification',
+  ];
+
+  for (const eventType of nonDormancyRecoveryEvents) {
+    it(`transitions idle -> running on ${eventType} event`, () => {
+      const db = createMockDb({
+        getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+      });
+      const sse = createMockSse();
+      const payload = makePayload({ event: eventType });
+
+      processEvent(payload, db, sse);
+
+      expect(db.insertTransition).toHaveBeenCalledWith(
+        expect.objectContaining({
+          teamId: 1,
+          fromStatus: 'idle',
+          toStatus: 'running',
+          trigger: 'hook',
+        }),
+      );
+      expect(db.updateTeam).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ status: 'running' }),
+      );
+    });
+  }
+
+  // --- Existing non-dormancy tests ---
 
   it('does NOT transition running -> running (no redundant update)', () => {
     const db = createMockDb({
