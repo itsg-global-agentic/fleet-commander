@@ -43,6 +43,8 @@ const eventsRoutes: FastifyPluginCallback = (
           tool_use_id: body.tool_use_id ? String(body.tool_use_id) : undefined,
           tool_input: body.tool_input ? String(body.tool_input) : undefined,
           stop_reason: body.stop_reason ? String(body.stop_reason) : undefined,
+          error_details: body.error_details ? String(body.error_details) : undefined,
+          last_assistant_message: body.last_assistant_message ? String(body.last_assistant_message) : undefined,
           worktree_root: body.worktree_root ? String(body.worktree_root) : undefined,
           msg_to: body.msg_to ? String(body.msg_to) : undefined,
           msg_summary: body.msg_summary ? String(body.msg_summary) : undefined,
@@ -54,11 +56,11 @@ const eventsRoutes: FastifyPluginCallback = (
 
         // When a stop event is received, a team may be finishing —
         // trigger queue processing so queued teams can launch.
-        if (payload.event === 'stop' || payload.event === 'session_end') {
+        if (payload.event === 'stop' || payload.event === 'stop_failure' || payload.event === 'session_end') {
           const team = db.getTeamByWorktree(payload.team);
           if (team?.projectId) {
             getTeamManager().processQueue(team.projectId).catch((err) => {
-              request.log.error(err, 'processQueue error after stop/session_end event');
+              request.log.error(err, 'processQueue error after stop/session_end/stop_failure event');
             });
           }
         }

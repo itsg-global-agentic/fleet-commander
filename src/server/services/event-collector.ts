@@ -36,6 +36,8 @@ export interface EventPayload {
   tool_use_id?: string;  // tool_use_id from PostToolUseFailure events
   tool_input?: string;   // tool input JSON from PostToolUseFailure events (passed via route, not shell)
   stop_reason?: string;
+  error_details?: string;       // StopFailure: reason for the failure (e.g. "rate_limit")
+  last_assistant_message?: string; // StopFailure: last thing the agent said before failure
   worktree_root?: string;
   msg_to?: string;
   msg_summary?: string;
@@ -125,6 +127,7 @@ function normalizeEventType(raw: string): string {
     'session_start': 'SessionStart',
     'session_end': 'SessionEnd',
     'stop': 'Stop',
+    'stop_failure': 'StopFailure',
     'subagent_start': 'SubagentStart',
     'subagent_stop': 'SubagentStop',
     'notification': 'Notification',
@@ -188,7 +191,7 @@ export function processEvent(
   //
   // This MUST happen before the throttle check so that even
   // deduplicated tool_use events trigger the recovery transition.
-  const DORMANCY_EVENTS = new Set(['stop', 'session_end']);
+  const DORMANCY_EVENTS = new Set(['stop', 'stop_failure', 'session_end']);
   const eventNameLower = payload.event.toLowerCase();
 
   if ((team.status === 'idle' || team.status === 'stuck') && !DORMANCY_EVENTS.has(eventNameLower)) {

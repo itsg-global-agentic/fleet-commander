@@ -74,6 +74,7 @@ describe('Valid payload processing', () => {
     'session_start',
     'session_end',
     'stop',
+    'stop_failure',
     'subagent_start',
     'subagent_stop',
     'notification',
@@ -86,6 +87,7 @@ describe('Valid payload processing', () => {
     session_start: 'SessionStart',
     session_end: 'SessionEnd',
     stop: 'Stop',
+    stop_failure: 'StopFailure',
     subagent_start: 'SubagentStart',
     subagent_stop: 'SubagentStop',
     notification: 'Notification',
@@ -502,6 +504,7 @@ describe('Non-tool_use events never throttled', () => {
     'session_start',
     'session_end',
     'stop',
+    'stop_failure',
     'subagent_start',
     'subagent_stop',
     'notification',
@@ -642,6 +645,103 @@ describe('tool_error event with error field', () => {
     const storedPayload = JSON.parse(insertCall.payload);
     expect(storedPayload.error).toBe('file not found');
     expect(storedPayload.message).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// StopFailure event with error_details and last_assistant_message
+// =============================================================================
+
+describe('StopFailure event', () => {
+  it('stores error_details and last_assistant_message in payload JSON', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'stop_failure',
+      error_details: 'rate_limit',
+      last_assistant_message: 'I was about to run the tests when...',
+    });
+
+    const result = processEvent(payload, db, sse);
+
+    expect(result.processed).toBe(true);
+    expect(db.insertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventType: 'StopFailure',
+      }),
+    );
+
+    // Verify the full payload JSON contains the StopFailure-specific fields
+    const insertCall = (db.insertEvent as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const storedPayload = JSON.parse(insertCall.payload);
+    expect(storedPayload.error_details).toBe('rate_limit');
+    expect(storedPayload.last_assistant_message).toBe('I was about to run the tests when...');
+  });
+
+  it('is treated as a dormancy event (does not transition idle -> running)', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'stop_failure', error_details: 'api_error' });
+
+    processEvent(payload, db, sse);
+
+    // Should NOT have called updateTeam with status: 'running'
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+    expect(db.insertTransition).not.toHaveBeenCalled();
+  });
+
+  it('is treated as a dormancy event (does not transition stuck -> running)', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'stuck', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'stop_failure', error_details: 'rate_limit' });
+
+    processEvent(payload, db, sse);
+
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+    expect(db.insertTransition).not.toHaveBeenCalled();
+  });
+
+  it('still updates lastEventAt for stop_failure events', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'stop_failure', error_details: 'rate_limit' });
+
+    processEvent(payload, db, sse);
+
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ lastEventAt: expect.any(String) }),
+    );
+  });
+
+  it('handles stop_failure with only error field (no error_details)', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload: EventPayload = {
+      event: 'stop_failure',
+      team: 'kea-100',
+      session_id: 'sess-abc',
+      error: 'API rate limit exceeded',
+    };
+
+    const result = processEvent(payload, db, sse);
+
+    expect(result.processed).toBe(true);
+    const insertCall = (db.insertEvent as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const storedPayload = JSON.parse(insertCall.payload);
+    expect(storedPayload.error).toBe('API rate limit exceeded');
   });
 });
 
