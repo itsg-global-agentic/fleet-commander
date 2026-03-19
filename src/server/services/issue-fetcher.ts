@@ -86,14 +86,18 @@ interface ProjectIssueCache {
 const MAX_CONCURRENT_RESOLVE = 5;
 
 // ---------------------------------------------------------------------------
-// GraphQL query -- flat list of all open issues with parent reference
+// GraphQL queries -- flat list of all open issues with parent reference
 // ---------------------------------------------------------------------------
 // Fetches ~100 issues per page with ~10 sub-fields each = ~1,000 nodes/page.
 // The tree is built client-side from parent references instead of nested
 // subIssues, avoiding GitHub's 500,000 node limit.
+//
+// Two variants: FULL includes blockedBy/issueDependenciesSummary fields
+// (GitHub Sub-issues / Issue Dependencies API). BASIC omits them for
+// environments where those fields are not available in the GraphQL schema.
 // ---------------------------------------------------------------------------
 
-const ISSUES_QUERY = `
+const ISSUES_QUERY_FULL = `
 query GetIssues($owner: String!, $repo: String!, $cursor: String) {
   repository(owner: $owner, name: $repo) {
     issues(first: 100, after: $cursor, states: [OPEN]) {
@@ -113,6 +117,28 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String) {
           nodes { number title state repository { owner { login } name } }
         }
         issueDependenciesSummary { totalBlockedBy totalBlocking }
+      }
+    }
+  }
+}
+`;
+
+const ISSUES_QUERY_BASIC = `
+query GetIssues($owner: String!, $repo: String!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    issues(first: 100, after: $cursor, states: [OPEN]) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        number
+        title
+        state
+        url
+        labels(first: 5) { nodes { name } }
+        parent { number title }
+        subIssuesSummary { total completed percentCompleted }
+        closedByPullRequestsReferences(first: 3, includeClosedPrs: true) {
+          nodes { number state }
+        }
       }
     }
   }
@@ -226,6 +252,10 @@ export class IssueFetcher {
   private cacheByProject: Map<number, ProjectIssueCache> = new Map();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
+  // Whether the GitHub GraphQL schema supports blockedBy/issueDependenciesSummary.
+  // Starts true; set to false on first query failure caused by unsupported fields,
+  // after which all subsequent queries use the basic query without those fields.
+  private blockedBySupported = true;
 
   // -------------------------------------------------------------------------
   // Public API
@@ -464,10 +494,12 @@ export class IssueFetcher {
   /**
    * Full reset: stop the polling timer and clear all cached data.
    * Used by factory reset -- does NOT restart since there are no projects.
+   * Also resets the blockedBySupported flag so the full query is re-tested.
    */
   reset(): void {
     this.stop();
     this.clearAll();
+    this.blockedBySupported = true;
   }
 
   /**
@@ -767,15 +799,50 @@ export class IssueFetcher {
   /**
    * Execute a GraphQL query via `gh api graphql`.
    * Returns parsed JSON or null on error.
+   *
+   * Selects between the full query (with blockedBy/issueDependenciesSummary)
+   * and the basic query based on `this.blockedBySupported`. If the full query
+   * fails due to unsupported fields, automatically downgrades to the basic
+   * query and retries.
    */
   private async executeGraphQL(
     owner: string,
     repo: string,
     cursor: string | null
   ): Promise<GraphQLResponse | null> {
+    const query = this.blockedBySupported ? ISSUES_QUERY_FULL : ISSUES_QUERY_BASIC;
+    const result = await this.runGraphQLQuery(query, owner, repo, cursor);
+
+    if (result !== null) {
+      return result;
+    }
+
+    // If the full query failed and blockedBy was enabled, downgrade and retry
+    if (this.blockedBySupported) {
+      this.blockedBySupported = false;
+      console.warn(
+        '[IssueFetcher] Full query with blockedBy fields failed; ' +
+        'falling back to basic query without dependency fields'
+      );
+      return this.runGraphQLQuery(ISSUES_QUERY_BASIC, owner, repo, cursor);
+    }
+
+    return null;
+  }
+
+  /**
+   * Run a single GraphQL query via `gh api graphql --input -`.
+   * Returns parsed JSON or null on error.
+   */
+  private async runGraphQLQuery(
+    query: string,
+    owner: string,
+    repo: string,
+    cursor: string | null
+  ): Promise<GraphQLResponse | null> {
     try {
       // Collapse whitespace for a compact query string
-      const compactQuery = ISSUES_QUERY.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+      const compactQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
 
       // Build the full GraphQL request body as JSON.
       // Passing via stdin avoids all shell escaping issues on Windows/Git Bash.
@@ -797,7 +864,24 @@ export class IssueFetcher {
         ...({ input: requestBody } as Record<string, unknown>),
       });
 
-      return JSON.parse(stdout) as GraphQLResponse;
+      const parsed = JSON.parse(stdout) as GraphQLResponse;
+
+      // Check for GraphQL-level errors indicating unsupported fields
+      if (parsed.errors?.length) {
+        const hasFieldError = parsed.errors.some(
+          (e) => /field\b.*\bdoesn't exist/i.test(e.message) ||
+                 /blockedBy/i.test(e.message) ||
+                 /issueDependenciesSummary/i.test(e.message)
+        );
+        if (hasFieldError) {
+          console.error(
+            `[IssueFetcher] GraphQL schema error: ${parsed.errors.map((e) => e.message).join('; ')}`
+          );
+          return null;
+        }
+      }
+
+      return parsed;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[IssueFetcher] gh api graphql failed: ${message}`);
