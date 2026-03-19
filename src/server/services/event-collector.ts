@@ -34,13 +34,20 @@ export interface EventPayload {
   message?: string;
   error?: string;        // PostToolUseFailure error description (CC sends "error", not "message")
   tool_use_id?: string;  // tool_use_id from PostToolUseFailure events
-  tool_input?: string;   // tool input JSON from PostToolUseFailure events (passed via route, not shell)
-  stop_reason?: string;
+  tool_input?: string;   // tool input JSON from PostToolUseFailure events
   error_details?: string;       // StopFailure: reason for the failure (e.g. "rate_limit")
   last_assistant_message?: string; // StopFailure: last thing the agent said before failure
   worktree_root?: string;
   msg_to?: string;
   msg_summary?: string;
+  // Raw CC stdin JSON forwarded from send_event.sh (new format)
+  cc_stdin?: string;
+  // Additional fields extracted from cc_stdin (CC provides but were previously dropped)
+  model?: string;               // e.g. "claude-sonnet-4-20250514"
+  source?: string;              // e.g. "tool_use", "user"
+  notification_type?: string;   // e.g. "stuck", "idle"
+  agent_id?: string;            // CC agent identifier
+  cwd?: string;                 // working directory of the CC process
 }
 
 /** Result returned from processEvent */

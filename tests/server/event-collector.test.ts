@@ -13,6 +13,10 @@ import {
   type SseBroker,
   type TeamMessageSender,
 } from '../../src/server/services/event-collector.js';
+import {
+  buildPayloadFromCcStdin,
+  buildPayloadFromLegacy,
+} from '../../src/server/routes/events.js';
 
 // ---------------------------------------------------------------------------
 // Mock factories
@@ -1118,5 +1122,371 @@ describe('Subagent crash detection', () => {
     expect(msg).toContain('s after start');
     expect(msg).toContain('events');
     expect(msg).toContain('Consider respawning');
+  });
+});
+
+// =============================================================================
+// cc_stdin payload parsing (Issue #200)
+// =============================================================================
+
+describe('buildPayloadFromCcStdin', () => {
+  it('extracts all standard CC fields from cc_stdin JSON', () => {
+    const ccData = {
+      session_id: 'sess-xyz',
+      tool_name: 'Bash',
+      agent_type: 'coordinator',
+      teammate_name: 'dev-ts',
+      message: 'Running tests',
+      error: 'exit code 1',
+      tool_use_id: 'toolu_abc',
+      error_details: 'rate_limit',
+      last_assistant_message: 'I was about to finish',
+    };
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      timestamp: '2026-03-19T00:00:00Z',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.event).toBe('tool_use');
+    expect(payload.team).toBe('kea-100');
+    expect(payload.timestamp).toBe('2026-03-19T00:00:00Z');
+    expect(payload.cc_stdin).toBe(JSON.stringify(ccData));
+    expect(payload.session_id).toBe('sess-xyz');
+    expect(payload.tool_name).toBe('Bash');
+    expect(payload.agent_type).toBe('coordinator');
+    expect(payload.teammate_name).toBe('dev-ts');
+    expect(payload.message).toBe('Running tests');
+    expect(payload.error).toBe('exit code 1');
+    expect(payload.tool_use_id).toBe('toolu_abc');
+    expect(payload.error_details).toBe('rate_limit');
+    expect(payload.last_assistant_message).toBe('I was about to finish');
+  });
+
+  it('extracts tool_input as stringified JSON when CC sends it as object', () => {
+    const ccData = {
+      session_id: 'sess-1',
+      tool_name: 'Bash',
+      tool_input: { command: 'npm test', timeout: 60000 },
+    };
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.tool_input).toBe(JSON.stringify({ command: 'npm test', timeout: 60000 }));
+  });
+
+  it('extracts tool_input as-is when CC sends it as string', () => {
+    const ccData = {
+      session_id: 'sess-1',
+      tool_name: 'Bash',
+      tool_input: '{"command":"npm test"}',
+    };
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.tool_input).toBe('{"command":"npm test"}');
+  });
+
+  it('extracts SendMessage routing fields from tool_input object', () => {
+    const ccData = {
+      session_id: 'sess-1',
+      tool_name: 'SendMessage',
+      agent_type: 'coordinator',
+      tool_input: {
+        to: 'dev-typescript',
+        summary: 'Review the PR',
+        content: 'Full message body here',
+      },
+    };
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.tool_name).toBe('SendMessage');
+    expect(payload.msg_to).toBe('dev-typescript');
+    expect(payload.msg_summary).toBe('Review the PR');
+    expect(payload.tool_input).toBe(JSON.stringify(ccData.tool_input));
+  });
+
+  it('extracts newly-capturable fields (model, source, notification_type, agent_id, cwd)', () => {
+    const ccData = {
+      session_id: 'sess-1',
+      tool_name: 'Read',
+      model: 'claude-sonnet-4-20250514',
+      source: 'tool_use',
+      notification_type: 'stuck',
+      agent_id: 'agent-abc-123',
+      cwd: '/home/user/project',
+    };
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.model).toBe('claude-sonnet-4-20250514');
+    expect(payload.source).toBe('tool_use');
+    expect(payload.notification_type).toBe('stuck');
+    expect(payload.agent_id).toBe('agent-abc-123');
+    expect(payload.cwd).toBe('/home/user/project');
+  });
+
+  it('handles invalid cc_stdin JSON gracefully', () => {
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      cc_stdin: 'not-valid-json{{{',
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.event).toBe('tool_use');
+    expect(payload.team).toBe('kea-100');
+    expect(payload.cc_stdin).toBe('not-valid-json{{{');
+    // No fields should be extracted
+    expect(payload.session_id).toBeUndefined();
+    expect(payload.tool_name).toBeUndefined();
+  });
+
+  it('handles cc_stdin that is an array (not an object)', () => {
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify([1, 2, 3]),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.event).toBe('tool_use');
+    expect(payload.cc_stdin).toBe('[1,2,3]');
+    // Array is not an object — no fields extracted
+    expect(payload.session_id).toBeUndefined();
+  });
+
+  it('handles empty cc_stdin object', () => {
+    const body = {
+      event: 'session_start',
+      team: 'kea-100',
+      cc_stdin: '{}',
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.event).toBe('session_start');
+    expect(payload.session_id).toBeUndefined();
+    expect(payload.tool_name).toBeUndefined();
+  });
+
+  it('does not extract msg_to/msg_summary for non-SendMessage tools', () => {
+    const ccData = {
+      tool_name: 'Bash',
+      tool_input: { to: 'someone', summary: 'something' },
+    };
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.msg_to).toBeUndefined();
+    expect(payload.msg_summary).toBeUndefined();
+  });
+});
+
+describe('buildPayloadFromLegacy', () => {
+  it('extracts all fields from legacy format body', () => {
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      timestamp: '2026-03-19T00:00:00Z',
+      session_id: 'sess-abc',
+      tool_name: 'Bash',
+      agent_type: 'coordinator',
+      teammate_name: 'dev-ts',
+      message: 'Hello',
+      error: 'exit 1',
+      tool_use_id: 'toolu_xyz',
+      tool_input: '{"command":"ls"}',
+      error_details: 'rate_limit',
+      last_assistant_message: 'I was running',
+      worktree_root: '/path/to/worktree',
+      msg_to: 'reviewer',
+      msg_summary: 'Ready for review',
+    };
+
+    const payload = buildPayloadFromLegacy(body);
+
+    expect(payload.event).toBe('tool_use');
+    expect(payload.team).toBe('kea-100');
+    expect(payload.session_id).toBe('sess-abc');
+    expect(payload.tool_name).toBe('Bash');
+    expect(payload.agent_type).toBe('coordinator');
+    expect(payload.teammate_name).toBe('dev-ts');
+    expect(payload.message).toBe('Hello');
+    expect(payload.error).toBe('exit 1');
+    expect(payload.tool_use_id).toBe('toolu_xyz');
+    expect(payload.tool_input).toBe('{"command":"ls"}');
+    expect(payload.error_details).toBe('rate_limit');
+    expect(payload.last_assistant_message).toBe('I was running');
+    expect(payload.worktree_root).toBe('/path/to/worktree');
+    expect(payload.msg_to).toBe('reviewer');
+    expect(payload.msg_summary).toBe('Ready for review');
+  });
+
+  it('handles missing optional fields gracefully', () => {
+    const body = {
+      event: 'session_start',
+      team: 'kea-200',
+    };
+
+    const payload = buildPayloadFromLegacy(body);
+
+    expect(payload.event).toBe('session_start');
+    expect(payload.team).toBe('kea-200');
+    expect(payload.session_id).toBeUndefined();
+    expect(payload.tool_name).toBeUndefined();
+    expect(payload.cc_stdin).toBeUndefined();
+  });
+
+  it('does not include cc_stdin field', () => {
+    const body = {
+      event: 'tool_use',
+      team: 'kea-100',
+      session_id: 'sess-1',
+    };
+
+    const payload = buildPayloadFromLegacy(body);
+
+    expect(payload.cc_stdin).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// cc_stdin payloads through processEvent (end-to-end)
+// =============================================================================
+
+describe('cc_stdin payloads through processEvent', () => {
+  it('stores cc_stdin and new fields in the event payload JSON', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    const ccStdin = JSON.stringify({
+      session_id: 'sess-new',
+      tool_name: 'Edit',
+      model: 'claude-sonnet-4-20250514',
+      source: 'tool_use',
+      agent_id: 'agent-001',
+      cwd: '/workdir',
+    });
+
+    const payload: EventPayload = {
+      event: 'tool_use',
+      team: 'kea-100',
+      cc_stdin: ccStdin,
+      session_id: 'sess-new',
+      tool_name: 'Edit',
+      model: 'claude-sonnet-4-20250514',
+      source: 'tool_use',
+      agent_id: 'agent-001',
+      cwd: '/workdir',
+    };
+
+    const result = processEvent(payload, db, sse);
+
+    expect(result.processed).toBe(true);
+
+    // Verify the stored payload JSON includes cc_stdin and new fields
+    const insertCall = (db.insertEvent as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const storedPayload = JSON.parse(insertCall.payload);
+    expect(storedPayload.cc_stdin).toBe(ccStdin);
+    expect(storedPayload.model).toBe('claude-sonnet-4-20250514');
+    expect(storedPayload.source).toBe('tool_use');
+    expect(storedPayload.agent_id).toBe('agent-001');
+    expect(storedPayload.cwd).toBe('/workdir');
+  });
+
+  it('correctly routes SendMessage from cc_stdin-parsed payload', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    const payload: EventPayload = {
+      event: 'tool_use',
+      team: 'kea-100',
+      session_id: 'sess-1',
+      tool_name: 'SendMessage',
+      agent_type: 'coordinator',
+      msg_to: 'dev-typescript',
+      msg_summary: 'Implement the fix',
+      message: 'Full content',
+      cc_stdin: JSON.stringify({
+        session_id: 'sess-1',
+        tool_name: 'SendMessage',
+        agent_type: 'coordinator',
+        tool_input: { to: 'dev-typescript', summary: 'Implement the fix', content: 'Full content' },
+      }),
+    };
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith({
+      teamId: 1,
+      eventId: 1,
+      sender: 'coordinator',
+      recipient: 'dev-typescript',
+      summary: 'Implement the fix',
+      content: 'Full content',
+      sessionId: 'sess-1',
+    });
+  });
+
+  it('handles nested tool_input with special characters that would break shell regex', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    const complexToolInput = {
+      command: 'echo "hello {world}" | grep -o "\\w+"',
+      nested: { key: 'value with "quotes" and {braces}' },
+    };
+
+    const payload: EventPayload = {
+      event: 'tool_use',
+      team: 'kea-100',
+      session_id: 'sess-1',
+      tool_name: 'Bash',
+      tool_input: JSON.stringify(complexToolInput),
+      cc_stdin: JSON.stringify({
+        session_id: 'sess-1',
+        tool_name: 'Bash',
+        tool_input: complexToolInput,
+      }),
+    };
+
+    const result = processEvent(payload, db, sse);
+
+    expect(result.processed).toBe(true);
+    const insertCall = (db.insertEvent as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const storedPayload = JSON.parse(insertCall.payload);
+    expect(storedPayload.tool_input).toBe(JSON.stringify(complexToolInput));
   });
 });

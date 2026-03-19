@@ -12,6 +12,100 @@ interface EventQuerystring {
   limit?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Payload builders — new cc_stdin format vs legacy field-by-field
+// ---------------------------------------------------------------------------
+
+/** Helper to safely extract a string from an unknown value */
+function str(val: unknown): string | undefined {
+  if (val === undefined || val === null || val === '') return undefined;
+  return String(val);
+}
+
+/**
+ * New format: shell sends event, team, timestamp, and raw cc_stdin.
+ * Server parses cc_stdin with JSON.parse() and extracts all CC fields.
+ */
+function buildPayloadFromCcStdin(body: Record<string, unknown>): EventPayload {
+  const payload: EventPayload = {
+    event: String(body.event),
+    team: String(body.team),
+    timestamp: str(body.timestamp),
+    cc_stdin: String(body.cc_stdin),
+  };
+
+  // Parse raw CC stdin JSON
+  let cc: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(String(body.cc_stdin));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      cc = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // If cc_stdin is not valid JSON, store it as-is but extract nothing
+    return payload;
+  }
+
+  // Extract known CC fields
+  payload.session_id = str(cc.session_id);
+  payload.tool_name = str(cc.tool_name);
+  payload.agent_type = str(cc.agent_type);
+  payload.teammate_name = str(cc.teammate_name);
+  payload.message = str(cc.message);
+  payload.error = str(cc.error);
+  payload.tool_use_id = str(cc.tool_use_id);
+  payload.error_details = str(cc.error_details);
+  payload.last_assistant_message = str(cc.last_assistant_message);
+
+  // tool_input: CC sends this as an object; stringify it for storage
+  if (cc.tool_input !== undefined && cc.tool_input !== null) {
+    payload.tool_input = typeof cc.tool_input === 'string'
+      ? cc.tool_input
+      : JSON.stringify(cc.tool_input);
+  }
+
+  // Extract SendMessage routing fields from parsed tool_input
+  if (payload.tool_name === 'SendMessage' && cc.tool_input && typeof cc.tool_input === 'object') {
+    const toolInput = cc.tool_input as Record<string, unknown>;
+    payload.msg_to = str(toolInput.to);
+    payload.msg_summary = str(toolInput.summary);
+  }
+
+  // New fields that CC provides but were previously dropped by shell regex
+  payload.model = str(cc.model);
+  payload.source = str(cc.source);
+  payload.notification_type = str(cc.notification_type);
+  payload.agent_id = str(cc.agent_id);
+  payload.cwd = str(cc.cwd);
+
+  return payload;
+}
+
+/**
+ * Legacy format: shell extracts fields individually and sends them as top-level
+ * body fields. Maintains backward compatibility with old hook installations.
+ */
+function buildPayloadFromLegacy(body: Record<string, unknown>): EventPayload {
+  return {
+    event: String(body.event),
+    team: String(body.team),
+    timestamp: str(body.timestamp),
+    session_id: str(body.session_id),
+    tool_name: str(body.tool_name),
+    agent_type: str(body.agent_type),
+    teammate_name: str(body.teammate_name),
+    message: str(body.message),
+    error: str(body.error),
+    tool_use_id: str(body.tool_use_id),
+    tool_input: str(body.tool_input),
+    error_details: str(body.error_details),
+    last_assistant_message: str(body.last_assistant_message),
+    worktree_root: str(body.worktree_root),
+    msg_to: str(body.msg_to),
+    msg_summary: str(body.msg_summary),
+  };
+}
+
 const eventsRoutes: FastifyPluginCallback = (
   fastify: FastifyInstance,
   _opts: Record<string, unknown>,
@@ -30,25 +124,10 @@ const eventsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const payload: EventPayload = {
-          event: String(body.event),
-          team: String(body.team),
-          timestamp: body.timestamp ? String(body.timestamp) : undefined,
-          session_id: body.session_id ? String(body.session_id) : undefined,
-          tool_name: body.tool_name ? String(body.tool_name) : undefined,
-          agent_type: body.agent_type ? String(body.agent_type) : undefined,
-          teammate_name: body.teammate_name ? String(body.teammate_name) : undefined,
-          message: body.message ? String(body.message) : undefined,
-          error: body.error ? String(body.error) : undefined,
-          tool_use_id: body.tool_use_id ? String(body.tool_use_id) : undefined,
-          tool_input: body.tool_input ? String(body.tool_input) : undefined,
-          stop_reason: body.stop_reason ? String(body.stop_reason) : undefined,
-          error_details: body.error_details ? String(body.error_details) : undefined,
-          last_assistant_message: body.last_assistant_message ? String(body.last_assistant_message) : undefined,
-          worktree_root: body.worktree_root ? String(body.worktree_root) : undefined,
-          msg_to: body.msg_to ? String(body.msg_to) : undefined,
-          msg_summary: body.msg_summary ? String(body.msg_summary) : undefined,
-        };
+        // Build EventPayload — detect new format (cc_stdin) vs legacy field-by-field
+        const payload: EventPayload = body.cc_stdin
+          ? buildPayloadFromCcStdin(body)
+          : buildPayloadFromLegacy(body);
 
         const db = getDatabase();
         const manager = getTeamManager();
@@ -118,3 +197,6 @@ const eventsRoutes: FastifyPluginCallback = (
 };
 
 export default eventsRoutes;
+
+// Exported for testing
+export { buildPayloadFromCcStdin, buildPayloadFromLegacy };
