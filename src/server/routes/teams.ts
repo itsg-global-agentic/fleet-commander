@@ -87,12 +87,12 @@ function summarize(e: Record<string, unknown>): string {
 /**
  * Check whether an issue has unresolved dependencies.
  * Returns the dependency info, or null if dependencies cannot be determined
- * (which is treated as "no blockers" — permissive fallback).
+ * (which is treated as "no blockers" -- permissive fallback).
  */
-function checkDependencies(projectId: number, issueNumber: number): IssueDependencyInfo | null {
+async function checkDependencies(projectId: number, issueNumber: number): Promise<IssueDependencyInfo | null> {
   try {
     const fetcher = getIssueFetcher();
-    return fetcher.fetchDependenciesForIssue(projectId, issueNumber);
+    return await fetcher.fetchDependenciesForIssue(projectId, issueNumber);
   } catch (err) {
     console.error(
       `[Teams] Dependency check failed for issue #${issueNumber}:`,
@@ -138,9 +138,9 @@ const teamsRoutes: FastifyPluginCallback = (
           });
         }
 
-        // Dependency check — block launch if unresolved dependencies exist
+        // Dependency check -- block launch if unresolved dependencies exist
         if (!force) {
-          const depInfo = checkDependencies(projectId, issueNumber);
+          const depInfo = await checkDependencies(projectId, issueNumber);
           if (depInfo && !depInfo.resolved) {
             // Track for resolution detection in the poller
             const blockerNumbers = depInfo.blockedBy
@@ -220,7 +220,7 @@ const teamsRoutes: FastifyPluginCallback = (
         const batchNumbers = new Set(issues.map((i) => i.number));
 
         for (const issue of issues) {
-          const depInfo = checkDependencies(projectId, issue.number);
+          const depInfo = await checkDependencies(projectId, issue.number);
           if (depInfo && !depInfo.resolved) {
             // Check if all open blockers are in this same batch (intra-batch dependency)
             const allBlockersInBatch = depInfo.blockedBy

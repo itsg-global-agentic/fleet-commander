@@ -48,12 +48,11 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
 
     // Build per-project groups using the fetcher's grouped API
     const projectCaches = fetcher.getIssuesByProject();
-    const groups = projectCaches.map((entry) => {
+    const groups = await Promise.all(projectCaches.map(async (entry) => {
       const project = db.getProject(entry.projectId);
       const cloned = structuredClone(entry.tree);
       fetcher.enrichWithTeamInfo(cloned, entry.projectId);
-      // TODO(#180): re-enable when dependency fetching is async
-      // fetcher.enrichWithDependencies(cloned, entry.projectId);
+      await fetcher.enrichWithDependencies(cloned, entry.projectId);
       return {
         projectId: entry.projectId,
         projectName: project?.name ?? `Project #${entry.projectId}`,
@@ -61,7 +60,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
         cachedAt: entry.cachedAt,
         count: countIssues(cloned),
       };
-    });
+    }));
 
     // Also return a flat merged tree for backward compatibility
     const allIssues = groups.flatMap((g) => g.tree);
@@ -100,13 +99,12 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       }
 
       const fetcher = getIssueFetcher();
-      const issues = fetcher.getIssues(projectId);
+      const issues = await fetcher.getIssues(projectId);
 
       // Deep clone to avoid mutating the cache when enriching
       const cloned = structuredClone(issues);
       fetcher.enrichWithTeamInfo(cloned, projectId);
-      // TODO(#180): re-enable when dependency fetching is async
-      // fetcher.enrichWithDependencies(cloned, projectId);
+      await fetcher.enrichWithDependencies(cloned, projectId);
 
       return {
         projectId,
@@ -230,14 +228,14 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       }
 
       const fetcher = getIssueFetcher();
-      const issues = fetcher.getIssues(projectId);
+      const issues = await fetcher.getIssues(projectId);
 
       // Flatten the tree to get all issue numbers
       const allIssues = flattenIssueTree(issues);
-      const dependencies: Record<number, ReturnType<typeof fetcher.fetchDependenciesForIssue>> = {};
+      const dependencies: Record<number, Awaited<ReturnType<typeof fetcher.fetchDependenciesForIssue>>> = {};
 
       for (const issue of allIssues) {
-        const deps = fetcher.fetchDependenciesForIssue(projectId, issue.number);
+        const deps = await fetcher.fetchDependenciesForIssue(projectId, issue.number);
         if (deps) {
           dependencies[issue.number] = deps;
         }
@@ -293,7 +291,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
       }
 
       const fetcher = getIssueFetcher();
-      const deps = fetcher.fetchDependenciesForIssue(projectId, issueNumber);
+      const deps = await fetcher.fetchDependenciesForIssue(projectId, issueNumber);
 
       if (!deps) {
         return reply.code(200).send({
@@ -314,7 +312,7 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
    */
   server.post('/api/issues/refresh', async (_request: FastifyRequest, _reply: FastifyReply) => {
     const fetcher = getIssueFetcher();
-    const issues = fetcher.refresh();
+    const issues = await fetcher.refresh();
 
     // Enrich the fresh data
     const cloned = structuredClone(issues);

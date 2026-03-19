@@ -488,7 +488,7 @@ class GitHubPoller {
 
       for (const [key, entry] of this.previouslyBlocked) {
         try {
-          const deps = fetcher.fetchDependenciesForIssue(entry.projectId, entry.issueNumber);
+          const deps = await fetcher.fetchDependenciesForIssue(entry.projectId, entry.issueNumber);
           if (deps && deps.resolved) {
             // All blockers are now closed — broadcast resolution event
             sseBroker.broadcast('dependency_resolved', {
