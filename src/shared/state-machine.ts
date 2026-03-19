@@ -83,9 +83,10 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     to: 'running',
     trigger: 'hook',
     triggerLabel: 'Activity resumes',
-    description: 'A new hook event is received from the idle team',
-    condition: 'New hook event arrives',
-    hookEvent: 'tool_use',
+    description:
+      'A non-dormancy hook event is received from the idle team. Dormancy events (stop, session_end) do NOT trigger this transition because they indicate the agent finished its turn, not that it resumed work.',
+    condition: 'New hook event arrives AND event is not a dormancy event (stop, session_end)',
+    hookEvent: 'tool_use | session_start | subagent_start | notification | subagent_stop',
   },
   {
     id: 'running-done',
@@ -124,9 +125,9 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     trigger: 'hook',
     triggerLabel: 'Activity resumes',
     description:
-      'A new hook event is received from the stuck team, indicating it recovered',
-    condition: 'New hook event arrives',
-    hookEvent: 'tool_use',
+      'A non-dormancy hook event is received from the stuck team, indicating it recovered. Dormancy events (stop, session_end) do NOT trigger this transition.',
+    condition: 'New hook event arrives AND event is not a dormancy event (stop, session_end)',
+    hookEvent: 'tool_use | session_start | subagent_start | notification | subagent_stop',
   },
   {
     id: 'running-failed',

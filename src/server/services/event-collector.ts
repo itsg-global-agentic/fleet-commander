@@ -154,11 +154,20 @@ export function processEvent(
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
 
-  // ── State transition: idle/stuck -> running on any event ──────────
-  // Any event from an idle or stuck team proves it is alive.
+  // ── State transition: idle/stuck -> running on activity events ─────
+  // Most events from an idle or stuck team prove it is alive and doing
+  // work. However, dormancy-indicating events (stop, session_end) mean
+  // the agent finished its turn or the session terminated — they must
+  // NOT reset the idle/stuck status because the agent is not actively
+  // working. Those events still update lastEventAt (line 206) so the
+  // stuck detector has accurate timing data.
+  //
   // This MUST happen before the throttle check so that even
   // deduplicated tool_use events trigger the recovery transition.
-  if (team.status === 'idle' || team.status === 'stuck') {
+  const DORMANCY_EVENTS = new Set(['stop', 'session_end']);
+  const eventNameLower = payload.event.toLowerCase();
+
+  if ((team.status === 'idle' || team.status === 'stuck') && !DORMANCY_EVENTS.has(eventNameLower)) {
     db.insertTransition({
       teamId,
       fromStatus: team.status,
