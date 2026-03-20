@@ -327,11 +327,13 @@ class GitHubPoller {
             const manager = getTeamManager();
 
             let msg: string | null = null;
+            let ciSubtype: string | undefined;
             if (ciStatus === 'passing') {
               msg = resolveMessage('ci_green', {
                 PR_NUMBER: String(prNumber),
                 AUTO_MERGE_STATUS: autoMerge ? 'enabled' : 'not enabled',
               });
+              ciSubtype = 'ci_green';
             } else if (ciStatus === 'failing') {
               const failedCheckNames = checks
                 .filter((c) => isFailureConclusion(c.conclusion))
@@ -343,8 +345,9 @@ class GitHubPoller {
                 FAIL_COUNT: String(ciFailCount),
                 MAX_FAILURES: String(config.maxUniqueCiFailures),
               });
+              ciSubtype = 'ci_red';
             }
-            if (msg) manager.sendMessage(teamId, msg);
+            if (msg) manager.sendMessage(teamId, msg, 'fc', ciSubtype);
           } catch (err) {
             console.error(`[GitHubPoller] Failed to send CI notification to team ${teamId}:`, err);
           }
@@ -462,7 +465,7 @@ class GitHubPoller {
             PR_NUMBER: String(prNumber),
             FAIL_COUNT: String(ciFailCount),
           });
-          if (msg) manager.sendMessage(teamId, msg);
+          if (msg) manager.sendMessage(teamId, msg, 'fc', 'ci_blocked');
         } catch (err) {
           console.error(`[GitHubPoller] Failed to send blocked notification to team ${teamId}:`, err);
         }

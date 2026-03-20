@@ -162,7 +162,7 @@ class StuckDetector {
             });
             if (idleMsg) {
               const manager = getTeamManager();
-              manager.sendMessage(team.id, idleMsg);
+              manager.sendMessage(team.id, idleMsg, 'fc', 'idle_nudge');
               console.log(`[StuckDetector] Idle nudge sent to team ${team.id}`);
             }
           }
@@ -174,7 +174,7 @@ class StuckDetector {
             });
             if (msg) {
               const manager = getTeamManager();
-              manager.sendMessage(team.id, msg);
+              manager.sendMessage(team.id, msg, 'fc', 'stuck_nudge');
               console.log(`[StuckDetector] Nudge sent to team ${team.id}`);
             }
           }

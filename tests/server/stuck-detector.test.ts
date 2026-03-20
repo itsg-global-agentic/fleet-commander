@@ -294,7 +294,7 @@ describe('Idle nudge message', () => {
     expect(mockedResolveMessage).toHaveBeenCalledWith('idle_nudge', {
       IDLE_MINUTES: '4',
     });
-    expect(mockManager.sendMessage).toHaveBeenCalledWith(1, 'FC status check: idle for 4 minutes');
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(1, 'FC status check: idle for 4 minutes', 'fc', 'idle_nudge');
 
     // Reset mock to default
     mockedResolveMessage.mockReturnValue(null);
@@ -336,7 +336,7 @@ describe('Idle nudge message', () => {
     expect(mockedResolveMessage).toHaveBeenCalledWith('stuck_nudge', {
       ISSUE_NUMBER: '100',
     });
-    expect(mockManager.sendMessage).toHaveBeenCalledWith(1, 'Hey, you have been idle for a while');
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(1, 'Hey, you have been idle for a while', 'fc', 'stuck_nudge');
 
     // Reset mock to default
     mockedResolveMessage.mockReturnValue(null);

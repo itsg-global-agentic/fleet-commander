@@ -34,6 +34,24 @@ function getStyle(type: string) {
   return TYPE_STYLES[type] ?? { color: '#8B949E', label: type };
 }
 
+/** Human-readable short labels for FC message subtypes */
+const FC_SUBTYPE_LABELS: Record<string, string> = {
+  initial_prompt:     'prompt',
+  origin_sync:        'sync',
+  idle_nudge:         'idle',
+  stuck_nudge:        'nudge',
+  ci_green:           'CI pass',
+  ci_red:             'CI fail',
+  ci_blocked:         'CI blocked',
+  pr_merged_shutdown: 'shutdown',
+  subagent_crash:     'crash',
+};
+
+function getSubtypeLabel(subtype: string | undefined): string | null {
+  if (!subtype) return null;
+  return FC_SUBTYPE_LABELS[subtype] ?? subtype;
+}
+
 function formatLocalTime(iso: string): string {
   try {
     return new Date(iso).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit' });
@@ -116,8 +134,9 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
       .map((e) => {
         const ts = e.timestamp ? formatLocalTime(e.timestamp) : '--:--';
         const { label } = getStyle(e.type);
+        const subtypeTag = e.type === 'fc' && e.subtype ? ` [${getSubtypeLabel(e.subtype)}]` : '';
         const body = getEventText(e);
-        return `[${ts}] ${label}: ${body}`;
+        return `[${ts}] ${label}${subtypeTag}: ${body}`;
       }).join('\n');
     navigator.clipboard.writeText(text).then(() => {
       setCopied(true);
@@ -163,6 +182,9 @@ export function TeamOutput({ teamId, teamStatus }: TeamOutputProps) {
               </span>
               {' '}
               <span style={{ color }} className="font-semibold">{label}</span>
+              {e.type === 'fc' && e.subtype && (
+                <span className="text-dark-muted text-[10px] ml-1">[{getSubtypeLabel(e.subtype)}]</span>
+              )}
               {text && (
                 <>
                   {' '}
