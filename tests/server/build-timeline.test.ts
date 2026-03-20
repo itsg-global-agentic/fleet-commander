@@ -459,6 +459,57 @@ describe('buildTimeline', () => {
     }
   });
 
+  it('preserves tool.input on stream tool_use entries', () => {
+    const bashInput = { command: 'ls -la', description: 'List files' };
+    const stream: RawStreamEvent[] = [
+      makeStreamEvent({
+        type: 'tool_use',
+        timestamp: '2026-03-20T10:00:00.000Z',
+        tool: { name: 'Bash', input: bashInput },
+      }),
+    ];
+
+    const result = buildTimeline(stream, [], 1);
+    expect(result).toHaveLength(1);
+
+    const entry = result[0] as { source: 'stream'; tool?: { name?: string; input?: unknown } };
+    expect(entry.source).toBe('stream');
+    expect(entry.tool).toBeDefined();
+    expect(entry.tool!.name).toBe('Bash');
+    expect(entry.tool!.input).toEqual(bashInput);
+  });
+
+  it('preserves tool.input for various tool types through the pipeline', () => {
+    const readInput = { file_path: '/src/index.ts' };
+    const editInput = { file_path: '/src/app.ts', old_string: 'foo', new_string: 'bar' };
+    const grepInput = { pattern: 'TODO', path: '/src' };
+    const stream: RawStreamEvent[] = [
+      makeStreamEvent({
+        type: 'tool_use',
+        timestamp: '2026-03-20T10:00:00.000Z',
+        tool: { name: 'Read', input: readInput },
+      }),
+      makeStreamEvent({
+        type: 'tool_use',
+        timestamp: '2026-03-20T10:00:01.000Z',
+        tool: { name: 'Edit', input: editInput },
+      }),
+      makeStreamEvent({
+        type: 'tool_use',
+        timestamp: '2026-03-20T10:00:02.000Z',
+        tool: { name: 'Grep', input: grepInput },
+      }),
+    ];
+
+    const result = buildTimeline(stream, [], 1);
+    expect(result).toHaveLength(3);
+
+    const entries = result as Array<{ tool?: { name?: string; input?: unknown } }>;
+    expect(entries[0].tool!.input).toEqual(readInput);
+    expect(entries[1].tool!.input).toEqual(editInput);
+    expect(entries[2].tool!.input).toEqual(grepInput);
+  });
+
   it('evicts early stream events when combined count exceeds a low limit', () => {
     // Demonstrate that with the old limit=200, early stream events would be lost
     // when hook events dominate. With limit=500, they survive.

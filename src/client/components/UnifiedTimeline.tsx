@@ -3,7 +3,7 @@ import { useApi } from '../hooks/useApi';
 import type { TimelineEntry, StreamTimelineEntry, HookTimelineEntry, TeamMember } from '../../shared/types';
 import { agentColor } from '../utils/constants';
 import { AgentFilterBar } from './AgentFilterBar';
-import { SettingsIcon } from './Icons';
+import { ChevronRightIcon, SettingsIcon } from './Icons';
 
 // ---------------------------------------------------------------------------
 // Helpers — agent name display
@@ -137,12 +137,104 @@ function resolveHookAgentLabel(entry: HookTimelineEntry): { label: string; color
 }
 
 // ---------------------------------------------------------------------------
+// Helpers — tool detail extraction for expand/collapse
+// ---------------------------------------------------------------------------
+
+/** Maximum length for truncated strings in tool detail view */
+const DETAIL_TRUNCATE = 120;
+
+function truncate(s: string, max = DETAIL_TRUNCATE): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max) + '...';
+}
+
+/**
+ * Extract a human-readable detail string from a tool_use entry's input.
+ * Returns null if no meaningful detail can be extracted.
+ */
+function getToolDetail(entry: StreamTimelineEntry): string | null {
+  if (entry.streamType !== 'tool_use' || !entry.tool?.name || !entry.tool.input) return null;
+  const input = entry.tool.input as Record<string, unknown>;
+  const name = entry.tool.name;
+
+  switch (name) {
+    case 'Bash': {
+      const cmd = input.command;
+      if (typeof cmd === 'string') return truncate(cmd);
+      return null;
+    }
+    case 'Read': {
+      const fp = input.file_path;
+      if (typeof fp === 'string') return fp;
+      return null;
+    }
+    case 'Write': {
+      const fp = input.file_path;
+      if (typeof fp === 'string') return fp;
+      return null;
+    }
+    case 'Edit': {
+      const fp = input.file_path;
+      const old = input.old_string;
+      const nw = input.new_string;
+      const parts: string[] = [];
+      if (typeof fp === 'string') parts.push(fp);
+      if (typeof old === 'string' && typeof nw === 'string') {
+        parts.push(truncate(old, 50) + ' -> ' + truncate(nw, 50));
+      }
+      return parts.length > 0 ? parts.join('  ') : null;
+    }
+    case 'Grep': {
+      const pattern = input.pattern;
+      const path = input.path;
+      const parts: string[] = [];
+      if (typeof pattern === 'string') parts.push(`/${pattern}/`);
+      if (typeof path === 'string') parts.push(path);
+      return parts.length > 0 ? parts.join(' in ') : null;
+    }
+    case 'Glob': {
+      const pattern = input.pattern;
+      if (typeof pattern === 'string') return pattern;
+      return null;
+    }
+    case 'SendMessage': {
+      const to = input.to;
+      const msg = input.message;
+      const parts: string[] = [];
+      if (typeof to === 'string') parts.push(`to ${to}`);
+      if (typeof msg === 'string') parts.push(truncate(msg, 80));
+      return parts.length > 0 ? parts.join(': ') : null;
+    }
+    case 'Agent': {
+      const agentName = input.name;
+      const msg = input.message;
+      const parts: string[] = [];
+      if (typeof agentName === 'string') parts.push(agentName);
+      if (typeof msg === 'string') parts.push(truncate(msg, 80));
+      return parts.length > 0 ? parts.join(': ') : null;
+    }
+    default: {
+      // For unknown tools, try to show a brief JSON summary of the input
+      try {
+        const json = JSON.stringify(input);
+        if (json.length > 2) return truncate(json);
+      } catch {
+        // Ignore serialisation errors
+      }
+      return null;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sub-components for each entry type
 // ---------------------------------------------------------------------------
 
 function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
+  const [expanded, setExpanded] = useState(false);
   const text = getStreamText(entry);
   const isMultiline = text.includes('\n');
+  const detail = getToolDetail(entry);
 
   // System task_progress/task_notification — compact single-line entry
   if (entry.streamType === 'system' && (entry.subtype === 'task_progress' || entry.subtype === 'task_notification')) {
@@ -201,22 +293,42 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
     );
   }
 
-  // Tool use — compact badge
+  // Tool use — compact badge with optional expand/collapse for tool details
   if (entry.streamType === 'tool_use' && entry.tool?.name) {
     const { label, color } = resolveAgentLabel(entry);
+    const hasDetail = detail !== null;
+
     return (
-      <div className="py-0.5 leading-relaxed flex items-center gap-1.5">
-        <span className="text-dark-muted">
-          {formatLocalTime(entry.timestamp)}
-        </span>
-        <span
-          className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
-          style={{ backgroundColor: color }}
-        />
-        <span style={{ color }} className="font-semibold">{label}</span>
-        <span className="text-xs text-dark-muted bg-dark-border/30 px-1.5 py-0.5 rounded">
-          {entry.tool.name}
-        </span>
+      <div>
+        <div
+          className={`py-0.5 leading-relaxed flex items-center gap-1.5${hasDetail ? ' cursor-pointer' : ''}`}
+          onClick={hasDetail ? () => setExpanded((prev) => !prev) : undefined}
+          role={hasDetail ? 'button' : undefined}
+          aria-expanded={hasDetail ? expanded : undefined}
+        >
+          {hasDetail && (
+            <ChevronRightIcon
+              size={10}
+              className={`text-dark-muted shrink-0 transition-transform duration-150${expanded ? ' rotate-90' : ''}`}
+            />
+          )}
+          <span className="text-dark-muted">
+            {formatLocalTime(entry.timestamp)}
+          </span>
+          <span
+            className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+            style={{ backgroundColor: color }}
+          />
+          <span style={{ color }} className="font-semibold">{label}</span>
+          <span className="text-xs text-dark-muted bg-dark-border/30 px-1.5 py-0.5 rounded">
+            {entry.tool.name}
+          </span>
+        </div>
+        {expanded && detail && (
+          <div className="text-[10px] text-dark-muted pl-6 pb-0.5 font-mono truncate" title={detail}>
+            {detail}
+          </div>
+        )}
       </div>
     );
   }
@@ -452,7 +564,9 @@ export function UnifiedTimeline({
           lines.push(`[${ts}] ${agent}${subtypeTag}: ${text}`);
         } else if (entry.streamType === 'tool_use' && entry.tool?.name) {
           const agent = entry.agentName ? agentDisplayName(entry.agentName) : 'tool';
-          lines.push(`[${ts}] ${agent}: ${entry.tool.name}`);
+          const toolDetailText = getToolDetail(entry);
+          const suffix = toolDetailText ? ` — ${toolDetailText}` : '';
+          lines.push(`[${ts}] ${agent}: ${entry.tool.name}${suffix}`);
         } else if (entry.streamType === 'system' && entry.description) {
           const agent = entry.agentName ? agentDisplayName(entry.agentName) : 'system';
           lines.push(`[${ts}] ${agent}: ${entry.lastToolName ?? ''} ${entry.description}`);
