@@ -924,6 +924,83 @@ describe('Agent message routing', () => {
 // Subagent crash detection
 // =============================================================================
 
+// =============================================================================
+// Subagent spawn message recording (Issue #288)
+// =============================================================================
+
+describe('Subagent spawn message recording', () => {
+  it('records a TL->subagent agent message on subagent_start', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev', agent_type: 'coordinator' }),
+      db,
+      sse,
+    );
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith({
+      teamId: 1,
+      eventId: 1,
+      sender: 'team-lead',     // TL spawns subagents (normalizeAgentName(null))
+      recipient: 'dev',        // fleet- prefix stripped from teammate_name
+      summary: 'spawned agent',
+      content: null,
+      sessionId: 'sess-abc',
+    });
+  });
+
+  it('records spawn message with agent_type fallback when teammate_name is missing', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: undefined, agent_type: 'fleet-reviewer' }),
+      db,
+      sse,
+    );
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: 'team-lead',
+        recipient: 'reviewer', // fleet- prefix stripped from agent_type fallback
+        summary: 'spawned agent',
+      }),
+    );
+  });
+
+  it('silently handles insertAgentMessage failure during subagent_start', () => {
+    const db = createMockDb({
+      insertAgentMessage: vi.fn().mockImplementation(() => {
+        throw new Error('DB constraint violation');
+      }),
+    });
+    const sse = createMockSse();
+
+    // Should not throw
+    const result = processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev' }),
+      db,
+      sse,
+    );
+    expect(result.processed).toBe(true);
+  });
+
+  it('does not record spawn message for non-subagent_start events', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-dev' }),
+      db,
+      sse,
+    );
+
+    // insertAgentMessage should NOT have been called (no SendMessage tool_name either)
+    expect(db.insertAgentMessage).not.toHaveBeenCalled();
+  });
+});
+
 describe('Subagent crash detection', () => {
   it('sends advisory message when subagent stops quickly with few events', () => {
     const db = createMockDb();
