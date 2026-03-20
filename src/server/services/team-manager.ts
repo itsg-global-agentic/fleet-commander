@@ -237,7 +237,10 @@ export class TeamManager {
       if (['running', 'launching', 'idle', 'stuck', 'queued'].includes(existing.status)) {
         throw new Error(`Team already active for issue ${issueNumber} (status: ${existing.status})`);
       }
-      // Terminal state (done/failed) — reuse the existing team record
+      if (existing.status === 'done') {
+        throw new Error(`Team already completed for issue ${issueNumber} — completed teams cannot be relaunched`);
+      }
+      // Terminal state (failed) — reuse the existing team record
       relaunchTeamId = existing.id;
     }
 
@@ -523,6 +526,10 @@ export class TeamManager {
       throw new Error(`Team ${teamId} not found`);
     }
 
+    if (team.status === 'done') {
+      throw new Error('Cannot resume a completed team');
+    }
+
     // Resolve project for repo path and queue limit check
     if (!team.projectId) {
       throw new Error(`Team ${teamId} has no project`);
@@ -612,6 +619,10 @@ export class TeamManager {
       throw new Error(`Team ${teamId} not found`);
     }
 
+    if (team.status === 'done') {
+      throw new Error('Cannot restart a completed team');
+    }
+
     // Stop if running or queued
     if (['launching', 'running', 'idle', 'stuck', 'queued'].includes(team.status)) {
       await this.stop(teamId);
@@ -688,7 +699,10 @@ export class TeamManager {
       if (['running', 'launching', 'idle', 'stuck', 'queued'].includes(existing.status)) {
         throw new Error(`Team already active for issue ${issueNumber} (status: ${existing.status})`);
       }
-      // Terminal state — reuse the existing team record as queued
+      if (existing.status === 'done') {
+        throw new Error(`Team already completed for issue ${issueNumber} — completed teams cannot be relaunched`);
+      }
+      // Terminal state (failed) — reuse the existing team record as queued
       const now = new Date().toISOString();
       db.updateTeam(existing.id, {
         status: 'queued',

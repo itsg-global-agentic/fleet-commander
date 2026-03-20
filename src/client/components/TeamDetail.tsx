@@ -324,7 +324,6 @@ export function TeamDetail() {
     detail?.status === 'launching';
 
   const isStopped =
-    detail?.status === 'done' ||
     detail?.status === 'failed';
 
   // PR merge status label — hide when PR is merged or closed (GitHub returns
@@ -717,13 +716,15 @@ export function TeamDetail() {
                     </button>
                   )}
 
-                  <button
-                    onClick={() => handleAction('restart')}
-                    disabled={actionLoading !== null}
-                    className="px-3 py-1.5 text-sm rounded border border-dark-accent/40 text-dark-accent hover:bg-dark-accent/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    {actionLoading === 'restart' ? 'Restarting...' : 'Restart'}
-                  </button>
+                  {detail?.status !== 'done' && (
+                    <button
+                      onClick={() => handleAction('restart')}
+                      disabled={actionLoading !== null}
+                      className="px-3 py-1.5 text-sm rounded border border-dark-accent/40 text-dark-accent hover:bg-dark-accent/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      {actionLoading === 'restart' ? 'Restarting...' : 'Restart'}
+                    </button>
+                  )}
 
                   <button
                     onClick={() => {
