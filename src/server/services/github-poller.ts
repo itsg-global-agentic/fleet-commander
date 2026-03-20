@@ -353,6 +353,28 @@ class GitHubPoller {
           }
         }
 
+        // Notify the team via stdin when merge status changes to/from dirty
+        if (existing.mergeStatus !== mergeState) {
+          try {
+            const { getTeamManager } = await import('./team-manager.js');
+            const manager = getTeamManager();
+
+            if (mergeState === 'dirty') {
+              const msg = resolveMessage('merge_conflict', {
+                PR_NUMBER: String(prNumber),
+              });
+              if (msg) manager.sendMessage(teamId, msg, 'fc', 'merge_conflict');
+            } else if (existing.mergeStatus === 'dirty') {
+              const msg = resolveMessage('merge_conflict_resolved', {
+                PR_NUMBER: String(prNumber),
+              });
+              if (msg) manager.sendMessage(teamId, msg, 'fc', 'merge_conflict_resolved');
+            }
+          } catch (err) {
+            console.error(`[GitHubPoller] Failed to send merge-conflict notification to team ${teamId}:`, err);
+          }
+        }
+
         // Merge notification is now handled by gracefulShutdown below
         // (sends pr_merged_shutdown instead of pr_merged to avoid duplicates)
       }

@@ -89,4 +89,18 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
     description: 'Tell TL to finish up and create PR',
     placeholders: ['ISSUE_NUMBER'],
   },
+  {
+    id: 'merge_conflict',
+    template:
+      'PR #{{PR_NUMBER}} has merge conflicts. Rebase or merge the base branch to resolve conflicts before CI can run.',
+    description: 'Sent to TL when PR has merge conflicts (dirty merge state)',
+    placeholders: ['PR_NUMBER'],
+  },
+  {
+    id: 'merge_conflict_resolved',
+    template:
+      'Merge conflicts on PR #{{PR_NUMBER}} are resolved. The PR is mergeable again.',
+    description: 'Sent to TL when merge conflicts are resolved',
+    placeholders: ['PR_NUMBER'],
+  },
 ];
