@@ -623,7 +623,7 @@ export function StateMachinePage() {
   const api = useApi();
 
   // Tab state
-  const [activeTab, setActiveTab] = useState<'diagram' | 'messages'>('diagram');
+  const [activeTab, setActiveTab] = useState<'diagram' | 'table' | 'messages'>('diagram');
 
   // State machine data (diagram)
   const [smData, setSmData] = useState<StateMachineResponse | null>(null);
@@ -683,9 +683,6 @@ export function StateMachinePage() {
     if (!smData || !preprocessed) return null;
     return computeLayout(smData.states, preprocessed.transitions);
   }, [smData, preprocessed]);
-
-  // Transition table collapsed state
-  const [tableExpanded, setTableExpanded] = useState(false);
 
   // Build state color map (includes the "All" pseudo-node)
   const stateColorMap = useMemo<Record<string, string>>(() => {
@@ -775,6 +772,16 @@ export function StateMachinePage() {
           }`}
         >
           State Machine
+        </button>
+        <button
+          onClick={() => setActiveTab('table')}
+          className={`px-3 py-1.5 text-xs font-medium rounded ${
+            activeTab === 'table'
+              ? 'bg-[#58A6FF20] text-[#58A6FF] border border-[#58A6FF40]'
+              : 'text-[#8B949E] hover:text-[#E6EDF3]'
+          }`}
+        >
+          Transition Table
         </button>
         <button
           onClick={() => setActiveTab('messages')}
@@ -975,81 +982,86 @@ export function StateMachinePage() {
               )}
             </div>
 
-            {/* Collapsible transition table */}
-            {preprocessed && (
+            {/* Validation warnings */}
+            {validationWarnings.length > 0 && (
               <div className="px-6 py-3 border-t border-dark-border shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setTableExpanded(!tableExpanded)}
-                  className="flex items-center gap-2 text-sm font-medium text-dark-muted hover:text-dark-text transition-colors"
-                >
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className={`transition-transform ${tableExpanded ? 'rotate-90' : ''}`}
-                  >
-                    <path d="m9 18 6-6-6-6" />
-                  </svg>
+                <h3 className="text-sm font-medium text-[#D29922] mb-2">Validation Warnings</h3>
+                <ul className="space-y-1">
+                  {validationWarnings.map((w, idx) => (
+                    <li key={idx} className="flex items-start gap-2 text-xs">
+                      <span className={`shrink-0 mt-0.5 px-1.5 py-0.5 rounded font-mono text-[10px] ${
+                        w.type === 'duplicate'
+                          ? 'bg-[#F8514920] text-[#F85149]'
+                          : w.type === 'orphan'
+                            ? 'bg-[#D2992220] text-[#D29922]'
+                            : 'bg-[#58A6FF20] text-[#58A6FF]'
+                      }`}>
+                        {w.type}
+                      </span>
+                      <span className="text-dark-muted">{w.message}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ) : activeTab === 'table' ? (
+          /* Transition Table tab */
+          <div className="flex flex-col h-full">
+            {preprocessed && (
+              <div className="px-6 py-4 flex-1 min-h-0 overflow-auto">
+                <h2 className="text-sm font-medium text-dark-text mb-3">
                   Transition Table ({preprocessed.tableTransitions.length} transitions)
-                </button>
-
-                {tableExpanded && (
-                  <div className="mt-3 overflow-x-auto">
-                    <table className="w-full text-xs border-collapse">
-                      <thead>
-                        <tr className="text-left text-dark-muted border-b border-[#30363D]">
-                          <th className="py-2 pr-4 font-medium">From</th>
-                          <th className="py-2 pr-4 font-medium">To</th>
-                          <th className="py-2 pr-4 font-medium">Trigger</th>
-                          <th className="py-2 font-medium">Description</th>
+                </h2>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs border-collapse">
+                    <thead>
+                      <tr className="text-left text-dark-muted border-b border-[#30363D]">
+                        <th className="py-2 pr-4 font-medium">From</th>
+                        <th className="py-2 pr-4 font-medium">To</th>
+                        <th className="py-2 pr-4 font-medium">Trigger</th>
+                        <th className="py-2 font-medium">Description</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preprocessed.tableTransitions.map((t) => (
+                        <tr key={t.id} className="border-b border-[#30363D]/50 hover:bg-[#161B22]">
+                          <td className="py-1.5 pr-4">
+                            <span
+                              className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                              style={{
+                                backgroundColor: `${stateColorMap[t.from] || '#8B949E'}20`,
+                                color: stateColorMap[t.from] || '#8B949E',
+                                border: `1px solid ${stateColorMap[t.from] || '#8B949E'}40`,
+                              }}
+                            >
+                              {t.from === '*' ? 'ALL' : t.from}
+                            </span>
+                          </td>
+                          <td className="py-1.5 pr-4">
+                            <span
+                              className="px-2 py-0.5 rounded-full text-xs font-semibold"
+                              style={{
+                                backgroundColor: `${stateColorMap[t.to] || '#8B949E'}20`,
+                                color: stateColorMap[t.to] || '#8B949E',
+                                border: `1px solid ${stateColorMap[t.to] || '#8B949E'}40`,
+                              }}
+                            >
+                              {t.to}
+                            </span>
+                          </td>
+                          <td className="py-1.5 pr-4">
+                            <div className="flex items-center gap-1.5">
+                              <TriggerIcon trigger={t.trigger} size={12} className="text-[#8B949E]" />
+                              <span className="text-dark-text">{t.triggerLabel}</span>
+                            </div>
+                          </td>
+                          <td className="py-1.5 text-dark-muted">{t.description}</td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {preprocessed.tableTransitions.map((t) => (
-                          <tr key={t.id} className="border-b border-[#30363D]/50 hover:bg-[#161B22]">
-                            <td className="py-1.5 pr-4">
-                              <span
-                                className="px-2 py-0.5 rounded-full text-xs font-semibold"
-                                style={{
-                                  backgroundColor: `${stateColorMap[t.from] || '#8B949E'}20`,
-                                  color: stateColorMap[t.from] || '#8B949E',
-                                  border: `1px solid ${stateColorMap[t.from] || '#8B949E'}40`,
-                                }}
-                              >
-                                {t.from === '*' ? 'ALL' : t.from}
-                              </span>
-                            </td>
-                            <td className="py-1.5 pr-4">
-                              <span
-                                className="px-2 py-0.5 rounded-full text-xs font-semibold"
-                                style={{
-                                  backgroundColor: `${stateColorMap[t.to] || '#8B949E'}20`,
-                                  color: stateColorMap[t.to] || '#8B949E',
-                                  border: `1px solid ${stateColorMap[t.to] || '#8B949E'}40`,
-                                }}
-                              >
-                                {t.to}
-                              </span>
-                            </td>
-                            <td className="py-1.5 pr-4">
-                              <div className="flex items-center gap-1.5">
-                                <TriggerIcon trigger={t.trigger} size={12} className="text-[#8B949E]" />
-                                <span className="text-dark-text">{t.triggerLabel}</span>
-                              </div>
-                            </td>
-                            <td className="py-1.5 text-dark-muted">{t.description}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             )}
 
