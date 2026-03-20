@@ -20,6 +20,7 @@ vi.mock('../../src/server/config.js', () => ({
   default: {
     ccQueryModel: 'claude-sonnet-4-20250514',
     ccQueryTimeoutMs: 60000,
+    ccQueryPrioritizeTimeoutMs: 60000,
   },
 }));
 
@@ -143,7 +144,7 @@ describe('CCQueryService', () => {
       expect(result.costUsd).toBe(0.03);
     });
 
-    it('returns undefined data when result is empty and no structured_output', async () => {
+    it('returns success:false when result is empty and no structured_output', async () => {
       const child = createMockChild();
       mockSpawn.mockReturnValue(child);
 
@@ -160,8 +161,9 @@ describe('CCQueryService', () => {
 
       const result = await resultPromise;
 
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(result.data).toBeUndefined();
+      expect(result.error).toBe('CC returned no structured data');
     });
   });
 
@@ -260,7 +262,7 @@ describe('CCQueryService', () => {
       expect(result.error).toContain('CC exited with code 1');
     });
 
-    it('handles non-JSON stdout gracefully', async () => {
+    it('returns success:false when stdout is not valid JSON', async () => {
       const child = createMockChild();
       mockSpawn.mockReturnValue(child);
 
@@ -270,9 +272,121 @@ describe('CCQueryService', () => {
       emitStdoutAndClose(child, 'Not valid JSON at all');
 
       const result = await resultPromise;
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
       expect(result.text).toBe('Not valid JSON at all');
       expect(result.data).toBeUndefined();
+      expect(result.error).toBe('CC returned no structured data');
+    });
+
+    it('returns success:false when CC returns JSON without structured_output', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child);
+
+      const service = CCQueryService.getInstance();
+      const resultPromise = service.estimateComplexity('Test', 'Body');
+
+      const ccResponse = JSON.stringify({
+        type: 'result',
+        result: 'Some plain text response',
+        total_cost_usd: 0.02,
+      });
+
+      emitStdoutAndClose(child, ccResponse);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('CC returned no structured data');
+      expect(result.text).toBe('Some plain text response');
+    });
+  });
+
+  describe('prioritizeIssues items guard', () => {
+    it('returns error when items is not an array', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child);
+
+      const service = CCQueryService.getInstance();
+      const resultPromise = service.prioritizeIssues([
+        { number: 1, title: 'Test issue' },
+      ]);
+
+      // CC returns structured_output but items is not an array
+      const ccResponse = JSON.stringify({
+        type: 'result',
+        result: '',
+        structured_output: {
+          items: 'not an array',
+        },
+        total_cost_usd: 0.01,
+      });
+
+      emitStdoutAndClose(child, ccResponse);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('CC returned unexpected structure: expected { items: [...] }');
+      expect(result.data).toBeUndefined();
+    });
+
+    it('returns error when structured_output has no items field', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child);
+
+      const service = CCQueryService.getInstance();
+      const resultPromise = service.prioritizeIssues([
+        { number: 1, title: 'Test issue' },
+      ]);
+
+      // CC returns structured_output without items
+      const ccResponse = JSON.stringify({
+        type: 'result',
+        result: '',
+        structured_output: {
+          something: 'else',
+        },
+        total_cost_usd: 0.01,
+      });
+
+      emitStdoutAndClose(child, ccResponse);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('CC returned unexpected structure: expected { items: [...] }');
+    });
+
+    it('succeeds when items IS a valid array', async () => {
+      const child = createMockChild();
+      mockSpawn.mockReturnValue(child);
+
+      const service = CCQueryService.getInstance();
+      const resultPromise = service.prioritizeIssues([
+        { number: 10, title: 'Add feature' },
+        { number: 20, title: 'Fix bug' },
+      ]);
+
+      const ccResponse = JSON.stringify({
+        type: 'result',
+        result: '',
+        structured_output: {
+          items: [
+            { number: 10, title: 'Add feature', priority: 5, category: 'feature', reason: 'Nice to have' },
+            { number: 20, title: 'Fix bug', priority: 1, category: 'bug', reason: 'Urgent' },
+          ],
+        },
+        total_cost_usd: 0.04,
+        duration_ms: 2000,
+      });
+
+      emitStdoutAndClose(child, ccResponse);
+
+      const result = await resultPromise;
+      expect(result.success).toBe(true);
+      expect(result.data).toEqual([
+        { number: 10, title: 'Add feature', priority: 5, category: 'feature', reason: 'Nice to have' },
+        { number: 20, title: 'Fix bug', priority: 1, category: 'bug', reason: 'Urgent' },
+      ]);
+      expect(result.costUsd).toBe(0.04);
+      expect(result.durationMs).toBe(2000);
     });
   });
 });

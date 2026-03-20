@@ -58,6 +58,9 @@ const queryRoutes: FastifyPluginCallback = (
               });
             }
             const result = await service.prioritizeIssues(issues);
+            if (!result.success) {
+              request.log.warn({ error: result.error, text: result.text }, `CC query "prioritizeIssues" returned no data`);
+            }
             return reply.code(200).send(result);
           }
 

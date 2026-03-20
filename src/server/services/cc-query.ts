@@ -26,6 +26,8 @@ import type {
 interface ExecuteOptions<T> {
   prompt: string;
   jsonSchema: Record<string, unknown>;
+  /** Optional timeout override in milliseconds; defaults to config.ccQueryTimeoutMs */
+  timeoutMs?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +118,7 @@ export class CCQueryService {
       let stdout = '';
       let stderr = '';
       let timedOut = false;
+      const effectiveTimeout = opts.timeoutMs ?? config.ccQueryTimeoutMs;
 
       const timeout = setTimeout(() => {
         timedOut = true;
@@ -132,7 +135,7 @@ export class CCQueryService {
         } catch {
           // Best effort
         }
-      }, config.ccQueryTimeoutMs);
+      }, effectiveTimeout);
 
       child.stdout?.on('data', (chunk: Buffer) => {
         stdout += chunk.toString();
@@ -151,7 +154,7 @@ export class CCQueryService {
             success: false,
             costUsd: 0,
             durationMs,
-            error: `Query timed out after ${config.ccQueryTimeoutMs}ms`,
+            error: `Query timed out after ${effectiveTimeout}ms`,
           });
           return;
         }
@@ -186,21 +189,41 @@ export class CCQueryService {
           }
 
           const resultText = parsed.result ?? '';
+          const textValue = typeof resultText === 'string' ? resultText : JSON.stringify(resultText);
 
-          resolve({
-            success: true,
-            data,
-            text: typeof resultText === 'string' ? resultText : JSON.stringify(resultText),
-            costUsd: typeof costUsd === 'number' ? costUsd : 0,
-            durationMs: parsed.duration_ms ?? durationMs,
-          });
+          if (data === undefined) {
+            console.warn(
+              `[CCQuery] CC exited 0 but returned no structured data. stdout: ${stdout.substring(0, 500)}`,
+              stderr ? `stderr: ${stderr.substring(0, 500)}` : '',
+            );
+            resolve({
+              success: false,
+              text: textValue,
+              costUsd: typeof costUsd === 'number' ? costUsd : 0,
+              durationMs: parsed.duration_ms ?? durationMs,
+              error: 'CC returned no structured data',
+            });
+          } else {
+            resolve({
+              success: true,
+              data,
+              text: textValue,
+              costUsd: typeof costUsd === 'number' ? costUsd : 0,
+              durationMs: parsed.duration_ms ?? durationMs,
+            });
+          }
         } catch {
           // stdout was not valid JSON — return as text
+          console.warn(
+            `[CCQuery] CC exited 0 but stdout was not valid JSON. stdout: ${stdout.substring(0, 500)}`,
+            stderr ? `stderr: ${stderr.substring(0, 500)}` : '',
+          );
           resolve({
-            success: true,
+            success: false,
             text: stdout.trim(),
             costUsd: 0,
             durationMs,
+            error: 'CC returned no structured data',
           });
         }
       });
@@ -264,12 +287,30 @@ export class CCQueryService {
       required: ['items'],
     };
 
-    const result = await this.execute<{ items: PrioritizedIssue[] }>({ prompt, jsonSchema });
+    const result = await this.execute<{ items: PrioritizedIssue[] }>({
+      prompt,
+      jsonSchema,
+      timeoutMs: config.ccQueryPrioritizeTimeoutMs,
+    });
+
+    if (!result.success) {
+      return result as unknown as CCQueryResult<PrioritizedIssue[]>;
+    }
+
+    const items = result.data?.items;
+    if (!Array.isArray(items)) {
+      return {
+        ...result,
+        success: false,
+        data: undefined,
+        error: 'CC returned unexpected structure: expected { items: [...] }',
+      };
+    }
 
     return {
       ...result,
-      data: result.data?.items,
-    } as CCQueryResult<PrioritizedIssue[]>;
+      data: items,
+    };
   }
 
   async estimateComplexity(

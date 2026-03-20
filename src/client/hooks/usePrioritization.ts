@@ -103,10 +103,12 @@ export function usePrioritization(): UsePrioritizationReturn {
       );
 
       if (!result.success || !result.data) {
+        const errorMsg = result.error ?? 'Prioritization returned no data';
+        const detail = result.text ? `\n\nCC output: ${result.text}` : '';
         setState((prev) => ({
           ...prev,
           loading: false,
-          error: result.error ?? 'Prioritization returned no data',
+          error: errorMsg + detail,
         }));
         return;
       }
@@ -149,10 +151,12 @@ export function usePrioritization(): UsePrioritizationReturn {
       );
 
       if (!result.success || !result.data) {
+        const errorMsg = result.error ?? 'Prioritization returned no data';
+        const detail = result.text ? `\n\nCC output: ${result.text}` : '';
         setState((prev) => ({
           ...prev,
           loading: false,
-          error: result.error ?? 'Prioritization returned no data',
+          error: errorMsg + detail,
         }));
         return;
       }
