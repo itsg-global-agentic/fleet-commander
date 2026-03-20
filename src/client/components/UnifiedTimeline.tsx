@@ -147,7 +147,7 @@ function resolveAgentLabel(entry: StreamTimelineEntry): { label: string; color: 
   // For assistant and tool_use, use the agentName if available
   if (entry.agentName && (entry.streamType === 'assistant' || entry.streamType === 'tool_use')) {
     const name = agentDisplayName(entry.agentName);
-    const color = agentColor(entry.agentName);
+    const color = agentColor(entry.agentName, entry.agentName);
     return { label: name, color };
   }
 
@@ -166,7 +166,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
   // System task_progress/task_notification — compact single-line entry
   if (entry.streamType === 'system' && (entry.subtype === 'task_progress' || entry.subtype === 'task_notification')) {
     const name = agentDisplayName(entry.agentName);
-    const color = entry.agentName ? agentColor(entry.agentName) : '#8B949E';
+    const color = entry.agentName ? agentColor(entry.agentName, entry.agentName) : '#8B949E';
     const toolLabel = entry.lastToolName ?? entry.tool?.name;
     const desc = entry.description;
 

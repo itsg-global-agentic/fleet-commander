@@ -46,6 +46,9 @@ export function agentColor(name: string, role?: string): string {
     const roleColor = AGENT_ROLE_COLORS[role.toLowerCase()];
     if (roleColor) return roleColor;
   }
+  // Also check name as role (agent names like "dev", "planner" are also role keys)
+  const nameColor = AGENT_ROLE_COLORS[name.toLowerCase()];
+  if (nameColor) return nameColor;
   // Hash-based fallback
   let hash = 0;
   for (let i = 0; i < name.length; i++) {

@@ -322,9 +322,6 @@ export class FleetDatabase {
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
 
-    // Remove obsolete ask_for_pr and wrap_up message templates (#261)
-    this.removeObsoleteMessageTemplates();
-
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
     // In compiled (node): __dirname is dist/server/server
@@ -655,23 +652,6 @@ export class FleetDatabase {
       ).run();
       if (result.changes > 0) {
         console.log(`[DB] Migrated ${result.changes} paused project(s) to active`);
-      }
-    } catch {
-      // Table may not exist yet (fresh database) — schema.sql will create it
-    }
-  }
-
-  /**
-   * Remove obsolete ask_for_pr and wrap_up message templates.
-   * These quick-action templates were removed in issue #261.
-   */
-  private removeObsoleteMessageTemplates(): void {
-    try {
-      const result = this.db.prepare(
-        "DELETE FROM message_templates WHERE id IN ('ask_for_pr', 'wrap_up')"
-      ).run();
-      if (result.changes > 0) {
-        console.log(`[DB] Removed ${result.changes} obsolete message template(s) (ask_for_pr, wrap_up)`);
       }
     } catch {
       // Table may not exist yet (fresh database) — schema.sql will create it

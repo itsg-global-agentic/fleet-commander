@@ -97,7 +97,7 @@ export function AgentFilterBar({ roster, activeFilters, onFiltersChange }: Agent
       </button>
 
       {agentNames.map((name) => {
-        const color = agentColor(name);
+        const color = agentColor(name, name);
         const isActive = allActive || activeFilters.has(name);
         return (
           <button
