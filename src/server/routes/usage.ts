@@ -70,7 +70,7 @@ const usageRoutes: FastifyPluginCallback = (
       try {
         const db = getDatabase();
         const query = request.query as { limit?: string };
-        const limit = Math.min(Math.max(parseInt(query.limit ?? '50', 10) || 50, 1), 500);
+        const limit = Math.min(Math.max(parseInt(query.limit ?? '50', 10) || 50, 1), 1000);
         const history = db.getUsageHistory(limit);
 
         return reply.code(200).send({

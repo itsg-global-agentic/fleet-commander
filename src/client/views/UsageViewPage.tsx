@@ -79,7 +79,7 @@ export function UsageViewPage() {
     try {
       const [latest, historyData] = await Promise.all([
         api.get<UsageResponse>('usage'),
-        api.get<UsageHistoryResponse>('usage/history?limit=500'),
+        api.get<UsageHistoryResponse>('usage/history?limit=1000'),
       ]);
       setUsage(latest);
       if (latest.redThresholds) {
@@ -179,11 +179,11 @@ export function UsageViewPage() {
       </section>
 
       {/* -------------------------------------------------------------------
-        Usage History — 24h line chart
+        Usage History — 7-day line chart
       ------------------------------------------------------------------- */}
       <section>
         <h3 className="text-sm font-medium text-dark-muted uppercase tracking-wider mb-3">
-          Last 24 Hours
+          Last 7 Days
         </h3>
         <div className="bg-dark-surface rounded-lg border border-dark-border p-4">
           <UsageChart snapshots={history} redThresholds={redThresholds} />
