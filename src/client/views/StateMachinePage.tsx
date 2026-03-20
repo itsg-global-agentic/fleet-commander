@@ -253,7 +253,7 @@ function validateTransitions(
   for (const t of rawTransitions) {
     // Skip wildcards for dup check — they are by design broad
     if (t.from === '*') continue;
-    const key = `${t.from}|${t.to}|${t.trigger}`;
+    const key = `${t.id}|${t.from}|${t.to}|${t.trigger}`;
     if (!dupCheck.has(key)) dupCheck.set(key, []);
     dupCheck.get(key)!.push(t);
   }
