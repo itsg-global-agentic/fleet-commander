@@ -206,6 +206,75 @@ describe('buildTimeline', () => {
     expect(result).toHaveLength(30);
   });
 
+  it('returns the most recent entries when merged count exceeds limit', () => {
+    // Create 300 hook events (older) and 200 stream events (newer)
+    // Total = 500, limit = 200 — should return the 200 most recent
+    const hooks: Event[] = Array.from({ length: 300 }, (_, i) =>
+      makeHookEvent({
+        id: i + 1,
+        eventType: 'SessionStart',
+        createdAt: new Date(Date.UTC(2026, 2, 20, 8, 0, i)).toISOString(),
+      }),
+    );
+    const stream: RawStreamEvent[] = Array.from({ length: 200 }, (_, i) =>
+      makeStreamEvent({
+        type: 'assistant',
+        timestamp: new Date(Date.UTC(2026, 2, 20, 10, 0, i)).toISOString(),
+      }),
+    );
+
+    const result = buildTimeline(stream, hooks, 1, 200);
+    expect(result).toHaveLength(200);
+
+    // The first entry in the result should be more recent than the earliest
+    // hook events — i.e., the oldest 300 entries should not dominate the result.
+    // Since hooks start at 08:00:00 and stream starts at 10:00:00,
+    // the result tail-slice should contain all 200 stream events and the
+    // most recent hook events (not the oldest hook events).
+    const streamCount = result.filter((e) => e.source === 'stream').length;
+    expect(streamCount).toBe(200);
+
+    // Verify chronological order is maintained
+    for (let i = 1; i < result.length; i++) {
+      const prev = new Date(result[i - 1].timestamp).getTime();
+      const curr = new Date(result[i].timestamp).getTime();
+      expect(curr).toBeGreaterThanOrEqual(prev);
+    }
+  });
+
+  it('returns all entries when merged count is within limit (no regression)', () => {
+    const stream: RawStreamEvent[] = Array.from({ length: 30 }, (_, i) =>
+      makeStreamEvent({
+        type: 'assistant',
+        timestamp: new Date(Date.UTC(2026, 2, 20, 10, 0, i)).toISOString(),
+      }),
+    );
+    const hooks: Event[] = Array.from({ length: 20 }, (_, i) =>
+      makeHookEvent({
+        id: i + 1,
+        eventType: 'SessionStart',
+        createdAt: new Date(Date.UTC(2026, 2, 20, 10, 1, i)).toISOString(),
+      }),
+    );
+
+    // Total is 50, limit is 200 (default) — all entries should be returned
+    const result = buildTimeline(stream, hooks, 1);
+    expect(result).toHaveLength(50);
+
+    // Verify all stream and hook entries are present
+    const streamCount = result.filter((e) => e.source === 'stream').length;
+    const hookCount = result.filter((e) => e.source === 'hook').length;
+    expect(streamCount).toBe(30);
+    expect(hookCount).toBe(20);
+
+    // Verify chronological order
+    for (let i = 1; i < result.length; i++) {
+      const prev = new Date(result[i - 1].timestamp).getTime();
+      const curr = new Date(result[i].timestamp).getTime();
+      expect(curr).toBeGreaterThanOrEqual(prev);
+    }
+  });
+
   it('defaults limit to 200', () => {
     const stream: RawStreamEvent[] = Array.from({ length: 150 }, (_, i) =>
       makeStreamEvent({
