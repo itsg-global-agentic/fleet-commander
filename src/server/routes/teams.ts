@@ -779,7 +779,7 @@ const teamsRoutes: FastifyPluginCallback = (
         }
 
         const limitParam = (request.query as TimelineQuerystring).limit;
-        const limit = limitParam ? parseInt(limitParam, 10) : 200;
+        const limit = limitParam ? parseInt(limitParam, 10) : 500;
 
         // Fetch stream events from in-memory buffer (same as stream-events endpoint)
         const manager = getTeamManager();
