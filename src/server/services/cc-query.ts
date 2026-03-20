@@ -7,6 +7,7 @@
 // =============================================================================
 
 import { spawn } from 'child_process';
+import os from 'os';
 import config from '../config.js';
 import { resolveClaudePath } from '../utils/resolve-claude-path.js';
 import { findGitBash } from '../utils/find-git-bash.js';
@@ -83,7 +84,40 @@ export class CCQueryService {
   // -------------------------------------------------------------------------
 
   private execute<T>(opts: ExecuteOptions<T>): Promise<CCQueryResult<T>> {
-    return this.enqueue(() => this._executeImpl<T>(opts));
+    return this.enqueue(() => this._executeWithRetry<T>(opts));
+  }
+
+  private async _executeWithRetry<T>(opts: ExecuteOptions<T>): Promise<CCQueryResult<T>> {
+    const maxRetries = config.ccQueryMaxRetries;
+    let lastResult: CCQueryResult<T> | undefined;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const result = await this._executeImpl<T>(opts);
+
+      // Success — return immediately
+      if (result.success) {
+        return result;
+      }
+
+      lastResult = result;
+
+      // Only retry transient "no structured data" failures:
+      // - Must be exit code 0 (no non-zero exit, no spawn error, no timeout)
+      // - Error must start with "CC returned no structured data"
+      const isTransient =
+        !!result.error?.startsWith('CC returned no structured data');
+
+      if (!isTransient || attempt >= maxRetries) {
+        break;
+      }
+
+      console.warn(
+        `[CCQuery] Transient failure (attempt ${attempt + 1}/${maxRetries + 1}), retrying in 1.5s: ${result.error}`,
+      );
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+
+    return lastResult!;
   }
 
   private _executeImpl<T>(opts: ExecuteOptions<T>): Promise<CCQueryResult<T>> {
@@ -95,7 +129,7 @@ export class CCQueryService {
         '-p', opts.prompt,
         '--output-format', 'json',
         '--no-session-persistence',
-        '--max-turns', '2',
+        '--max-turns', String(config.ccQueryMaxTurns),
         '--model', config.ccQueryModel,
         '--tools', '',
         '--strict-mcp-config',
@@ -110,7 +144,8 @@ export class CCQueryService {
       }
 
       const child = spawn(claudePath, args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['ignore', 'pipe', 'pipe'],
+        cwd: os.tmpdir(),
         windowsHide: true,
         env: spawnEnv,
       });
@@ -169,9 +204,14 @@ export class CCQueryService {
           return;
         }
 
+        // Defense-in-depth: strip non-JSON prefix lines before parsing.
+        // CC may emit warnings or debug text before the JSON payload.
+        const jsonStart = stdout.indexOf('{');
+        const cleanStdout = jsonStart >= 0 ? stdout.substring(jsonStart) : stdout;
+
         // Parse the JSON output from CC
         try {
-          const parsed = JSON.parse(stdout);
+          const parsed = JSON.parse(cleanStdout);
           // CC --output-format json returns total_cost_usd (not cost_usd)
           const costUsd = parsed.total_cost_usd ?? 0;
 
@@ -192,8 +232,13 @@ export class CCQueryService {
           const textValue = typeof resultText === 'string' ? resultText : JSON.stringify(resultText);
 
           if (data === undefined) {
+            // Include diagnostic details: subtype, stop_reason, and raw stdout snippet
+            const subtype = parsed.subtype ?? 'unknown';
+            const stopReason = parsed.stop_reason ?? 'unknown';
             console.warn(
-              `[CCQuery] CC exited 0 but returned no structured data. stdout: ${stdout.substring(0, 500)}`,
+              `[CCQuery] CC exited 0 but returned no structured data.`,
+              `subtype=${subtype} stop_reason=${stopReason}`,
+              `stdout (first 200): ${stdout.substring(0, 200)}`,
               stderr ? `stderr: ${stderr.substring(0, 500)}` : '',
             );
             resolve({
@@ -201,7 +246,7 @@ export class CCQueryService {
               text: textValue,
               costUsd: typeof costUsd === 'number' ? costUsd : 0,
               durationMs: parsed.duration_ms ?? durationMs,
-              error: 'CC returned no structured data',
+              error: `CC returned no structured data (subtype=${subtype}, stop_reason=${stopReason}, stdout=${stdout.substring(0, 200)})`,
             });
           } else {
             resolve({
@@ -213,9 +258,10 @@ export class CCQueryService {
             });
           }
         } catch {
-          // stdout was not valid JSON — return as text
+          // stdout was not valid JSON — return as text with diagnostic snippet
           console.warn(
-            `[CCQuery] CC exited 0 but stdout was not valid JSON. stdout: ${stdout.substring(0, 500)}`,
+            `[CCQuery] CC exited 0 but stdout was not valid JSON.`,
+            `stdout (first 200): ${stdout.substring(0, 200)}`,
             stderr ? `stderr: ${stderr.substring(0, 500)}` : '',
           );
           resolve({
@@ -223,7 +269,7 @@ export class CCQueryService {
             text: stdout.trim(),
             costUsd: 0,
             durationMs,
-            error: 'CC returned no structured data',
+            error: `CC returned no structured data (stdout=${stdout.substring(0, 200)})`,
           });
         }
       });
@@ -237,9 +283,6 @@ export class CCQueryService {
           error: `Failed to spawn CC: ${err.message}`,
         });
       });
-
-      // Close stdin immediately — -p mode reads from args, not stdin
-      child.stdin?.end();
     });
   }
 

@@ -67,6 +67,8 @@ const config = Object.freeze({
   ccQueryModel: process.env['FLEET_CC_QUERY_MODEL'] || 'sonnet',
   ccQueryTimeoutMs: safeParseInt(process.env['FLEET_CC_QUERY_TIMEOUT_MS'] || '30000', 'FLEET_CC_QUERY_TIMEOUT_MS'),
   ccQueryPrioritizeTimeoutMs: safeParseInt(process.env['FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS'] || '60000', 'FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS'),
+  ccQueryMaxRetries: safeParseInt(process.env['FLEET_CC_QUERY_MAX_RETRIES'] || '2', 'FLEET_CC_QUERY_MAX_RETRIES'),
+  ccQueryMaxTurns: safeParseInt(process.env['FLEET_CC_QUERY_MAX_TURNS'] || '4', 'FLEET_CC_QUERY_MAX_TURNS'),
 
   outputBufferLines: 500,
   sseHeartbeatMs: 30000,
@@ -96,6 +98,7 @@ export function validateConfig(): void {
     ['mergeShutdownGraceMs', config.mergeShutdownGraceMs],
     ['earlyCrashThresholdSec', config.earlyCrashThresholdSec],
     ['earlyCrashMinTools', config.earlyCrashMinTools],
+    ['ccQueryMaxTurns', config.ccQueryMaxTurns],
   ];
   for (const [name, value] of positiveIntegers) {
     if (isNaN(value) || value <= 0) {
@@ -106,6 +109,7 @@ export function validateConfig(): void {
   const nonNegativeIntegers: Array<[string, number]> = [
     ['idleThresholdMin', config.idleThresholdMin],
     ['stuckThresholdMin', config.stuckThresholdMin],
+    ['ccQueryMaxRetries', config.ccQueryMaxRetries],
   ];
   for (const [name, value] of nonNegativeIntegers) {
     if (isNaN(value) || value < 0) {
