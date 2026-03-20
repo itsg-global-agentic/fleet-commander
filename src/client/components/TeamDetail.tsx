@@ -3,8 +3,7 @@ import { useFleet } from '../context/FleetContext';
 import { useApi } from '../hooks/useApi';
 import { StatusBadge } from './StatusBadge';
 import { CIChecks } from './CIChecks';
-import { EventTimeline } from './EventTimeline';
-import { TeamOutput } from './TeamOutput';
+import { UnifiedTimeline } from './UnifiedTimeline';
 import { CommandInput } from './CommandInput';
 import { CommGraph } from './CommGraph';
 import type { TeamDetail as TeamDetailType, TeamTransition, TeamMember, MessageEdge } from '../../shared/types';
@@ -40,7 +39,7 @@ export function TeamDetail() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [transitions, setTransitions] = useState<TeamTransition[]>([]);
   const [roster, setRoster] = useState<TeamMember[]>([]);
-  const [activeTab, setActiveTab] = useState<'session-log' | 'events' | 'team'>('session-log');
+  const [activeTab, setActiveTab] = useState<'session-log' | 'team'>('session-log');
   const [messageEdges, setMessageEdges] = useState<MessageEdge[]>([]);
   const [metadataCollapsed, setMetadataCollapsed] = useState(false);
   const templateCacheRef = useRef<{ data: Array<{ id: string; template: string; enabled: boolean }>; fetchedAt: number } | null>(null);
@@ -621,16 +620,6 @@ export function TeamDetail() {
                     Session Log
                   </button>
                   <button
-                    onClick={() => setActiveTab('events')}
-                    className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
-                      activeTab === 'events'
-                        ? 'border-dark-accent text-dark-text'
-                        : 'border-transparent text-dark-muted hover:text-dark-text'
-                    }`}
-                  >
-                    Events
-                  </button>
-                  <button
                     onClick={() => setActiveTab('team')}
                     className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                       activeTab === 'team'
@@ -646,15 +635,7 @@ export function TeamDetail() {
                 {activeTab === 'session-log' && (
                   <div className="flex-1 min-h-0 flex flex-col px-5 py-3">
                     <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-                      <TeamOutput teamId={detail.id} teamStatus={detail.status} />
-                    </div>
-                  </div>
-                )}
-
-                {activeTab === 'events' && (
-                  <div className="flex-1 min-h-0 flex flex-col px-5 py-3">
-                    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
-                      <EventTimeline teamId={detail.id} refreshKey={refreshKey} />
+                      <UnifiedTimeline teamId={detail.id} teamStatus={detail.status} />
                     </div>
                   </div>
                 )}

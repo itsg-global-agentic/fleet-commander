@@ -21,6 +21,7 @@ import { getDatabase } from '../db.js';
 import { sseBroker } from '../services/sse-broker.js';
 import config from '../config.js';
 import type { TeamPhase, IssueDependencyInfo } from '../../shared/types.js';
+import { buildTimeline } from '../utils/build-timeline.js';
 
 // ---------------------------------------------------------------------------
 // Request body / param interfaces
@@ -57,6 +58,10 @@ interface OutputQuerystring {
 
 interface ExportQuerystring {
   format?: string;
+}
+
+interface TimelineQuerystring {
+  limit?: string;
 }
 
 interface SendMessageBody {
@@ -738,6 +743,55 @@ const teamsRoutes: FastifyPluginCallback = (
         return reply.code(200).send(events);
       } catch (err: unknown) {
         request.log.error(err, 'Failed to get team stream events');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // GET /api/teams/:id/timeline — unified timeline (merged stream + hook events)
+  // -------------------------------------------------------------------------
+  fastify.get(
+    '/api/teams/:id/timeline',
+    async (
+      request: FastifyRequest<{ Params: TeamIdParams; Querystring: TimelineQuerystring }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const teamId = parseInt(request.params.id, 10);
+        if (isNaN(teamId) || teamId < 1) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: 'Invalid team ID',
+          });
+        }
+
+        const db = getDatabase();
+        const team = db.getTeam(teamId);
+        if (!team) {
+          return reply.code(404).send({
+            error: 'Not Found',
+            message: `Team ${teamId} not found`,
+          });
+        }
+
+        const limitParam = (request.query as TimelineQuerystring).limit;
+        const limit = limitParam ? parseInt(limitParam, 10) : 200;
+
+        // Fetch stream events from in-memory buffer (same as stream-events endpoint)
+        const manager = getTeamManager();
+        const streamEvents = manager.getParsedEvents(teamId);
+
+        // Fetch hook events from DB (no limit — buildTimeline handles it)
+        const hookEvents = db.getEventsByTeam(teamId);
+
+        const timeline = buildTimeline(streamEvents, hookEvents, teamId, limit);
+        return reply.code(200).send(timeline);
+      } catch (err: unknown) {
+        request.log.error(err, 'Failed to get team timeline');
         return reply.code(500).send({
           error: 'Internal Server Error',
           message: err instanceof Error ? err.message : String(err),

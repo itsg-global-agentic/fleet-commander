@@ -424,3 +424,36 @@ export interface TeamDetail {
   recentEvents: Event[];
   outputTail: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Unified Timeline (merged session log + hook events)
+// ---------------------------------------------------------------------------
+
+/** Base fields shared by all timeline entries */
+interface BaseTimelineEntry {
+  id: string;
+  source: 'stream' | 'hook';
+  timestamp: string;
+  teamId: number;
+}
+
+/** A timeline entry originating from the Claude Code stream (stdout) */
+export interface StreamTimelineEntry extends BaseTimelineEntry {
+  source: 'stream';
+  streamType: string;
+  subtype?: string;
+  message?: { content?: Array<{ type: string; text?: string }> };
+  tool?: { name?: string; input?: unknown };
+}
+
+/** A timeline entry originating from a hook event (DB) */
+export interface HookTimelineEntry extends BaseTimelineEntry {
+  source: 'hook';
+  eventType: string;
+  toolName?: string;
+  agentName?: string;
+  payload?: string;
+}
+
+/** Discriminated union of all timeline entry types */
+export type TimelineEntry = StreamTimelineEntry | HookTimelineEntry;
