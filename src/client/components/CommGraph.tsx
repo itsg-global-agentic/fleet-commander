@@ -37,7 +37,6 @@ interface GraphLink {
   source: string;
   target: string;
   count: number;
-  isSpawn: boolean;
   lastSummary: string | null;
 }
 
@@ -126,22 +125,8 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
       nameMap.set(normalizeName(agent.name), agent.name);
     }
 
-    // Spawn edges: TL -> every non-TL agent (dashed, no count)
-    if (tlName) {
-      for (const agent of agents) {
-        if (agent.name !== tlName) {
-          links.push({
-            source: tlName,
-            target: agent.name,
-            count: 0,
-            isSpawn: true,
-            lastSummary: null,
-          });
-        }
-      }
-    }
-
-    // Message edges from the edges prop
+    // Message edges from the edges prop (spawn edges are now real data
+    // recorded by the server when a subagent_start event is received)
     for (const edge of edges) {
       // Resolve sender/recipient to roster names
       const senderResolved = nameMap.get(normalizeName(edge.sender)) ?? edge.sender;
@@ -152,36 +137,10 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
       const recipientInRoster = agents.some((a) => a.name === recipientResolved);
       if (!senderInRoster || !recipientInRoster) continue;
 
-      // Skip if this would duplicate a spawn edge in the same direction
-      const isSpawnDuplicate =
-        (senderResolved === tlName || recipientResolved === tlName) &&
-        links.some(
-          (l) =>
-            l.isSpawn &&
-            l.source === senderResolved &&
-            l.target === recipientResolved,
-        );
-      if (isSpawnDuplicate) {
-        // Update the spawn edge with message count instead
-        const spawnEdge = links.find(
-          (l) =>
-            l.isSpawn &&
-            l.source === senderResolved &&
-            l.target === recipientResolved,
-        );
-        if (spawnEdge) {
-          spawnEdge.count = edge.count;
-          spawnEdge.isSpawn = false;
-          spawnEdge.lastSummary = edge.lastSummary;
-        }
-        continue;
-      }
-
       links.push({
         source: senderResolved,
         target: recipientResolved,
         count: edge.count,
-        isSpawn: false,
         lastSummary: edge.lastSummary,
       });
     }
@@ -325,26 +284,23 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
 
   // Link width based on message count
   const linkWidth = useCallback((link: GraphLink) => {
-    if (link.isSpawn) return 1;
     if (link.count >= 9) return 3.5;
     if (link.count >= 4) return 2;
     return 1;
   }, []);
 
   // Link color
-  const linkColor = useCallback((link: GraphLink) => {
-    if (link.isSpawn) return '#30363D';
+  const linkColor = useCallback((_link: GraphLink) => {
     return '#8B949E';
   }, []);
 
-  // Link dashed pattern: spawn edges are dashed, message edges are solid
-  const linkLineDash = useCallback((link: GraphLink) => {
-    return link.isSpawn ? [4, 4] : null;
+  // Link dashed pattern: all edges are solid (no more synthetic spawn edges)
+  const linkLineDash = useCallback((_link: GraphLink) => {
+    return null;
   }, []);
 
   // Link label on hover
   const linkLabel = useCallback((link: GraphLink) => {
-    if (link.isSpawn && link.count === 0) return '';
     const summary = link.lastSummary ? `<br/><i>${link.lastSummary}</i>` : '';
     return `<div style="padding:4px 8px;background:#161B22;border:1px solid #30363D;border-radius:4px;font-size:11px;color:#E6EDF3;">
       <b>${typeof link.source === 'object' ? (link.source as GraphNode).id : link.source}</b>
@@ -356,15 +312,14 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
 
   // Directional particles for message edges
   const linkDirectionalParticles = useCallback((link: GraphLink) => {
-    if (link.isSpawn) return 0;
     if (link.count >= 6) return 3;
     if (link.count >= 3) return 2;
     return link.count > 0 ? 1 : 0;
   }, []);
 
   // Directional arrows for message edges
-  const linkDirectionalArrowLength = useCallback((link: GraphLink) => {
-    return link.isSpawn ? 0 : 6;
+  const linkDirectionalArrowLength = useCallback((_link: GraphLink) => {
+    return 6;
   }, []);
 
   // Empty state — show only when no agents at all

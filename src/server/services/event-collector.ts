@@ -325,6 +325,24 @@ export function processEvent(
     const subagentName = payload.teammate_name || payload.agent_type || 'unknown';
     const trackerKey = `${payload.team}:${subagentName}`;
     subagentTrackers.set(trackerKey, { startTime: now, eventCount: 0 });
+
+    // Record spawn as a real agent message (TL -> subagent) so the CommGraph
+    // shows data-driven edges instead of synthetic spawn lines.
+    try {
+      const senderName = normalizeAgentName(null); // TL spawns subagents
+      const recipientName = normalizeAgentName(subagentName);
+      db.insertAgentMessage({
+        teamId,
+        eventId,
+        sender: senderName,
+        recipient: recipientName,
+        summary: 'spawned agent',
+        content: null,
+        sessionId: payload.session_id || null,
+      });
+    } catch {
+      // Non-critical — silently ignore insert failures
+    }
   }
 
   // Increment event count for any tracked subagent on this team

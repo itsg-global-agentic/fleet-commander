@@ -102,8 +102,8 @@ describe('CommGraph', () => {
     const graphData = call.graphData;
     // Should have 3 nodes (one per agent)
     expect(graphData.nodes).toHaveLength(3);
-    // Should have 2 spawn edges (TL -> analyst, TL -> dev)
-    expect(graphData.links).toHaveLength(2);
+    // No synthetic spawn edges — links come only from real message data
+    expect(graphData.links).toHaveLength(0);
   });
 
   it('should create message edges from the edges prop', () => {
@@ -118,13 +118,12 @@ describe('CommGraph', () => {
     render(<CommGraph edges={edges} agents={agents} />);
     expect(mockForceGraph).toHaveBeenCalled();
 
-    const call = mockForceGraph.mock.calls[0][0] as { graphData: { nodes: Array<{ id: string }>; links: Array<{ source: string; count: number; isSpawn: boolean }> } };
+    const call = mockForceGraph.mock.calls[0][0] as { graphData: { nodes: Array<{ id: string }>; links: Array<{ source: string; count: number }> } };
     const graphData = call.graphData;
     expect(graphData.nodes).toHaveLength(2);
-    // The spawn edge from TL->dev should be upgraded to a message edge
-    const messageLinks = graphData.links.filter((l) => !l.isSpawn);
-    expect(messageLinks.length).toBeGreaterThanOrEqual(1);
-    expect(messageLinks[0].count).toBe(5);
+    // All edges come from real message data
+    expect(graphData.links).toHaveLength(1);
+    expect(graphData.links[0].count).toBe(5);
   });
 
   it('should render a single agent without crashing', () => {
