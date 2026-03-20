@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useApi } from '../hooks/useApi';
+import { useInlineEdit } from '../hooks/useInlineEdit';
 import { AddProjectDialog } from '../components/AddProjectDialog';
 import { CleanupModal } from '../components/CleanupModal';
+import { OverflowMenu } from '../components/OverflowMenu';
+import { ChevronRightIcon, PencilIcon } from '../components/Icons';
 import type { ProjectSummary, ProjectStatus, ProjectGroup } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -22,357 +25,304 @@ interface ProjectGroupWithCount extends ProjectGroup {
 }
 
 // ---------------------------------------------------------------------------
-// ProjectCard — renders a single project row
+// Install health helpers
+// ---------------------------------------------------------------------------
+
+type HealthColor = '#3FB950' | '#D29922' | '#F85149' | '#8B949E';
+
+/** Returns a single aggregate health color for the install status */
+function getInstallHealthColor(project: ProjectSummary): HealthColor {
+  if (!project.installStatus) return '#8B949E';
+  const s = project.installStatus;
+
+  const hooksOk = s.hooks?.installed ?? false;
+  const hooksCrlf = s.hooks?.files?.some((f: { hasCrlf?: boolean }) => f.hasCrlf) ?? false;
+  const promptOk = s.prompt?.installed ?? false;
+  const agentsOk = s.agents?.installed ?? false;
+  const settingsOk = s.settings?.exists ?? false;
+
+  const allOk = hooksOk && !hooksCrlf && promptOk && agentsOk && settingsOk;
+  if (allOk) return '#3FB950';
+
+  const anyInstalled = hooksOk || promptOk || agentsOk || settingsOk;
+  if (anyInstalled || hooksCrlf) return '#D29922';
+
+  return '#F85149';
+}
+
+function getInstallHealthLabel(color: HealthColor): string {
+  switch (color) {
+    case '#3FB950': return 'All installed';
+    case '#D29922': return 'Partially installed';
+    case '#F85149': return 'Not installed';
+    default: return 'Unknown';
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Install detail categories (reused from original)
+// ---------------------------------------------------------------------------
+
+function InstallHealthDetail({ project }: { project: ProjectSummary }) {
+  if (!project.installStatus) {
+    return (
+      <span className="text-xs text-dark-muted" title="Install status unknown">
+        Status unknown
+      </span>
+    );
+  }
+
+  const s = project.installStatus;
+
+  const detailedCategories: {
+    key: string;
+    label: string;
+    installed: boolean;
+    hasCrlf: boolean;
+    somePresent: boolean;
+    files: { name: string; exists: boolean; hasCrlf?: boolean }[];
+    summary: string;
+  }[] = [
+    {
+      key: 'hooks',
+      label: 'hooks',
+      installed: s.hooks?.installed ?? false,
+      hasCrlf: s.hooks?.files?.some((f: { hasCrlf?: boolean }) => f.hasCrlf) ?? false,
+      somePresent: (s.hooks?.found ?? 0) > 0,
+      files: s.hooks?.files ?? [],
+      summary: `Hook Scripts (${s.hooks?.found ?? 0}/${s.hooks?.total ?? 0})`,
+    },
+    {
+      key: 'prompt',
+      label: 'prompt',
+      installed: s.prompt?.installed ?? false,
+      hasCrlf: false,
+      somePresent: s.prompt?.files?.some((f) => f.exists) ?? false,
+      files: s.prompt?.files ?? [],
+      summary: 'Prompt Files',
+    },
+    {
+      key: 'agents',
+      label: 'agents',
+      installed: s.agents?.installed ?? false,
+      hasCrlf: false,
+      somePresent: s.agents?.files?.some((f) => f.exists) ?? false,
+      files: s.agents?.files ?? [],
+      summary: 'Agent Templates',
+    },
+  ];
+
+  const booleanCategories: {
+    key: string;
+    label: string;
+    exists: boolean;
+    tooltip: string;
+  }[] = [
+    {
+      key: 'settings',
+      label: 'settings',
+      exists: s.settings?.exists ?? false,
+      tooltip: s.settings?.exists ? 'settings.json found' : 'settings.json missing',
+    },
+  ];
+
+  return (
+    <div className="flex items-center gap-3 text-xs flex-wrap">
+      {detailedCategories.map((cat) => {
+        const color = cat.installed && !cat.hasCrlf
+          ? '#3FB950'
+          : cat.hasCrlf
+            ? '#D29922'
+            : cat.somePresent
+              ? '#D29922'
+              : '#F85149';
+        const icon = cat.installed && !cat.hasCrlf
+          ? '\u2713'
+          : cat.hasCrlf
+            ? '\u26A0'
+            : cat.somePresent
+              ? '\u26A0'
+              : '\u2717';
+
+        return (
+          <div key={cat.key} className="relative group shrink-0">
+            <span className="cursor-default" style={{ color }}>
+              {icon} {cat.label}
+            </span>
+            {/* Tooltip on hover */}
+            <div className="hidden group-hover:block absolute z-10 bottom-full left-0 mb-1 p-2 rounded bg-[#1C2128] border border-[#30363D] shadow-lg text-xs min-w-48 max-h-64 overflow-auto">
+              <div className="font-medium mb-1 text-[#C9D1D9]">
+                {cat.summary}
+              </div>
+              {cat.files.map((f) => {
+                const fileColor = f.exists
+                  ? f.hasCrlf ? '#D29922' : '#3FB950'
+                  : '#F85149';
+                const fileIcon = f.exists
+                  ? f.hasCrlf ? '\u26A0' : '\u2713'
+                  : '\u2717';
+                return (
+                  <div key={f.name} className="flex items-center gap-1.5 py-0.5">
+                    <span style={{ color: fileColor }}>{fileIcon}</span>
+                    <span className="text-[#8B949E] font-mono">
+                      {f.name}{f.hasCrlf ? ' (CRLF)' : ''}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+      {booleanCategories.map((cat) => {
+        const color = cat.exists ? '#3FB950' : '#F85149';
+        const icon = cat.exists ? '\u2713' : '\u2717';
+
+        return (
+          <div key={cat.key} className="relative group shrink-0">
+            <span className="cursor-default" style={{ color }}>
+              {icon} {cat.label}
+            </span>
+            {/* Tooltip on hover */}
+            <div className="hidden group-hover:block absolute z-10 bottom-full right-0 mb-1 p-2 rounded bg-[#1C2128] border border-[#30363D] shadow-lg text-xs whitespace-nowrap">
+              <span className="text-[#C9D1D9]">{cat.tooltip}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ProjectCard — two-tier expandable layout
 // ---------------------------------------------------------------------------
 
 function ProjectCard({
   project,
   groups,
-  editingLimitId,
-  editLimitValue,
-  limitInputRef,
-  committedRef,
-  setEditingLimitId,
-  setEditLimitValue,
-  handleSaveLimit,
-  handleCancelEditLimit,
-  editingModelId,
-  editModelValue,
-  modelInputRef,
-  modelCommittedRef,
-  setEditingModelId,
-  setEditModelValue,
-  handleSaveModel,
-  handleCancelEditModel,
-  handleEditLimit,
-  handleEditModel,
   reinstalling,
   reinstallResult,
-  handleReinstall,
-  handleCleanup,
-  handleDelete,
-  setEditingPromptId,
+  onSaveLimit,
+  onSaveModel,
+  onReinstall,
+  onCleanup,
+  onDelete,
+  onEditPrompt,
   onGroupChange,
 }: {
   project: ProjectSummary;
   groups: ProjectGroupWithCount[];
-  editingLimitId: number | null;
-  editLimitValue: number;
-  limitInputRef: React.RefObject<HTMLInputElement | null>;
-  committedRef: React.RefObject<boolean>;
-  setEditingLimitId: (id: number | null) => void;
-  setEditLimitValue: (v: number) => void;
-  handleSaveLimit: (id: number) => void;
-  handleCancelEditLimit: () => void;
-  editingModelId: number | null;
-  editModelValue: string;
-  modelInputRef: React.RefObject<HTMLInputElement | null>;
-  modelCommittedRef: React.RefObject<boolean>;
-  setEditingModelId: (id: number | null) => void;
-  setEditModelValue: (v: string) => void;
-  handleSaveModel: (id: number) => void;
-  handleCancelEditModel: () => void;
-  handleEditLimit: (p: ProjectSummary) => void;
-  handleEditModel: (p: ProjectSummary) => void;
   reinstalling: number | null;
   reinstallResult: { id: number; ok: boolean; error?: string } | null;
-  handleReinstall: (p: ProjectSummary) => void;
-  handleCleanup: (p: ProjectSummary) => void;
-  handleDelete: (p: ProjectSummary) => void;
-  setEditingPromptId: (id: number | null) => void;
+  onSaveLimit: (projectId: number, value: number) => void;
+  onSaveModel: (projectId: number, value: string) => void;
+  onReinstall: (p: ProjectSummary) => void;
+  onCleanup: (p: ProjectSummary) => void;
+  onDelete: (p: ProjectSummary) => void;
+  onEditPrompt: (id: number) => void;
   onGroupChange: (projectId: number, groupId: number | null) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const limitEdit = useInlineEdit<number>(project.maxActiveTeams);
+  const modelEdit = useInlineEdit<string>(project.model ?? '');
+
   const statusStyle = STATUS_STYLES[project.status] || STATUS_STYLES.active;
+  const healthColor = getInstallHealthColor(project);
+  const healthLabel = getInstallHealthLabel(healthColor);
+
+  // Team stats string
+  const queuedCount = project.queuedTeamCount ?? 0;
+  const teamStats = `${project.activeTeamCount}/${project.maxActiveTeams} active${queuedCount > 0 ? ` \u00b7 ${queuedCount} queued` : ''}`;
+
+  const handleSaveLimitInline = useCallback(() => {
+    const value = limitEdit.confirmEdit();
+    if (value === null) return; // already saved (Enter + blur double-fire guard)
+    const clamped = Math.max(1, Math.min(50, value));
+    onSaveLimit(project.id, clamped);
+  }, [limitEdit, onSaveLimit, project.id]);
+
+  const handleSaveModelInline = useCallback(() => {
+    const value = modelEdit.confirmEdit();
+    if (value === null) return; // already saved (Enter + blur double-fire guard)
+    onSaveModel(project.id, value);
+  }, [modelEdit, onSaveModel, project.id]);
+
   return (
-    <div
-      className="bg-dark-surface border border-dark-border rounded-lg p-4 flex items-center justify-between gap-4"
-    >
-      {/* Left: info */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-3 mb-1">
-          <span className="text-base font-semibold text-dark-text truncate">
-            {project.name}
-          </span>
-          {/* Status badge */}
-          <span
-            className="px-2 py-0.5 rounded-full text-xs font-medium shrink-0"
-            style={{
-              backgroundColor: statusStyle.bg,
-              color: statusStyle.text,
-              border: `1px solid ${statusStyle.border}`,
-            }}
-          >
-            {project.status}
-          </span>
-          {/* Install status indicators — 4 separate badges */}
-          {project.installStatus ? (() => {
-            const s = project.installStatus;
+    <div className="bg-dark-surface border border-dark-border rounded-lg overflow-hidden">
+      {/* ── Tier 1: Compact summary line ── */}
+      <div
+        className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-dark-border/10 transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
+        {/* Chevron */}
+        <ChevronRightIcon
+          size={14}
+          className={`text-dark-muted shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
+        />
 
-            const detailedCategories: {
-              key: string;
-              label: string;
-              installed: boolean;
-              hasCrlf: boolean;
-              somePresent: boolean;
-              files: { name: string; exists: boolean; hasCrlf?: boolean }[];
-              summary: string;
-            }[] = [
-              {
-                key: 'hooks',
-                label: 'hooks',
-                installed: s.hooks?.installed ?? false,
-                hasCrlf: s.hooks?.files?.some((f: { hasCrlf?: boolean }) => f.hasCrlf) ?? false,
-                somePresent: (s.hooks?.found ?? 0) > 0,
-                files: s.hooks?.files ?? [],
-                summary: `Hook Scripts (${s.hooks?.found ?? 0}/${s.hooks?.total ?? 0})`,
-              },
-              {
-                key: 'prompt',
-                label: 'prompt',
-                installed: s.prompt?.installed ?? false,
-                hasCrlf: false,
-                somePresent: s.prompt?.files?.some((f) => f.exists) ?? false,
-                files: s.prompt?.files ?? [],
-                summary: 'Prompt Files',
-              },
-              {
-                key: 'agents',
-                label: 'agents',
-                installed: s.agents?.installed ?? false,
-                hasCrlf: false,
-                somePresent: s.agents?.files?.some((f) => f.exists) ?? false,
-                files: s.agents?.files ?? [],
-                summary: 'Agent Templates',
-              },
-            ];
+        {/* Project name */}
+        <span className="text-sm font-semibold text-dark-text truncate min-w-0">
+          {project.name}
+        </span>
 
-            const booleanCategories: {
-              key: string;
-              label: string;
-              exists: boolean;
-              tooltip: string;
-            }[] = [
-              {
-                key: 'settings',
-                label: 'settings',
-                exists: s.settings?.exists ?? false,
-                tooltip: s.settings?.exists ? 'settings.json found' : 'settings.json missing',
-              },
-            ];
+        {/* Status badge */}
+        <span
+          className="px-2 py-0.5 rounded-full text-xs font-medium shrink-0"
+          style={{
+            backgroundColor: statusStyle.bg,
+            color: statusStyle.text,
+            border: `1px solid ${statusStyle.border}`,
+          }}
+        >
+          {project.status}
+        </span>
 
-            return (
-              <div className="flex items-center gap-2 text-xs">
-                {detailedCategories.map((cat) => {
-                  const color = cat.installed && !cat.hasCrlf
-                    ? '#3FB950'
-                    : cat.hasCrlf
-                      ? '#D29922'
-                      : cat.somePresent
-                        ? '#D29922'
-                        : '#F85149';
-                  const icon = cat.installed && !cat.hasCrlf
-                    ? '\u2713'
-                    : cat.hasCrlf
-                      ? '\u26A0'
-                      : cat.somePresent
-                        ? '\u26A0'
-                        : '\u2717';
+        {/* Team stats */}
+        <span className="text-xs text-dark-muted shrink-0">
+          {teamStats}
+        </span>
 
-                  return (
-                    <div key={cat.key} className="relative group shrink-0">
-                      <span
-                        className="cursor-default"
-                        style={{ color }}
-                      >
-                        {icon} {cat.label}
-                      </span>
+        {/* Install health dot */}
+        <span
+          className="w-2 h-2 rounded-full shrink-0"
+          style={{ backgroundColor: healthColor }}
+          title={healthLabel}
+        />
 
-                      {/* Tooltip on hover */}
-                      <div className="hidden group-hover:block absolute z-10 bottom-full left-0 mb-1 p-2 rounded bg-[#1C2128] border border-[#30363D] shadow-lg text-xs min-w-48 max-h-64 overflow-auto">
-                        <div className="font-medium mb-1 text-[#C9D1D9]">
-                          {cat.summary}
-                        </div>
-                        {cat.files.map((f) => {
-                          const fileColor = f.exists
-                            ? f.hasCrlf ? '#D29922' : '#3FB950'
-                            : '#F85149';
-                          const fileIcon = f.exists
-                            ? f.hasCrlf ? '\u26A0' : '\u2713'
-                            : '\u2717';
-                          return (
-                            <div
-                              key={f.name}
-                              className="flex items-center gap-1.5 py-0.5"
-                            >
-                              <span style={{ color: fileColor }}>
-                                {fileIcon}
-                              </span>
-                              <span className="text-[#8B949E] font-mono">
-                                {f.name}{f.hasCrlf ? ' (CRLF)' : ''}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-                {booleanCategories.map((cat) => {
-                  const color = cat.exists ? '#3FB950' : '#F85149';
-                  const icon = cat.exists ? '\u2713' : '\u2717';
+        {/* Spacer */}
+        <span className="flex-1" />
 
-                  return (
-                    <div key={cat.key} className="relative group shrink-0">
-                      <span
-                        className="cursor-default"
-                        style={{ color }}
-                      >
-                        {icon} {cat.label}
-                      </span>
+        {/* Reinstall button */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onReinstall(project); }}
+          disabled={reinstalling === project.id}
+          className="px-3 py-1 text-xs rounded border border-dark-accent/40 text-dark-accent bg-dark-accent/10 hover:bg-dark-accent/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          title="(Re)install hooks, settings, and workflow prompt"
+        >
+          {reinstalling === project.id ? 'Installing...' : 'Reinstall'}
+        </button>
 
-                      {/* Tooltip on hover */}
-                      <div className="hidden group-hover:block absolute z-10 bottom-full right-0 mb-1 p-2 rounded bg-[#1C2128] border border-[#30363D] shadow-lg text-xs whitespace-nowrap">
-                        <span className="text-[#C9D1D9]">{cat.tooltip}</span>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })() : (
-            <span
-              className="text-xs cursor-default shrink-0"
-              style={{ color: '#8B949E' }}
-              title="Install status unknown"
-            >
-              ? status
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-4 text-xs text-dark-muted">
-          <span className="truncate" title={project.repoPath}>
-            {project.repoPath}
-          </span>
-          {project.githubRepo && (
-            <span className="shrink-0">{project.githubRepo}</span>
-          )}
-          {editingLimitId === project.id ? (
-            <span className="shrink-0 inline-flex items-center gap-1">
-              <span>{project.activeTeamCount}/</span>
-              <input
-                ref={limitInputRef}
-                type="number"
-                value={editLimitValue}
-                onChange={(e) => setEditLimitValue(parseInt(e.target.value, 10) || 1)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    committedRef.current = true;
-                    handleSaveLimit(project.id);
-                  }
-                  if (e.key === 'Escape') handleCancelEditLimit();
-                }}
-                onBlur={() => {
-                  if (!committedRef.current) {
-                    handleSaveLimit(project.id);
-                  }
-                }}
-                min={1}
-                max={50}
-                className="w-12 px-1 py-0 text-xs rounded border border-dark-accent bg-dark-base text-dark-text focus:outline-none"
-              />
-              <span>active teams</span>
-            </span>
-          ) : (
-            <span
-              className="shrink-0 cursor-pointer hover:text-dark-text transition-colors"
-              onClick={() => handleEditLimit(project)}
-              title="Click to edit max active teams limit"
-            >
-              {project.activeTeamCount}/{project.maxActiveTeams} active teams
-            </span>
-          )}
-          {(project.queuedTeamCount ?? 0) > 0 && (
-            <span
-              className="shrink-0 px-1.5 py-0 rounded-full text-xs font-medium"
-              style={{
-                backgroundColor: '#D2992220',
-                color: '#D29922',
-                border: '1px solid #D2992240',
-              }}
-            >
-              {project.queuedTeamCount} queued
-            </span>
-          )}
-          {editingModelId === project.id ? (
-            <span className="shrink-0 inline-flex items-center gap-1">
-              <span>Model:</span>
-              <input
-                ref={modelInputRef}
-                type="text"
-                value={editModelValue}
-                onChange={(e) => setEditModelValue(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    modelCommittedRef.current = true;
-                    handleSaveModel(project.id);
-                  }
-                  if (e.key === 'Escape') handleCancelEditModel();
-                }}
-                onBlur={() => {
-                  if (!modelCommittedRef.current) {
-                    handleSaveModel(project.id);
-                  }
-                }}
-                placeholder="default"
-                className="w-32 px-1 py-0 text-xs rounded border border-dark-accent bg-dark-base text-dark-text focus:outline-none"
-              />
-            </span>
-          ) : (
-            <span
-              className="shrink-0 cursor-pointer hover:text-dark-text transition-colors"
-              onClick={() => handleEditModel(project)}
-              title="Click to edit model"
-            >
-              Model: {project.model || 'default'}
-            </span>
-          )}
-          {/* Group selector */}
-          <select
-            value={project.groupId ?? ''}
-            onChange={(e) => {
-              const val = e.target.value;
-              onGroupChange(project.id, val === '' ? null : parseInt(val, 10));
-            }}
-            className="shrink-0 px-1 py-0 text-xs rounded border border-dark-border bg-dark-base text-dark-muted hover:text-dark-text focus:outline-none cursor-pointer"
-            title="Assign to group"
-          >
-            <option value="">No group</option>
-            {groups.map((g) => (
-              <option key={g.id} value={g.id}>{g.name}</option>
-            ))}
-          </select>
-        </div>
-        {project.promptFile && (
-          <div className="flex items-center gap-2 text-xs text-dark-muted mt-1">
-            <span className="shrink-0">Prompt:</span>
-            <span className="truncate text-dark-text/70" title={project.promptFile}>
-              {project.promptFile}
-            </span>
-            <button
-              onClick={() => setEditingPromptId(project.id)}
-              className="shrink-0 text-dark-accent/70 hover:text-dark-accent transition-colors"
-              title="Edit launch prompt"
-            >
-              Edit
-            </button>
-          </div>
-        )}
+        {/* Overflow menu (Clean Up, Delete) */}
+        <OverflowMenu
+          items={[
+            {
+              label: 'Clean Up',
+              onClick: () => onCleanup(project),
+            },
+            {
+              label: 'Delete',
+              onClick: () => onDelete(project),
+              danger: true,
+            },
+          ]}
+        />
       </div>
 
       {/* Reinstall result banner */}
       {reinstallResult?.id === project.id && (
         <div
-          className={`mt-1 px-3 py-1.5 rounded text-xs ${
+          className={`mx-4 mb-2 px-3 py-1.5 rounded text-xs ${
             reinstallResult.ok
               ? 'border border-[#3FB950]/30 bg-[#3FB950]/10 text-[#3FB950]'
               : 'border border-[#F85149]/30 bg-[#F85149]/10 text-[#F85149]'
@@ -384,31 +334,138 @@ function ProjectCard({
         </div>
       )}
 
-      {/* Right: actions */}
-      <div className="flex items-center gap-2 shrink-0">
-        {/* Reinstall button — always visible */}
-        <button
-          onClick={() => handleReinstall(project)}
-          disabled={reinstalling === project.id}
-          className="px-3 py-1 text-xs rounded border border-dark-accent/40 text-dark-accent bg-dark-accent/10 hover:bg-dark-accent/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          title="(Re)install hooks, settings, and workflow prompt"
-        >
-          {reinstalling === project.id ? 'Installing...' : 'Reinstall'}
-        </button>
-        <button
-          onClick={() => handleCleanup(project)}
-          className="px-3 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted transition-colors"
-          title="Clean up orphan worktrees, signal files, and stale branches"
-        >
-          Clean Up
-        </button>
-        <button
-          onClick={() => handleDelete(project)}
-          className="px-3 py-1 text-xs rounded border border-[#F85149]/30 text-[#F85149] hover:bg-[#F85149]/10 transition-colors"
-        >
-          Delete
-        </button>
-      </div>
+      {/* ── Tier 2: Expandable details ── */}
+      {expanded && (
+        <div className="border-t border-dark-border px-4 py-3 space-y-3">
+          {/* Repository */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-dark-muted/60 font-medium mb-1">
+              Repository
+            </div>
+            <div className="flex items-center gap-4 text-xs text-dark-muted">
+              <span className="truncate" title={project.repoPath}>
+                {project.repoPath}
+              </span>
+              {project.githubRepo && (
+                <span className="shrink-0">{project.githubRepo}</span>
+              )}
+            </div>
+          </div>
+
+          {/* Configuration */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-dark-muted/60 font-medium mb-1">
+              Configuration
+            </div>
+            <div className="flex items-center gap-4 text-xs text-dark-muted flex-wrap">
+              {/* Model (editable) */}
+              {modelEdit.isEditing ? (
+                <span className="shrink-0 inline-flex items-center gap-1">
+                  <span>Model:</span>
+                  <input
+                    ref={modelEdit.inputRef}
+                    type="text"
+                    value={modelEdit.editValue}
+                    onChange={(e) => modelEdit.setEditValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveModelInline();
+                      if (e.key === 'Escape') modelEdit.cancelEdit();
+                    }}
+                    onBlur={handleSaveModelInline}
+                    placeholder="default"
+                    className="w-32 px-1 py-0 text-xs rounded border border-dark-accent bg-dark-base text-dark-text focus:outline-none"
+                  />
+                </span>
+              ) : (
+                <span
+                  className="shrink-0 inline-flex items-center gap-1 cursor-pointer hover:text-dark-text transition-colors group"
+                  onClick={() => modelEdit.startEdit(project.model ?? '')}
+                  title="Click to edit model"
+                >
+                  Model: {project.model || 'default'}
+                  <PencilIcon size={11} className="text-dark-muted/40 group-hover:text-dark-muted transition-colors" />
+                </span>
+              )}
+
+              {/* Max teams (editable) */}
+              {limitEdit.isEditing ? (
+                <span className="shrink-0 inline-flex items-center gap-1">
+                  <span>Max teams:</span>
+                  <input
+                    ref={limitEdit.inputRef}
+                    type="number"
+                    value={limitEdit.editValue}
+                    onChange={(e) => limitEdit.setEditValue(parseInt(e.target.value, 10) || 1)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveLimitInline();
+                      if (e.key === 'Escape') limitEdit.cancelEdit();
+                    }}
+                    onBlur={handleSaveLimitInline}
+                    min={1}
+                    max={50}
+                    className="w-12 px-1 py-0 text-xs rounded border border-dark-accent bg-dark-base text-dark-text focus:outline-none"
+                  />
+                </span>
+              ) : (
+                <span
+                  className="shrink-0 inline-flex items-center gap-1 cursor-pointer hover:text-dark-text transition-colors group"
+                  onClick={() => limitEdit.startEdit(project.maxActiveTeams)}
+                  title="Click to edit max active teams"
+                >
+                  Max teams: {project.maxActiveTeams}
+                  <PencilIcon size={11} className="text-dark-muted/40 group-hover:text-dark-muted transition-colors" />
+                </span>
+              )}
+
+              {/* Group selector */}
+              <select
+                value={project.groupId ?? ''}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  onGroupChange(project.id, val === '' ? null : parseInt(val, 10));
+                }}
+                onClick={(e) => e.stopPropagation()}
+                className="shrink-0 px-1 py-0 text-xs rounded border border-dark-border bg-dark-base text-dark-muted hover:text-dark-text focus:outline-none cursor-pointer"
+                title="Assign to group"
+              >
+                <option value="">No group</option>
+                {groups.map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Install Health */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-dark-muted/60 font-medium mb-1">
+              Install Health
+            </div>
+            <InstallHealthDetail project={project} />
+          </div>
+
+          {/* Prompt (conditional) */}
+          {project.promptFile && (
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-dark-muted/60 font-medium mb-1">
+                Prompt
+              </div>
+              <div className="flex items-center gap-2 text-xs text-dark-muted">
+                <span className="truncate text-dark-text/70" title={project.promptFile}>
+                  {project.promptFile}
+                </span>
+                <button
+                  onClick={() => onEditPrompt(project.id)}
+                  className="shrink-0 text-dark-accent/70 hover:text-dark-accent transition-colors"
+                  title="Edit launch prompt"
+                >
+                  Edit
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -614,24 +671,15 @@ export function ProjectsPage() {
   // Cleanup modal state
   const [cleanupProjectId, setCleanupProjectId] = useState<number | null>(null);
 
-  // Inline edit state for maxActiveTeams
-  const [editingLimitId, setEditingLimitId] = useState<number | null>(null);
-  const [editLimitValue, setEditLimitValue] = useState<number>(5);
-  const limitInputRef = useRef<HTMLInputElement>(null);
-  const committedRef = useRef(false);
-
-  // Inline edit state for model
-  const [editingModelId, setEditingModelId] = useState<number | null>(null);
-  const [editModelValue, setEditModelValue] = useState('');
-  const modelInputRef = useRef<HTMLInputElement>(null);
-  const modelCommittedRef = useRef(false);
-
   // Prompt editor state
   const [editingPromptId, setEditingPromptId] = useState<number | null>(null);
   const [promptContent, setPromptContent] = useState('');
   const [promptLoading, setPromptLoading] = useState(false);
   const [promptSaving, setPromptSaving] = useState(false);
   const [promptError, setPromptError] = useState<string | null>(null);
+
+  const [reinstalling, setReinstalling] = useState<number | null>(null);
+  const [reinstallResult, setReinstallResult] = useState<{ id: number; ok: boolean; error?: string } | null>(null);
 
   const fetchProjects = useCallback(async () => {
     try {
@@ -742,9 +790,6 @@ export function ProjectsPage() {
     fetchProjects();
   }, [fetchProjects]);
 
-  const [reinstalling, setReinstalling] = useState<number | null>(null);
-  const [reinstallResult, setReinstallResult] = useState<{ id: number; ok: boolean; error?: string } | null>(null);
-
   const handleReinstall = useCallback(
     async (project: ProjectSummary) => {
       setReinstalling(project.id);
@@ -781,54 +826,29 @@ export function ProjectsPage() {
     fetchProjects();
   }, [fetchProjects]);
 
-  const handleEditLimit = useCallback((project: ProjectSummary) => {
-    setEditingLimitId(project.id);
-    setEditLimitValue(project.maxActiveTeams);
-    setTimeout(() => limitInputRef.current?.focus(), 50);
-  }, []);
-
   const handleSaveLimit = useCallback(
-    async (projectId: number) => {
-      const clamped = Math.max(1, Math.min(50, editLimitValue));
+    async (projectId: number, value: number) => {
       try {
-        await api.put(`projects/${projectId}`, { maxActiveTeams: clamped });
+        await api.put(`projects/${projectId}`, { maxActiveTeams: value });
         await fetchProjects();
       } catch {
         // ignore
       }
-      committedRef.current = false; // reset AFTER save
-      setEditingLimitId(null);
     },
-    [api, editLimitValue, fetchProjects],
+    [api, fetchProjects],
   );
-
-  const handleCancelEditLimit = useCallback(() => {
-    setEditingLimitId(null);
-  }, []);
-
-  const handleEditModel = useCallback((project: ProjectSummary) => {
-    setEditingModelId(project.id);
-    setEditModelValue(project.model ?? '');
-    setTimeout(() => modelInputRef.current?.focus(), 50);
-  }, []);
 
   const handleSaveModel = useCallback(
-    async (projectId: number) => {
+    async (projectId: number, value: string) => {
       try {
-        await api.put(`projects/${projectId}`, { model: editModelValue.trim() || null });
+        await api.put(`projects/${projectId}`, { model: value.trim() || null });
         await fetchProjects();
       } catch {
         // ignore
       }
-      modelCommittedRef.current = false;
-      setEditingModelId(null);
     },
-    [api, editModelValue, fetchProjects],
+    [api, fetchProjects],
   );
-
-  const handleCancelEditModel = useCallback(() => {
-    setEditingModelId(null);
-  }, []);
 
   // Load prompt content when editing
   useEffect(() => {
@@ -886,30 +906,14 @@ export function ProjectsPage() {
   // Shared card props
   const cardProps = {
     groups,
-    editingLimitId,
-    editLimitValue,
-    limitInputRef,
-    committedRef,
-    setEditingLimitId,
-    setEditLimitValue,
-    handleSaveLimit,
-    handleCancelEditLimit,
-    editingModelId,
-    editModelValue,
-    modelInputRef,
-    modelCommittedRef,
-    setEditingModelId,
-    setEditModelValue,
-    handleSaveModel,
-    handleCancelEditModel,
-    handleEditLimit,
-    handleEditModel,
     reinstalling,
     reinstallResult,
-    handleReinstall,
-    handleCleanup,
-    handleDelete,
-    setEditingPromptId,
+    onSaveLimit: handleSaveLimit,
+    onSaveModel: handleSaveModel,
+    onReinstall: handleReinstall,
+    onCleanup: handleCleanup,
+    onDelete: handleDelete,
+    onEditPrompt: setEditingPromptId,
     onGroupChange: handleGroupChange,
   };
 
