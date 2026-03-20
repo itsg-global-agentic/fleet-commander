@@ -275,23 +275,23 @@ describe('buildTimeline', () => {
     }
   });
 
-  it('defaults limit to 200', () => {
-    const stream: RawStreamEvent[] = Array.from({ length: 150 }, (_, i) =>
+  it('defaults limit to 500', () => {
+    const stream: RawStreamEvent[] = Array.from({ length: 300 }, (_, i) =>
       makeStreamEvent({
         type: 'assistant',
         timestamp: new Date(Date.UTC(2026, 2, 20, 10, 0, i)).toISOString(),
       }),
     );
-    const hooks: Event[] = Array.from({ length: 100 }, (_, i) =>
+    const hooks: Event[] = Array.from({ length: 300 }, (_, i) =>
       makeHookEvent({
         id: i + 1,
         eventType: 'SessionStart',
-        createdAt: new Date(Date.UTC(2026, 2, 20, 10, 3, i)).toISOString(),
+        createdAt: new Date(Date.UTC(2026, 2, 20, 10, 6, i)).toISOString(),
       }),
     );
 
     const result = buildTimeline(stream, hooks, 1);
-    expect(result).toHaveLength(200);
+    expect(result).toHaveLength(500);
   });
 
   it('handles missing timestamps gracefully', () => {
@@ -404,5 +404,100 @@ describe('buildTimeline', () => {
     expect(entry.toolName).toBe('Bash');
     expect(entry.agentName).toBe('fleet-dev');
     expect(entry.payload).toBe('{"error":"command failed"}');
+  });
+
+  it('preserves stream events (including early TL messages) when many hook events dominate with limit=500', () => {
+    // Simulate a prolonged session: 300 hook events (tool uses during heavy work)
+    // interleaved with 50 stream events (including early TL messages and FC prompts).
+    // With limit=500, all 350 entries should be preserved.
+    const stream: RawStreamEvent[] = Array.from({ length: 50 }, (_, i) =>
+      makeStreamEvent({
+        type: i < 5 ? 'fc' : i < 10 ? 'user' : 'assistant',
+        subtype: i < 5 ? 'initial_prompt' : undefined,
+        agentName: i < 5 ? '__fc__' : i < 10 ? '__pm__' : 'team-lead',
+        timestamp: new Date(Date.UTC(2026, 2, 20, 8, 0, i)).toISOString(),
+        message: { content: [{ type: 'text', text: `Stream message ${i}` }] },
+      }),
+    );
+
+    const hooks: Event[] = Array.from({ length: 300 }, (_, i) =>
+      makeHookEvent({
+        id: i + 1,
+        eventType: 'ToolUse',
+        toolName: `Tool${i % 20}`,
+        agentName: 'developer',
+        createdAt: new Date(Date.UTC(2026, 2, 20, 9, 0, i)).toISOString(),
+      }),
+    );
+
+    const result = buildTimeline(stream, hooks, 1, 500);
+
+    // Total is 350 (50 stream + 300 hook), well within limit=500
+    expect(result).toHaveLength(350);
+
+    // All 50 stream events must be present — none should be evicted
+    const streamCount = result.filter((e) => e.source === 'stream').length;
+    expect(streamCount).toBe(50);
+
+    // Early FC prompt events (the very first entries) must survive
+    const fcPrompts = result.filter(
+      (e) => e.source === 'stream' && (e as any).streamType === 'fc' && (e as any).subtype === 'initial_prompt',
+    );
+    expect(fcPrompts.length).toBe(5);
+
+    // Early PM (user) messages must survive
+    const pmMessages = result.filter(
+      (e) => e.source === 'stream' && (e as any).streamType === 'user',
+    );
+    expect(pmMessages.length).toBe(5);
+
+    // Verify chronological order is maintained
+    for (let i = 1; i < result.length; i++) {
+      const prev = new Date(result[i - 1].timestamp).getTime();
+      const curr = new Date(result[i].timestamp).getTime();
+      expect(curr).toBeGreaterThanOrEqual(prev);
+    }
+  });
+
+  it('evicts early stream events when combined count exceeds a low limit', () => {
+    // Demonstrate that with the old limit=200, early stream events would be lost
+    // when hook events dominate. With limit=500, they survive.
+    const earlyStream: RawStreamEvent[] = Array.from({ length: 20 }, (_, i) =>
+      makeStreamEvent({
+        type: 'fc',
+        subtype: 'initial_prompt',
+        agentName: '__fc__',
+        timestamp: new Date(Date.UTC(2026, 2, 20, 7, 0, i)).toISOString(),
+        message: { content: [{ type: 'text', text: `Early prompt ${i}` }] },
+      }),
+    );
+
+    const hooks: Event[] = Array.from({ length: 250 }, (_, i) =>
+      makeHookEvent({
+        id: i + 1,
+        eventType: 'ToolUse',
+        toolName: `Tool${i}`,
+        agentName: 'developer',
+        createdAt: new Date(Date.UTC(2026, 2, 20, 9, 0, i)).toISOString(),
+      }),
+    );
+
+    // With limit=200: only 200 most recent — early stream events get evicted
+    const resultLow = buildTimeline(earlyStream, hooks, 1, 200);
+    expect(resultLow).toHaveLength(200);
+    const earlyFcLow = resultLow.filter(
+      (e) => e.source === 'stream' && (e as any).subtype === 'initial_prompt',
+    );
+    // All 20 early stream events are older than the 250 hooks,
+    // so slice(-200) drops the 70 oldest entries (20 streams + 50 hooks)
+    expect(earlyFcLow.length).toBe(0);
+
+    // With limit=500: all 270 entries fit — early stream events survive
+    const resultHigh = buildTimeline(earlyStream, hooks, 1, 500);
+    expect(resultHigh).toHaveLength(270);
+    const earlyFcHigh = resultHigh.filter(
+      (e) => e.source === 'stream' && (e as any).subtype === 'initial_prompt',
+    );
+    expect(earlyFcHigh.length).toBe(20);
   });
 });

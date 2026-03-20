@@ -395,7 +395,7 @@ export function UnifiedTimeline({
     async function poll() {
       if (cancelled) return;
       try {
-        const data = await api.get<TimelineEntry[]>(`teams/${teamId}/timeline?limit=200`);
+        const data = await api.get<TimelineEntry[]>(`teams/${teamId}/timeline?limit=500`);
         if (!cancelled) {
           setEntries(data);
         }

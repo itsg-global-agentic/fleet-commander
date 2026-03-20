@@ -71,7 +71,7 @@ export function buildTimeline(
   streamEvents: RawStreamEvent[],
   hookEvents: Event[],
   teamId: number,
-  limit = 200,
+  limit = 500,
 ): TimelineEntry[] {
   // 1. Map stream events to StreamTimelineEntry
   const streamEntries: StreamTimelineEntry[] = streamEvents.map((e, i) => ({

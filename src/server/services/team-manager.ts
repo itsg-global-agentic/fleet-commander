@@ -30,7 +30,7 @@ const execAsync = promisify(execCallback);
 // ---------------------------------------------------------------------------
 
 const MAX_OUTPUT_LINES = config.outputBufferLines;
-const MAX_PARSED_EVENTS = 200;
+const MAX_PARSED_EVENTS = 1000;
 
 // ---------------------------------------------------------------------------
 // summarizeEvent — short text summary for console logging
@@ -998,6 +998,9 @@ export class TeamManager {
       const events = this.parsedEvents.get(teamId);
       if (events) {
         events.push(syntheticEvent);
+        while (events.length > MAX_PARSED_EVENTS) {
+          events.shift();
+        }
       }
       sseBroker.broadcast('team_output', { team_id: teamId, event: syntheticEvent }, teamId);
 
@@ -1769,7 +1772,7 @@ export class TeamManager {
             // content_block_start/delta/stop events are high-frequency partial
             // message fragments emitted by --include-partial-messages.  They are
             // only needed for thinking detection (above) and must NOT be stored
-            // in the parsedEvents buffer — they would flood the 200-event cap
+            // in the parsedEvents buffer — they would flood the event cap
             // and evict meaningful session log entries.
             if (event.type === 'content_block_start' || event.type === 'content_block_delta' || event.type === 'content_block_stop') {
               continue;
