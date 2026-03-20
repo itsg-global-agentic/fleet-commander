@@ -5,9 +5,8 @@
 // enable/disable auto-merge, and update branch.
 //
 // All GitHub operations use the `gh` CLI (never Octokit) per project conventions.
-// gh CLI errors are caught and returned as structured JSON responses.
-// Successful mutation actions broadcast SSE events so the dashboard updates
-// in real time.
+// Mutation actions delegate to PRService which handles CLI calls, DB updates,
+// and SSE broadcasts.
 // =============================================================================
 
 import type {
@@ -16,10 +15,10 @@ import type {
   FastifyRequest,
   FastifyReply,
 } from 'fastify';
-import { execSync } from 'child_process';
 import { getDatabase } from '../db.js';
 import { githubPoller } from '../services/github-poller.js';
-import { sseBroker } from '../services/sse-broker.js';
+import { getPRService } from '../services/pr-service.js';
+import { ServiceError } from '../services/service-error.js';
 
 // ---------------------------------------------------------------------------
 // Request param interfaces
@@ -36,62 +35,6 @@ interface PRNumberParams {
 function parsePRNumber(raw: string): number | null {
   const n = parseInt(raw, 10);
   return isNaN(n) || n < 1 ? null : n;
-}
-
-// ---------------------------------------------------------------------------
-// Helper: validate a GitHub repo slug (owner/repo) to prevent injection
-// ---------------------------------------------------------------------------
-
-const GITHUB_REPO_RE = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
-
-function validateGithubRepo(repo: string): boolean {
-  return GITHUB_REPO_RE.test(repo);
-}
-
-// ---------------------------------------------------------------------------
-// Helper: execute a gh CLI command, returning { ok, stdout?, error? }
-// ---------------------------------------------------------------------------
-
-interface GHResult {
-  ok: boolean;
-  stdout?: string;
-  error?: string;
-}
-
-function execGH(command: string): GHResult {
-  try {
-    const stdout = execSync(command, {
-      encoding: 'utf-8',
-      timeout: 15_000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return { ok: true, stdout };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    // Try to extract stderr from the ExecSyncError
-    let stderr = message;
-    if (err && typeof err === 'object' && 'stderr' in err) {
-      const rawStderr = (err as { stderr: string | Buffer }).stderr;
-      stderr = typeof rawStderr === 'string' ? rawStderr : rawStderr.toString('utf-8');
-    }
-    return { ok: false, error: stderr.trim() || message };
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Helper: resolve github_repo for a PR by looking up the team's project
-// ---------------------------------------------------------------------------
-
-function resolveGithubRepoForPR(prNumber: number): string | null {
-  const db = getDatabase();
-  const pr = db.getPullRequest(prNumber);
-  if (!pr || !pr.teamId) return null;
-
-  const team = db.getTeam(pr.teamId);
-  if (!team || !team.projectId) return null;
-
-  const project = db.getProject(team.projectId);
-  return project?.githubRepo ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -156,7 +99,6 @@ const prsRoutes: FastifyPluginCallback = (
           try {
             checks = JSON.parse(pr.checksJson);
           } catch {
-            // If checks_json is malformed, return it as-is
             checks = [];
           }
         }
@@ -215,63 +157,17 @@ const prsRoutes: FastifyPluginCallback = (
           });
         }
 
-        // Resolve github_repo from the PR's team's project
-        const githubRepo = resolveGithubRepoForPR(prNumber);
-        if (!githubRepo) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Cannot resolve GitHub repo for PR #${prNumber} — team or project not found`,
-          });
-        }
-
-        if (!validateGithubRepo(githubRepo)) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: `Invalid GitHub repo slug: ${githubRepo}`,
-          });
-        }
-
-        const result = execGH(
-          `gh pr merge ${prNumber} --auto --squash --repo ${githubRepo}`,
-        );
-
-        if (!result.ok) {
-          request.log.warn(
-            { prNumber, error: result.error },
-            'gh pr merge --auto failed',
-          );
-          return reply.code(502).send({
-            error: 'GitHub CLI Error',
-            message: `Failed to enable auto-merge for PR #${prNumber}`,
-            details: result.error,
-          });
-        }
-
-        // Update the database record
-        const db = getDatabase();
-        const pr = db.getPullRequest(prNumber);
-        if (pr) {
-          db.updatePullRequest(prNumber, { autoMerge: true });
-        }
-
-        // Broadcast SSE event
-        sseBroker.broadcast(
-          'pr_updated',
-          {
-            pr_number: prNumber,
-            team_id: pr?.teamId ?? 0,
-            action: 'auto_merge_enabled',
-            auto_merge: true,
-          },
-          pr?.teamId ?? undefined,
-        );
-
-        return reply.code(200).send({
-          ok: true,
-          message: `Auto-merge enabled for PR #${prNumber}`,
-          output: result.stdout?.trim() ?? '',
-        });
+        const service = getPRService();
+        const result = service.enableAutoMerge(prNumber);
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({
+            error: err.code === 'EXTERNAL_ERROR' ? 'GitHub CLI Error' : err.code,
+            message: err.message,
+            details: err.details,
+          });
+        }
         request.log.error(err, 'Failed to enable auto-merge');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -299,63 +195,17 @@ const prsRoutes: FastifyPluginCallback = (
           });
         }
 
-        // Resolve github_repo from the PR's team's project
-        const githubRepo = resolveGithubRepoForPR(prNumber);
-        if (!githubRepo) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Cannot resolve GitHub repo for PR #${prNumber} — team or project not found`,
-          });
-        }
-
-        if (!validateGithubRepo(githubRepo)) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: `Invalid GitHub repo slug: ${githubRepo}`,
-          });
-        }
-
-        const result = execGH(
-          `gh pr merge ${prNumber} --disable-auto --repo ${githubRepo}`,
-        );
-
-        if (!result.ok) {
-          request.log.warn(
-            { prNumber, error: result.error },
-            'gh pr merge --disable-auto failed',
-          );
-          return reply.code(502).send({
-            error: 'GitHub CLI Error',
-            message: `Failed to disable auto-merge for PR #${prNumber}`,
-            details: result.error,
-          });
-        }
-
-        // Update the database record
-        const db = getDatabase();
-        const pr = db.getPullRequest(prNumber);
-        if (pr) {
-          db.updatePullRequest(prNumber, { autoMerge: false });
-        }
-
-        // Broadcast SSE event
-        sseBroker.broadcast(
-          'pr_updated',
-          {
-            pr_number: prNumber,
-            team_id: pr?.teamId ?? 0,
-            action: 'auto_merge_disabled',
-            auto_merge: false,
-          },
-          pr?.teamId ?? undefined,
-        );
-
-        return reply.code(200).send({
-          ok: true,
-          message: `Auto-merge disabled for PR #${prNumber}`,
-          output: result.stdout?.trim() ?? '',
-        });
+        const service = getPRService();
+        const result = service.disableAutoMerge(prNumber);
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({
+            error: err.code === 'EXTERNAL_ERROR' ? 'GitHub CLI Error' : err.code,
+            message: err.message,
+            details: err.details,
+          });
+        }
         request.log.error(err, 'Failed to disable auto-merge');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -383,58 +233,17 @@ const prsRoutes: FastifyPluginCallback = (
           });
         }
 
-        // Resolve github_repo from the PR's team's project
-        const githubRepo = resolveGithubRepoForPR(prNumber);
-        if (!githubRepo) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Cannot resolve GitHub repo for PR #${prNumber} — team or project not found`,
-          });
-        }
-
-        if (!validateGithubRepo(githubRepo)) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: `Invalid GitHub repo slug: ${githubRepo}`,
-          });
-        }
-
-        const result = execGH(
-          `gh api repos/${githubRepo}/pulls/${prNumber}/update-branch -X PUT`,
-        );
-
-        if (!result.ok) {
-          request.log.warn(
-            { prNumber, error: result.error },
-            'gh api update-branch failed',
-          );
-          return reply.code(502).send({
-            error: 'GitHub CLI Error',
-            message: `Failed to update branch for PR #${prNumber}`,
-            details: result.error,
-          });
-        }
-
-        // Broadcast SSE event
-        const db = getDatabase();
-        const pr = db.getPullRequest(prNumber);
-
-        sseBroker.broadcast(
-          'pr_updated',
-          {
-            pr_number: prNumber,
-            team_id: pr?.teamId ?? 0,
-            action: 'branch_updated',
-          },
-          pr?.teamId ?? undefined,
-        );
-
-        return reply.code(200).send({
-          ok: true,
-          message: `Branch updated for PR #${prNumber}`,
-          output: result.stdout?.trim() ?? '',
-        });
+        const service = getPRService();
+        const result = service.updateBranch(prNumber);
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({
+            error: err.code === 'EXTERNAL_ERROR' ? 'GitHub CLI Error' : err.code,
+            message: err.message,
+            details: err.details,
+          });
+        }
         request.log.error(err, 'Failed to update PR branch');
         return reply.code(500).send({
           error: 'Internal Server Error',

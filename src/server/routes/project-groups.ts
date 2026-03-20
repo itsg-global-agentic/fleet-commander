@@ -1,6 +1,8 @@
 // =============================================================================
 // Fleet Commander — Project Group Routes (CRUD)
 // =============================================================================
+// Business logic for list/get-with-projects is delegated to ProjectGroupService.
+// =============================================================================
 
 import type {
   FastifyInstance,
@@ -9,7 +11,8 @@ import type {
   FastifyReply,
 } from 'fastify';
 import { getDatabase } from '../db.js';
-import type { ProjectGroup } from '../../shared/types.js';
+import { getProjectGroupService } from '../services/project-group-service.js';
+import { ServiceError } from '../services/service-error.js';
 
 // ---------------------------------------------------------------------------
 // Request body / param interfaces
@@ -48,21 +51,13 @@ const projectGroupsRoutes: FastifyPluginCallback = (
       reply: FastifyReply,
     ) => {
       try {
-        const db = getDatabase();
-        const groups = db.getProjectGroups();
-
-        // Enrich with project counts
-        const allProjects = db.getProjects();
-        const enriched = groups.map((g: ProjectGroup) => {
-          const linked = allProjects.filter((p) => p.groupId === g.id);
-          return {
-            ...g,
-            projectCount: linked.length,
-          };
-        });
-
+        const service = getProjectGroupService();
+        const enriched = service.listWithCounts();
         return reply.code(200).send(enriched);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         _request.log.error(err, 'Failed to list project groups');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -135,23 +130,13 @@ const projectGroupsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const db = getDatabase();
-        const group = db.getProjectGroup(groupId);
-        if (!group) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Project group ${groupId} not found`,
-          });
-        }
-
-        const allProjects = db.getProjects();
-        const projects = allProjects.filter((p) => p.groupId === groupId);
-
-        return reply.code(200).send({
-          ...group,
-          projects,
-        });
+        const service = getProjectGroupService();
+        const result = service.getWithProjects(groupId);
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get project group');
         return reply.code(500).send({
           error: 'Internal Server Error',

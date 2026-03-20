@@ -3,6 +3,7 @@
 // =============================================================================
 // Fastify plugin that registers system-level endpoints:
 // stuck diagnostics, blocked teams, fleet health summary, server status.
+// Diagnostics logic is delegated to DiagnosticsService.
 // =============================================================================
 
 import type {
@@ -14,11 +15,9 @@ import type {
 import fs from 'fs';
 import path from 'path';
 import { getDatabase } from '../db.js';
-import { getTeamManager } from '../services/team-manager.js';
 import { sseBroker } from '../services/sse-broker.js';
-import { DEFAULT_MESSAGE_TEMPLATES } from '../../shared/message-templates.js';
-import { getIssueFetcher } from '../services/issue-fetcher.js';
-import { uninstallHooks } from '../utils/hook-installer.js';
+import { getDiagnosticsService } from '../services/diagnostics-service.js';
+import { ServiceError } from '../services/service-error.js';
 import config from '../config.js';
 import { resolveClaudePath } from '../utils/resolve-claude-path.js';
 
@@ -73,40 +72,13 @@ const systemRoutes: FastifyPluginCallback = (
     '/api/diagnostics/blocked',
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const db = getDatabase();
-
-        // Find teams whose PR has ci_status = 'failing' and ci_fail_count >= threshold
-        const teams = db.getActiveTeams();
-        const blockedTeams = [];
-
-        for (const team of teams) {
-          if (!team.prNumber) continue;
-
-          const pr = db.getPullRequest(team.prNumber);
-          if (!pr) continue;
-
-          if (pr.ciStatus === 'failing' && pr.ciFailCount >= config.maxUniqueCiFailures) {
-            blockedTeams.push({
-              teamId: team.id,
-              worktreeName: team.worktreeName,
-              issueNumber: team.issueNumber,
-              issueTitle: team.issueTitle,
-              status: team.status,
-              phase: team.phase,
-              prNumber: pr.prNumber,
-              ciStatus: pr.ciStatus,
-              ciFailCount: pr.ciFailCount,
-              maxAllowed: config.maxUniqueCiFailures,
-            });
-          }
-        }
-
-        return reply.code(200).send({
-          maxUniqueCiFailures: config.maxUniqueCiFailures,
-          count: blockedTeams.length,
-          teams: blockedTeams,
-        });
+        const service = getDiagnosticsService();
+        const result = service.getBlockedTeams();
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         _request.log.error(err, 'Failed to get blocked diagnostics');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -123,35 +95,13 @@ const systemRoutes: FastifyPluginCallback = (
     '/api/diagnostics/health',
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const db = getDatabase();
-        const allTeams = db.getTeams();
-
-        // Count teams by status
-        const statusCounts: Record<string, number> = {};
-        for (const team of allTeams) {
-          statusCounts[team.status] = (statusCounts[team.status] ?? 0) + 1;
-        }
-
-        // Count teams by phase
-        const phaseCounts: Record<string, number> = {};
-        for (const team of allTeams) {
-          phaseCounts[team.phase] = (phaseCounts[team.phase] ?? 0) + 1;
-        }
-
-        const activeTeams = db.getActiveTeams();
-        const stuckCandidates = db.getStuckCandidates(
-          config.idleThresholdMin,
-          config.stuckThresholdMin,
-        );
-
-        return reply.code(200).send({
-          totalTeams: allTeams.length,
-          activeTeams: activeTeams.length,
-          stuckOrIdle: stuckCandidates.length,
-          byStatus: statusCounts,
-          byPhase: phaseCounts,
-        });
+        const service = getDiagnosticsService();
+        const summary = service.getHealthSummary();
+        return reply.code(200).send(summary);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         _request.log.error(err, 'Failed to get fleet health');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -318,57 +268,18 @@ const systemRoutes: FastifyPluginCallback = (
     '/api/system/factory-reset',
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        // Require explicit confirmation to prevent accidental resets
         const body = request.body as Record<string, unknown> | null;
-        if (!body || body.confirm !== 'FACTORY_RESET') {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Factory reset requires { "confirm": "FACTORY_RESET" } in body',
-          });
-        }
+        const confirm = (body?.confirm as string) ?? '';
 
-        const db = getDatabase();
-        const manager = getTeamManager();
-
-        // 1. Stop all running teams
-        const activeTeams = db.getActiveTeams();
-        for (const team of activeTeams) {
-          try {
-            await manager.stop(team.id);
-          } catch {
-            // Best-effort — continue stopping remaining teams
-          }
-        }
-
-        // 2. Uninstall hooks from all projects before deleting them
-        const projects = db.getProjects();
-        for (const project of projects) {
-          uninstallHooks(project.repoPath, request.log);
-        }
-
-        // 3. Delete all data and re-seed default templates
-        const templatesSeeded = db.factoryReset(
-          DEFAULT_MESSAGE_TEMPLATES.map((t) => ({ id: t.id, template: t.template })),
-        );
-
-        // 4. Clear in-memory caches (issue fetcher, team manager)
-        //    Stop the polling timer first so it doesn't re-fetch while we clear,
-        //    then wipe the cache. Do NOT restart — there are no projects left.
-        const issueFetcher = getIssueFetcher();
-        issueFetcher.stop();
-        issueFetcher.clearAll();
-
-        // 5. Broadcast empty state to all SSE clients
-        sseBroker.broadcast('snapshot', { teams: [] });
+        const service = getDiagnosticsService();
+        const result = await service.factoryReset(confirm);
 
         request.log.info('Factory reset completed — all data cleared');
-
-        return reply.code(200).send({
-          status: 'ok',
-          message: 'Factory reset complete. All projects, teams, and data have been cleared.',
-          templatesSeeded,
-        });
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Factory reset failed');
         return reply.code(500).send({
           error: 'Internal Server Error',

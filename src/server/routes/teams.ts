@@ -4,6 +4,7 @@
 // Fastify plugin that registers all team-related API endpoints:
 // launch, stop, resume, restart, batch-launch, stop-all, list, detail, output,
 // export, send-message, set-phase, acknowledge.
+// Business logic is delegated to TeamService.
 // =============================================================================
 
 import type {
@@ -12,16 +13,11 @@ import type {
   FastifyRequest,
   FastifyReply,
 } from 'fastify';
-import fs from 'fs';
-import path from 'path';
 import { getTeamManager } from '../services/team-manager.js';
-import { getIssueFetcher } from '../services/issue-fetcher.js';
-import { githubPoller } from '../services/github-poller.js';
 import { getDatabase } from '../db.js';
-import { sseBroker } from '../services/sse-broker.js';
-import config from '../config.js';
-import type { TeamPhase, IssueDependencyInfo } from '../../shared/types.js';
-import { buildTimeline } from '../utils/build-timeline.js';
+import { getTeamService } from '../services/team-service.js';
+import { ServiceError } from '../services/service-error.js';
+import type { TeamPhase } from '../../shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Request body / param interfaces
@@ -74,41 +70,6 @@ interface SetPhaseBody {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Produce a short one-line summary of a stream event for text export. */
-function summarize(e: Record<string, unknown>): string {
-  if (typeof e.message === 'string') return e.message;
-  if (typeof e.tool === 'string') return `tool:${e.tool}`;
-  if (typeof e.content === 'string') return e.content.slice(0, 120);
-  return '';
-}
-
-// ---------------------------------------------------------------------------
-// Dependency check helper
-// ---------------------------------------------------------------------------
-
-/**
- * Check whether an issue has unresolved dependencies.
- * Returns the dependency info, or null if dependencies cannot be determined
- * (which is treated as "no blockers" -- permissive fallback).
- */
-async function checkDependencies(projectId: number, issueNumber: number): Promise<IssueDependencyInfo | null> {
-  try {
-    const fetcher = getIssueFetcher();
-    return await fetcher.fetchDependenciesForIssue(projectId, issueNumber);
-  } catch (err) {
-    console.error(
-      `[Teams] Dependency check failed for issue #${issueNumber}:`,
-      err instanceof Error ? err.message : err
-    );
-    // Permissive fallback: if we can't check, allow launch
-    return null;
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
 
@@ -127,47 +88,22 @@ const teamsRoutes: FastifyPluginCallback = (
       reply: FastifyReply,
     ) => {
       try {
-        const { projectId, issueNumber, issueTitle, prompt, headless, force } = request.body;
-
-        if (!projectId || typeof projectId !== 'number' || projectId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'projectId is required and must be a positive integer',
-          });
-        }
-
-        if (!issueNumber || typeof issueNumber !== 'number' || issueNumber < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'issueNumber is required and must be a positive integer',
-          });
-        }
-
-        // Dependency check -- block launch if unresolved dependencies exist
-        if (!force) {
-          const depInfo = await checkDependencies(projectId, issueNumber);
-          if (depInfo && !depInfo.resolved) {
-            // Track for resolution detection in the poller
-            const blockerNumbers = depInfo.blockedBy
-              .filter((b) => b.state === 'open')
-              .map((b) => b.number);
-            githubPoller.trackBlockedIssue(projectId, issueNumber, blockerNumbers);
-
+        const service = getTeamService();
+        const team = await service.launchTeam(request.body);
+        return reply.code(201).send(team);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          if (err.code === 'BLOCKED_BY_DEPENDENCIES') {
             return reply.code(409).send({
               error: 'Blocked by Dependencies',
-              message: `Issue #${issueNumber} is blocked by ${depInfo.openCount} unresolved dependency${depInfo.openCount !== 1 ? 'ies' : ''}`,
-              dependencies: depInfo,
+              message: err.message,
               hint: 'Set force: true to bypass dependency check',
             });
           }
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
         }
 
-        const manager = getTeamManager();
-        const team = await manager.launch(projectId, issueNumber, issueTitle, prompt, headless, force);
-        return reply.code(201).send(team);
-      } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-
         if (message.includes('already active') || message.includes('already completed')) {
           return reply.code(409).send({ error: 'Conflict', message });
         }
@@ -191,70 +127,13 @@ const teamsRoutes: FastifyPluginCallback = (
       reply: FastifyReply,
     ) => {
       try {
-        const { projectId, issues, prompt, delayMs, headless } = request.body;
-
-        if (!projectId || typeof projectId !== 'number' || projectId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'projectId is required and must be a positive integer',
-          });
-        }
-
-        if (!issues || !Array.isArray(issues) || issues.length === 0) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'issues array is required and must not be empty',
-          });
-        }
-
-        // Validate each issue entry
-        for (const issue of issues) {
-          if (!issue.number || typeof issue.number !== 'number' || issue.number < 1) {
-            return reply.code(400).send({
-              error: 'Bad Request',
-              message: `Invalid issue number: ${JSON.stringify(issue)}`,
-            });
-          }
-        }
-
-        // Dependency check for batch launch: check each issue, separate blocked from launchable
-        const blocked: Array<{ issueNumber: number; dependencies: IssueDependencyInfo }> = [];
-        const launchable: Array<{ number: number; title?: string }> = [];
-
-        // Build set of issue numbers in this batch for intra-batch ordering
-        const batchNumbers = new Set(issues.map((i) => i.number));
-
-        for (const issue of issues) {
-          const depInfo = await checkDependencies(projectId, issue.number);
-          if (depInfo && !depInfo.resolved) {
-            // Check if all open blockers are in this same batch (intra-batch dependency)
-            const allBlockersInBatch = depInfo.blockedBy
-              .filter((b) => b.state === 'open')
-              .every((b) => batchNumbers.has(b.number));
-
-            if (allBlockersInBatch) {
-              // Defer: will be launched after its blockers (handled by ordering)
-              launchable.push(issue);
-            } else {
-              blocked.push({ issueNumber: issue.number, dependencies: depInfo });
-            }
-          } else {
-            launchable.push(issue);
-          }
-        }
-
-        const manager = getTeamManager();
-        const teams = launchable.length > 0
-          ? await manager.launchBatch(projectId, launchable, prompt, delayMs, headless)
-          : [];
-
-        // Return launched teams plus any blocked issues
-        const response = {
-          launched: teams,
-          blocked: blocked.length > 0 ? blocked : undefined,
-        };
-        return reply.code(201).send(response);
+        const service = getTeamService();
+        const result = await service.launchBatch(request.body);
+        return reply.code(201).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         const message = err instanceof Error ? err.message : String(err);
         request.log.error(err, 'Failed to launch batch');
         return reply.code(500).send({
@@ -496,104 +375,13 @@ const teamsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
-        // Look up project to get model and GitHub repo
-        let projectModel: string | null = null;
-        let projectGithubRepo: string | null = null;
-        if (team.projectId) {
-          const project = db.getProject(team.projectId);
-          if (project) {
-            projectModel = project.model ?? null;
-            projectGithubRepo = project.githubRepo ?? null;
-          }
-        }
-
-        // Compute duration & idle in minutes
-        const launchedAt = team.launchedAt ? new Date(team.launchedAt) : null;
-        const now = new Date();
-        const durationMin = launchedAt
-          ? Math.round((now.getTime() - launchedAt.getTime()) / 60_000)
-          : 0;
-
-        const lastEventAt = team.lastEventAt ? new Date(team.lastEventAt) : null;
-        const idleMin = lastEventAt
-          ? Math.round((now.getTime() - lastEventAt.getTime()) / 60_000 * 10) / 10
-          : null;
-
-        // Pull request detail (if linked)
-        let prDetail = null;
-        if (team.prNumber) {
-          const pr = db.getPullRequest(team.prNumber);
-          if (pr) {
-            // Parse CI checks from JSON
-            let checks: Array<{ name: string; status: string; conclusion: string | null }> = [];
-            if (pr.checksJson) {
-              try {
-                checks = JSON.parse(pr.checksJson);
-              } catch {
-                // Malformed JSON — leave empty
-              }
-            }
-
-            prDetail = {
-              number: pr.prNumber,
-              state: pr.state,
-              mergeStatus: pr.mergeStatus,
-              ciStatus: pr.ciStatus,
-              ciFailCount: pr.ciFailCount,
-              checks,
-              autoMerge: pr.autoMerge,
-            };
-          }
-        }
-
-        // Recent events
-        const recentEvents = db.getEventsByTeam(teamId, 20);
-
-        // Output tail
-        const manager = getTeamManager();
-        const outputLines = manager.getOutput(teamId, 50);
-        const outputTail = outputLines.length > 0 ? outputLines.join('\n') : null;
-
-        // Assemble full TeamDetail response
-        const detail = {
-          id: team.id,
-          issueNumber: team.issueNumber,
-          issueTitle: team.issueTitle,
-          model: projectModel,
-          githubRepo: projectGithubRepo,
-          status: team.status,
-          phase: team.phase,
-          pid: team.pid,
-          sessionId: team.sessionId,
-          worktreeName: team.worktreeName,
-          branchName: team.branchName,
-          prNumber: team.prNumber,
-          launchedAt: team.launchedAt,
-          stoppedAt: team.stoppedAt,
-          lastEventAt: team.lastEventAt,
-          durationMin,
-          idleMin,
-          totalInputTokens: team.totalInputTokens,
-          totalOutputTokens: team.totalOutputTokens,
-          totalCacheCreationTokens: team.totalCacheCreationTokens,
-          totalCacheReadTokens: team.totalCacheReadTokens,
-          totalCostUsd: team.totalCostUsd,
-          pr: prDetail,
-          recentEvents,
-          outputTail,
-        };
-
+        const service = getTeamService();
+        const detail = service.getTeamDetail(teamId);
         return reply.code(200).send(detail);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get team');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -613,47 +401,13 @@ const teamsRoutes: FastifyPluginCallback = (
       reply: FastifyReply,
     ) => {
       try {
-        const db = getDatabase();
-        const idParam = request.params.id;
-        const teamId = parseInt(idParam, 10);
-
-        // Support both integer IDs and worktree names (MCP sends worktree name)
-        let team;
-        if (!isNaN(teamId) && teamId > 0) {
-          team = db.getTeam(teamId);
-        }
-        if (!team) {
-          team = db.getTeamByWorktree(idParam);
-        }
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${idParam} not found`,
-          });
-        }
-
-        // Fetch pending PM commands for this team
-        const pendingCommands = db.getPendingCommands(team.id);
-        const latestMessage = pendingCommands.length > 0 ? pendingCommands[0].message : null;
-
-        // Compact MCP-compatible format
-        return reply.code(200).send({
-          id: team.id,
-          issueNumber: team.issueNumber,
-          worktreeName: team.worktreeName,
-          status: team.status,
-          phase: team.phase,
-          pid: team.pid,
-          prNumber: team.prNumber,
-          lastEventAt: team.lastEventAt,
-          pm_message: latestMessage,
-          pending_commands: pendingCommands.map(c => ({
-            id: c.id,
-            message: c.message,
-            createdAt: c.createdAt,
-          })),
-        });
+        const service = getTeamService();
+        const status = service.getTeamStatus(request.params.id);
+        return reply.code(200).send(status);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get team status');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -769,28 +523,16 @@ const teamsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
         const limitParam = (request.query as TimelineQuerystring).limit;
         const limit = limitParam ? parseInt(limitParam, 10) : 500;
 
-        // Fetch stream events from in-memory buffer (same as stream-events endpoint)
-        const manager = getTeamManager();
-        const streamEvents = manager.getParsedEvents(teamId);
-
-        // Fetch hook events from DB — cap at 500 to prevent unbounded queries
-        const hookEvents = db.getEventsByTeam(teamId, 500);
-
-        const timeline = buildTimeline(streamEvents, hookEvents, teamId, limit);
+        const service = getTeamService();
+        const timeline = service.getTeamTimeline(teamId, limit);
         return reply.code(200).send(timeline);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get team timeline');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -818,44 +560,17 @@ const teamsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
         const format = (request.query as ExportQuerystring).format ?? 'json';
-        const events = db.getEventsByTeam(teamId);
-        const manager = getTeamManager();
-        const streamEvents = manager.getParsedEvents(teamId);
-        const outputLines = manager.getOutput(teamId);
+        const service = getTeamService();
+        const result = service.exportTeam(teamId, format);
 
-        if (format === 'txt') {
-          // Plain text format
-          let text = `# Team ${team.worktreeName} - Export\n`;
-          text += `Issue: #${team.issueNumber} ${team.issueTitle ?? ''}\n`;
-          text += `Status: ${team.status}\n`;
-          text += `Launched: ${team.launchedAt ?? 'N/A'}\n\n`;
-          text += `## Stream Events\n`;
-          for (const e of streamEvents) {
-            text += `[${e.timestamp ?? ''}] ${e.type} ${summarize(e as unknown as Record<string, unknown>)}\n`;
-          }
-          text += `\n## Raw Output\n`;
-          text += outputLines.join('\n');
-
-          reply.header('Content-Type', 'text/plain');
-          reply.header('Content-Disposition', `attachment; filename="${team.worktreeName}-export.txt"`);
-          return text;
-        }
-
-        // JSON format (default)
-        reply.header('Content-Type', 'application/json');
-        reply.header('Content-Disposition', `attachment; filename="${team.worktreeName}-export.json"`);
-        return { team, events, streamEvents, output: outputLines };
+        reply.header('Content-Type', result.contentType);
+        reply.header('Content-Disposition', `attachment; filename="${result.filename}"`);
+        return result.data;
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to export team logs');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -926,72 +641,26 @@ const teamsRoutes: FastifyPluginCallback = (
         }
 
         const { message } = request.body || {};
-        if (!message || typeof message !== 'string' || message.trim().length === 0) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'message is required and must be a non-empty string',
-          });
-        }
+        const service = getTeamService();
+        const { command, delivered } = service.sendMessage(teamId, message);
 
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
-        // Resolve worktree path from the team's project
-        let worktreePath: string;
-        if (team.projectId) {
-          const project = db.getProject(team.projectId);
-          worktreePath = project
-            ? path.join(project.repoPath, config.worktreeDir, team.worktreeName)
-            : path.join(config.worktreeDir, team.worktreeName);
-        } else {
-          worktreePath = path.join(config.worktreeDir, team.worktreeName);
-        }
-        const messagePath = path.join(worktreePath, '.fleet-pm-message');
-
-        try {
-          fs.writeFileSync(messagePath, message.trim(), 'utf-8');
-        } catch (fsErr: unknown) {
-          const fsMsg = fsErr instanceof Error ? fsErr.message : String(fsErr);
-          request.log.warn({ worktreePath, error: fsMsg }, 'Failed to write .fleet-pm-message file');
-          // Continue anyway — the command record is still useful
-        }
-
-        // Insert command row in the database
-        const command = db.insertCommand({
-          teamId,
-          message: message.trim(),
-        });
-
-        // Try to deliver via stdin pipe (direct delivery to running process)
-        const manager = getTeamManager();
-        const delivered = manager.sendMessage(teamId, message.trim(), 'user');
-        if (delivered) {
-          db.markCommandDelivered(command.id);
-          // Reset lastEventAt so the stuck detector doesn't race between
-          // PM message delivery and the agent's next hook event (#190)
-          db.updateTeam(teamId, { lastEventAt: new Date().toISOString() });
-          request.log.info(`[Teams] Message delivered to team ${teamId} via stdin`);
-        } else {
-          request.log.warn(`[Teams] Message not delivered to team ${teamId} — no stdin pipe`);
+        if (!delivered) {
           return reply.code(422).send({
-            ...command,
+            ...command as object,
             error: 'Unprocessable Entity',
             message: 'Team is not running \u2014 message not delivered',
           });
         }
 
         return reply.code(201).send({
-          ...command,
+          ...command as object,
           status: 'delivered' as const,
           deliveredAt: new Date().toISOString(),
         });
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to send message to team');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -1020,53 +689,13 @@ const teamsRoutes: FastifyPluginCallback = (
         }
 
         const { phase, reason } = request.body || {};
-
-        const validPhases: TeamPhase[] = [
-          'init', 'analyzing', 'implementing', 'reviewing', 'pr', 'done', 'blocked',
-        ];
-        if (!phase || !validPhases.includes(phase)) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: `phase is required and must be one of: ${validPhases.join(', ')}`,
-          });
-        }
-
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
-        // Guard: cannot change phase on a terminal-status team
-        if (['done', 'failed'].includes(team.status)) {
-          return reply.code(409).send({
-            error: 'Conflict',
-            message: `Cannot set phase on a ${team.status} team. Use restart to reactivate.`,
-          });
-        }
-
-        const previousPhase = team.phase;
-        const updated = db.updateTeam(teamId, { phase });
-
-        // Broadcast SSE event for phase change
-        sseBroker.broadcast(
-          'team_status_changed',
-          {
-            team_id: teamId,
-            status: team.status,
-            previous_status: team.status,
-            phase,
-            previous_phase: previousPhase,
-            reason: reason ?? undefined,
-          },
-          teamId,
-        );
-
+        const service = getTeamService();
+        const updated = service.setPhase(teamId, phase, reason);
         return reply.code(200).send(updated);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to set team phase');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -1172,52 +801,13 @@ const teamsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
-        // Only acknowledge stuck or failed teams
-        if (team.status !== 'stuck' && team.status !== 'failed') {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: `Team ${teamId} is not stuck or failed (current status: ${team.status})`,
-          });
-        }
-
-        const previousStatus = team.status;
-
-        // Transition stuck -> idle (so it can be re-evaluated), failed -> done
-        const newStatus = team.status === 'stuck' ? 'idle' : 'done';
-        db.insertTransition({
-          teamId,
-          fromStatus: previousStatus,
-          toStatus: newStatus,
-          trigger: 'pm_action',
-          reason: previousStatus === 'stuck' ? 'PM acknowledged stuck alert' : 'PM acknowledged failed alert',
-        });
-        const updated = db.updateTeam(teamId, {
-          status: newStatus,
-          lastEventAt: new Date().toISOString(),
-        });
-
-        // Broadcast status change
-        sseBroker.broadcast(
-          'team_status_changed',
-          {
-            team_id: teamId,
-            status: newStatus,
-            previous_status: previousStatus,
-          },
-          teamId,
-        );
-
+        const service = getTeamService();
+        const updated = service.acknowledgeAlert(teamId);
         return reply.code(200).send(updated);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to acknowledge team alert');
         return reply.code(500).send({
           error: 'Internal Server Error',
