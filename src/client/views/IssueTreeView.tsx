@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import React from 'react';
 import { useApi } from '../hooks/useApi';
+import { useSSE } from '../hooks/useSSE';
 import { usePrioritization, sortTreeByPriority } from '../hooks/usePrioritization';
 import { TreeNode, type IssueNode } from '../components/TreeNode';
 import type { ProjectSummary } from '../../shared/types';
@@ -122,6 +123,18 @@ export function IssueTreeView() {
   useEffect(() => {
     fetchTree();
   }, [fetchTree]);
+
+  // -------------------------------------------------------------------------
+  // SSE: auto-refresh when a dependency is resolved
+  // -------------------------------------------------------------------------
+
+  const handleSSEEvent = useCallback((type: string) => {
+    if (type === 'dependency_resolved') {
+      fetchTree();
+    }
+  }, [fetchTree]);
+
+  useSSE({ onEvent: handleSSEEvent });
 
   // -------------------------------------------------------------------------
   // Refresh (force re-fetch from GitHub)

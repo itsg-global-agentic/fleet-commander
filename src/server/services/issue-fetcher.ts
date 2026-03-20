@@ -161,14 +161,14 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String) {
  */
 export function parseDependenciesFromBody(body: string, defaultOwner: string, defaultRepo: string): DependencyRef[] {
   const deps: DependencyRef[] = [];
-  // Match "blocked by", "depends on", "requires" followed by issue references
+  // Match "blocked by", "depends on", "requires", "after" followed by issue references
   const patterns = [
-    // "blocked by #123" or "depends on #456"
-    /(?:blocked\s+by|depends\s+on|requires)\s+#(\d+)/gi,
-    // "blocked by owner/repo#123"
-    /(?:blocked\s+by|depends\s+on|requires)\s+([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)#(\d+)/gi,
-    // "blocked by https://github.com/owner/repo/issues/123"
-    /(?:blocked\s+by|depends\s+on|requires)\s+https?:\/\/github\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)\/issues\/(\d+)/gi,
+    // "blocked by #123" or "depends on #456" or "after #789"
+    /(?:blocked\s+by|depends\s+on|requires|after)\s+#(\d+)/gi,
+    // "blocked by owner/repo#123" or "after owner/repo#123"
+    /(?:blocked\s+by|depends\s+on|requires|after)\s+([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)#(\d+)/gi,
+    // "blocked by https://github.com/owner/repo/issues/123" or "after https://github.com/..."
+    /(?:blocked\s+by|depends\s+on|requires|after)\s+https?:\/\/github\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)\/issues\/(\d+)/gi,
   ];
 
   // Simple #N references
@@ -471,6 +471,10 @@ export class IssueFetcher {
 
       // Exclude issues that have sub-issues (they are parent/epic-level)
       if (issue.children.length > 0) return false;
+
+      // Exclude issues with unresolved dependencies (permissive: issues
+      // without dependency data are NOT excluded)
+      if (issue.dependencies?.resolved === false) return false;
 
       return true;
     });

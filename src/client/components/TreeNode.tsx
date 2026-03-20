@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
-import { PlayIcon } from './Icons';
+import { PlayIcon, LockIcon } from './Icons';
 import type { TeamStatus, PrioritizedIssue, IssueDependencyInfo } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -83,6 +83,7 @@ function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
 
   return (
     <span className="inline-flex items-center gap-1 text-xs text-dark-muted cursor-default flex-wrap">
+      <LockIcon size={12} className="text-[#F85149] shrink-0" />
       <span>blocked by</span>
       {dependencies.blockedBy.map((dep, idx) => {
         const issueUrl = `https://github.com/${dep.owner}/${dep.repo}/issues/${dep.number}`;
@@ -174,6 +175,7 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
   const isExpanded = forceExpand || expanded;
   const hasChildren = node.children.length > 0;
   const hasActiveTeam = node.activeTeam != null;
+  const isBlocked = !!(node.dependencies && !node.dependencies.resolved && node.dependencies.openCount > 0);
   const launching = launchingIssues.has(node.number);
   const launchError = launchErrors.get(node.number) ?? null;
 
@@ -190,7 +192,9 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
     <div>
       {/* Node row */}
       <div
-        className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-dark-surface/80 group transition-colors"
+        className={`flex items-center gap-2 py-1.5 px-2 rounded hover:bg-dark-surface/80 group transition-colors ${
+          isBlocked ? 'opacity-60 border-l-2 border-[#F85149]' : ''
+        }`}
         style={{ paddingLeft: `${depth * 20 + 8}px` }}
       >
         {/* Expand/collapse arrow */}
@@ -320,10 +324,14 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
           <button
             onClick={handleLaunch}
             disabled={launching}
-            className={`ml-auto shrink-0 transition-opacity px-1.5 py-0.5 text-xs rounded border border-dark-border text-dark-muted hover:text-[#3FB950] hover:border-[#3FB950]/50 disabled:opacity-70 disabled:cursor-not-allowed ${
+            className={`ml-auto shrink-0 transition-opacity px-1.5 py-0.5 text-xs rounded border disabled:opacity-70 disabled:cursor-not-allowed ${
               launching ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+            } ${
+              isBlocked
+                ? 'border-[#D29922]/50 text-[#D29922] hover:text-[#D29922] hover:border-[#D29922]'
+                : 'border-dark-border text-dark-muted hover:text-[#3FB950] hover:border-[#3FB950]/50'
             }`}
-            title={`Launch team for #${node.number}`}
+            title={isBlocked ? `Launch team for #${node.number} (blocked — will prompt for confirmation)` : `Launch team for #${node.number}`}
           >
             {launching ? (
               <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">

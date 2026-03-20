@@ -151,6 +151,71 @@ This issue:
   });
 
   // -----------------------------------------------------------------------
+  // "After" keyword references
+  // -----------------------------------------------------------------------
+
+  it('parses "After #123" (simple same-repo)', () => {
+    const deps = parseDependenciesFromBody('After #123', defaultOwner, defaultRepo);
+    expect(deps).toHaveLength(1);
+    expect(deps[0]).toEqual({
+      number: 123,
+      owner: 'octocat',
+      repo: 'hello-world',
+      state: 'open',
+      title: '',
+    });
+  });
+
+  it('parses "after #456" (lowercase)', () => {
+    const deps = parseDependenciesFromBody('after #456', defaultOwner, defaultRepo);
+    expect(deps).toHaveLength(1);
+    expect(deps[0]!.number).toBe(456);
+  });
+
+  it('parses "After owner/repo#789" (cross-repo)', () => {
+    const deps = parseDependenciesFromBody('After acme/widgets#789', defaultOwner, defaultRepo);
+    expect(deps).toHaveLength(1);
+    expect(deps[0]).toEqual({
+      number: 789,
+      owner: 'acme',
+      repo: 'widgets',
+      state: 'open',
+      title: '',
+    });
+  });
+
+  it('parses "after https://github.com/owner/repo/issues/100"', () => {
+    const deps = parseDependenciesFromBody(
+      'after https://github.com/myorg/myrepo/issues/100',
+      defaultOwner,
+      defaultRepo
+    );
+    expect(deps).toHaveLength(1);
+    expect(deps[0]).toEqual({
+      number: 100,
+      owner: 'myorg',
+      repo: 'myrepo',
+      state: 'open',
+      title: '',
+    });
+  });
+
+  it('parses mix of "After" with other keywords in the same body', () => {
+    const body = `
+This issue:
+- after #50
+- blocked by #100
+- depends on acme/lib#200
+    `;
+    const deps = parseDependenciesFromBody(body, defaultOwner, defaultRepo);
+    expect(deps).toHaveLength(3);
+    expect(deps.map((d) => d.number)).toEqual([50, 100, 200]);
+    expect(deps[0]!.owner).toBe(defaultOwner);
+    expect(deps[1]!.owner).toBe(defaultOwner);
+    expect(deps[2]!.owner).toBe('acme');
+  });
+
+  // -----------------------------------------------------------------------
   // Edge cases
   // -----------------------------------------------------------------------
 
@@ -258,6 +323,65 @@ describe('checkDependencies logic', () => {
       .filter((b) => b.state === 'open')
       .map((b) => b.number);
     expect(blockerNumbers).toEqual([10, 30]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getAvailableIssues — dependency filtering logic
+// ---------------------------------------------------------------------------
+// These tests verify the filter predicate used by getAvailableIssues:
+// issues with dependencies.resolved === false should be excluded;
+// issues without dependency data should NOT be excluded (permissive fallback).
+// ---------------------------------------------------------------------------
+
+describe('getAvailableIssues dependency filter logic', () => {
+  // Simulate the filter predicate from getAvailableIssues
+  function passesFilter(issue: {
+    state: string;
+    boardStatus?: string;
+    children: unknown[];
+    dependencies?: { resolved: boolean };
+  }): boolean {
+    if (issue.state !== 'open') return false;
+    if (issue.boardStatus && issue.boardStatus !== 'Ready') return false;
+    if (issue.children.length > 0) return false;
+    if (issue.dependencies?.resolved === false) return false;
+    return true;
+  }
+
+  it('excludes issues with unresolved dependencies', () => {
+    const issue = {
+      state: 'open',
+      children: [],
+      dependencies: { resolved: false },
+    };
+    expect(passesFilter(issue)).toBe(false);
+  });
+
+  it('includes issues with resolved dependencies', () => {
+    const issue = {
+      state: 'open',
+      children: [],
+      dependencies: { resolved: true },
+    };
+    expect(passesFilter(issue)).toBe(true);
+  });
+
+  it('includes issues without dependency data (permissive fallback)', () => {
+    const issue = {
+      state: 'open',
+      children: [],
+    };
+    expect(passesFilter(issue)).toBe(true);
+  });
+
+  it('includes issues with undefined dependencies', () => {
+    const issue = {
+      state: 'open',
+      children: [],
+      dependencies: undefined,
+    };
+    expect(passesFilter(issue)).toBe(true);
   });
 });
 
