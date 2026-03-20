@@ -156,6 +156,7 @@ function normalizeEventType(raw: string): string {
     'notification': 'Notification',
     'tool_error': 'ToolError',
     'pre_compact': 'PreCompact',
+    'teammate_idle': 'TeammateIdle',
   };
   return map[raw.toLowerCase()] || raw;
 }

@@ -131,6 +131,7 @@ function checkInstallStatus(repoPath: string): InstallStatus {
     'on_post_tool_use.sh',
     'on_tool_error.sh',
     'on_pre_compact.sh',
+    'on_teammate_idle.sh',
   ];
 
   const hooksDir = path.join(repoPath, '.claude', 'hooks', 'fleet-commander');

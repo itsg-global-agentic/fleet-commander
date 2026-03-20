@@ -130,6 +130,22 @@ agent is retrying something that keeps failing.
 - errors_per_minute > threshold → team is flailing
 - Specific tool_name in errors → "Build is broken" vs "Tests failing"
 
+### 1.10 TeammateIdle
+
+**Why:** Fires when a specific subagent goes idle. Unlike the dashboard's
+timer-based idle detection (which operates at the team level), this hook
+provides an explicit per-subagent idle signal directly from Claude Code.
+CC provides `session_id`, `teammate_name`, and `team_name`.
+
+**Signal value:** Per-subagent granularity on idle status:
+- TeammateIdle with `teammate_name: "dev"` → developer agent is waiting
+- Combined with SubagentStart/SubagentStop → full subagent activity timeline
+- Complements the dashboard's stuck detector with explicit CC-side idle signals
+
+FC's hook is a pure observer (exit 0, empty stdout) and coexists safely
+with domain-specific TeammateIdle hooks (e.g., pr-watcher-idle.sh) via
+the array syntax.
+
 ---
 
 ## 2. Hook Script Design
@@ -187,6 +203,7 @@ Fields are omitted when empty. Per-event payloads:
 | pre_compact      | team, session_id                                       |
 | tool_use         | team, session_id, tool_name, agent_type                |
 | tool_error       | team, session_id, tool_name, message                   |
+| teammate_idle    | team, session_id, teammate_name                        |
 
 ### 2.3 Wrapper Scripts
 
@@ -264,18 +281,26 @@ This allows explicit team naming when the path-based detection is insufficient
 
 ### 4.1 Existing hooks that MUST coexist
 
-The project already has:
+Some target projects may already have hooks configured:
 - `TeammateIdle` → `.claude/hooks/pr-watcher-idle.sh` (per-worktree CI monitoring)
 - `pre-tool-use` → `.claude/hooks/bash-worktree-fix.sh` (documented but not in settings.json — applied via Claude Code's built-in worktree support)
+
+Fleet Commander adds its own observer hook to TeammateIdle (and all other
+event types). FC hooks are fire-and-forget (exit 0, empty stdout) and do
+not affect agent behavior, so they coexist safely with domain-specific
+hooks like pr-watcher-idle.sh via the array syntax.
 
 ### 4.2 Complete settings.json for a worktree
 
 See `settings.json.example` in this directory. Key points:
 
-- **TeammateIdle keeps its existing pr-watcher-idle.sh hook.** Fleet Commander
-  does NOT add a second hook to TeammateIdle — the pr-watcher-idle.sh is a
-  domain-specific hook that returns JSON controlling agent behavior. Fleet
-  Commander hooks are fire-and-forget observation only.
+- **TeammateIdle has both domain-specific and FC observer hooks.** The
+  existing pr-watcher-idle.sh hook may return JSON to control agent
+  behavior. Fleet Commander's `on_teammate_idle.sh` runs alongside it
+  as a pure observer — it exits 0 with empty stdout, so it never
+  interferes with the domain hook's return value. Multiple hooks per
+  event type are supported via the array syntax; each entry runs
+  independently.
 
 - **Multiple hooks per event type** are supported via the array syntax.
   Each entry in the array is independent. If one hook fails, the others
@@ -414,19 +439,27 @@ it can reconstruct team status from:
 Claude Code supports arrays of hooks per event type. The Fleet Commander
 hooks run independently from existing hooks like `pr-watcher-idle.sh`.
 
+For TeammateIdle, both the domain-specific hook and the FC observer hook
+coexist in the array. FC's `on_teammate_idle.sh` exits 0 with empty
+stdout, so it never interferes with the domain hook's return value:
+
 ```json
 "TeammateIdle": [
   {
     "hooks": [
       { "type": "command", "command": ".claude/hooks/pr-watcher-idle.sh" }
     ]
+  },
+  {
+    "hooks": [
+      { "type": "command", "command": "bash .claude/hooks/fleet-commander/on_teammate_idle.sh" }
+    ]
   }
 ]
 ```
 
-Fleet Commander does NOT add to TeammateIdle because that hook's return
-value controls agent behavior (continue/stop). Fleet Commander hooks are
-pure observers — they never return control directives.
+Each entry in the array runs independently. FC hooks are pure observers
+that never return control directives — they fire and forget.
 
 ### 6.3 Hook timeout / blocking
 
@@ -479,6 +512,7 @@ dedup by `(team, event, timestamp_rounded_to_second)`.
   on_stop_failure.sh         ← hook: StopFailure
   on_subagent_start.sh       ← hook: SubagentStart
   on_subagent_stop.sh        ← hook: SubagentStop
+  on_teammate_idle.sh        ← hook: TeammateIdle
   on_notification.sh         ← hook: Notification
   on_pre_compact.sh          ← hook: PreCompact
   on_post_tool_use.sh        ← hook: PostToolUse (heartbeat)

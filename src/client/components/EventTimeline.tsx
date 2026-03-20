@@ -12,6 +12,7 @@ import {
   XCircleIcon,
   RefreshCwIcon,
   CircleDotIcon,
+  ClockIcon,
 } from './Icons';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ const EVENT_ICONS: Record<string, React.ReactNode> = {
   ToolError: <XCircleIcon size={14} />,
   PreCompact: <RefreshCwIcon size={14} />,
   ToolUse: <SettingsIcon size={14} />,
+  TeammateIdle: <ClockIcon size={14} />,
 };
 
 function getEventIcon(eventType: string): React.ReactNode {
