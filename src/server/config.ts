@@ -50,6 +50,7 @@ const config = Object.freeze({
 
   claudeCmd: process.env['FLEET_CLAUDE_CMD'] || 'claude',
   skipPermissions: process.env['FLEET_SKIP_PERMISSIONS'] !== 'false',
+  enableAgentTeams: process.env['FLEET_ENABLE_AGENT_TEAMS'] !== 'false',
 
   dbPath: process.env['FLEET_DB_PATH'] || path.join(fleetCommanderRoot, 'fleet.db'),
 

@@ -21,6 +21,7 @@ interface SettingsResponse {
   sseHeartbeatMs: number;
   outputBufferLines: number;
   claudeCmd: string;
+  enableAgentTeams: boolean;
   fleetCommanderRoot: string;
   dbPath: string;
 }
@@ -70,6 +71,13 @@ const SETTING_GROUPS: SettingGroup[] = [
         label: 'Claude Command',
         envVar: 'FLEET_CLAUDE_CMD',
         description: 'CLI command used to invoke Claude',
+      },
+      {
+        key: 'enableAgentTeams',
+        label: 'Agent Teams',
+        envVar: 'FLEET_ENABLE_AGENT_TEAMS',
+        description: 'Enable CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS env var for spawned CC processes',
+        format: (v) => (v ? 'Enabled' : 'Disabled'),
       },
       {
         key: 'outputBufferLines',

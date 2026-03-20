@@ -1211,14 +1211,20 @@ export class TeamManager {
       FLEET_TEAM_ID: worktreeName,
       FLEET_PROJECT_ID: String(projectId),
       FLEET_GITHUB_REPO: project.githubRepo ?? '',
-      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
     };
+    // Only set agent teams env var when enabled; explicitly clear it otherwise
+    // so it's not inherited from process.env
+    if (config.enableAgentTeams) {
+      env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = '1';
+    } else {
+      env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = undefined;
+    }
     const gitBash = findGitBash();
     if (gitBash) {
       env['CLAUDE_CODE_GIT_BASH_PATH'] = gitBash;
       console.log(`[TeamManager] CLAUDE_CODE_GIT_BASH_PATH=${gitBash}`);
     }
-    console.log(`[TeamManager] Spawn env: FLEET_TEAM_ID=${worktreeName}, FLEET_PROJECT_ID=${projectId}, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`);
+    console.log(`[TeamManager] Spawn env: FLEET_TEAM_ID=${worktreeName}, FLEET_PROJECT_ID=${projectId}, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=${config.enableAgentTeams ? '1' : 'disabled'}`);
     return env;
   }
 

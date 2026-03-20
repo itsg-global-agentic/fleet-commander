@@ -3,6 +3,7 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
+import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import eventsRoutes from './routes/events.js';
 import streamRoutes from './routes/stream.js';
@@ -83,6 +84,37 @@ async function main() {
 
   // Recover state from before restart (reconcile PIDs, detect orphan worktrees)
   await recoverOnStartup();
+
+  // ---------------------------------------------------------------------------
+  // Startup diagnostics: agent teams config + Claude CLI version
+  // ---------------------------------------------------------------------------
+  try {
+    server.log.info(`Agent Teams: ${config.enableAgentTeams ? 'enabled' : 'disabled'} (FLEET_ENABLE_AGENT_TEAMS)`);
+
+    const versionOutput = execSync(`${config.claudeCmd} --version`, {
+      encoding: 'utf-8',
+      timeout: 10000,
+    }).trim();
+    // Parse version number from output (e.g. "claude 2.1.32" or just "2.1.32")
+    const versionMatch = versionOutput.match(/(\d+\.\d+\.\d+)/);
+    if (versionMatch) {
+      const version = versionMatch[1];
+      server.log.info(`Claude CLI version: ${version}`);
+      // Check minimum version for agent teams support (2.1.32)
+      const [major, minor, patch] = version.split('.').map(Number);
+      const meetsMinimum =
+        major > 2 ||
+        (major === 2 && minor > 1) ||
+        (major === 2 && minor === 1 && patch >= 32);
+      if (!meetsMinimum && config.enableAgentTeams) {
+        server.log.warn(`Claude CLI ${version} may not support agent teams (minimum 2.1.32)`);
+      }
+    } else {
+      server.log.warn(`Could not parse Claude CLI version from: ${versionOutput}`);
+    }
+  } catch (err: unknown) {
+    server.log.warn(`Claude CLI version check failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Start all services
   sseBroker.start(config.sseHeartbeatMs);
