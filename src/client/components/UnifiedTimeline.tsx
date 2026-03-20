@@ -3,19 +3,7 @@ import { useApi } from '../hooks/useApi';
 import type { TimelineEntry, StreamTimelineEntry, HookTimelineEntry, TeamMember } from '../../shared/types';
 import { agentColor } from '../utils/constants';
 import { AgentFilterBar } from './AgentFilterBar';
-import {
-  PlayIcon,
-  SquareIcon,
-  CircleStopIcon,
-  ArrowRightIcon,
-  ArrowLeftIcon,
-  AlertTriangleIcon,
-  SettingsIcon,
-  XCircleIcon,
-  RefreshCwIcon,
-  CircleDotIcon,
-  ClockIcon,
-} from './Icons';
+import { SettingsIcon } from './Icons';
 
 // ---------------------------------------------------------------------------
 // Helpers — agent name display
@@ -82,24 +70,6 @@ function getStreamText(entry: StreamTimelineEntry): string {
 // Helpers — hook event rendering
 // ---------------------------------------------------------------------------
 
-const EVENT_ICONS: Record<string, React.ReactNode> = {
-  SessionStart:  <PlayIcon size={14} />,
-  SessionEnd:    <SquareIcon size={14} />,
-  Stop:          <CircleStopIcon size={14} />,
-  StopFailure:   <AlertTriangleIcon size={14} />,
-  SubagentStart: <ArrowRightIcon size={14} />,
-  SubagentStop:  <ArrowLeftIcon size={14} />,
-  Notification:  <AlertTriangleIcon size={14} />,
-  ToolError:     <XCircleIcon size={14} />,
-  PreCompact:    <RefreshCwIcon size={14} />,
-  ToolUse:       <SettingsIcon size={14} />,
-  TeammateIdle:  <ClockIcon size={14} />,
-};
-
-function getEventIcon(eventType: string): React.ReactNode {
-  return EVENT_ICONS[eventType] ?? <CircleDotIcon size={14} />;
-}
-
 /** Hook event types that represent lifecycle transitions */
 const LIFECYCLE_TYPES = new Set([
   'SessionStart', 'SessionEnd', 'Stop', 'SubagentStart', 'SubagentStop',
@@ -155,6 +125,17 @@ function resolveAgentLabel(entry: StreamTimelineEntry): { label: string; color: 
   return getStreamStyle(entry.streamType);
 }
 
+/** Resolve agent label for a hook event entry */
+function resolveHookAgentLabel(entry: HookTimelineEntry): { label: string; color: string } {
+  if (entry.agentName) {
+    const name = agentDisplayName(entry.agentName);
+    const color = agentColor(entry.agentName, entry.agentName);
+    return { label: name, color };
+  }
+  // Fallback when no agent name is present
+  return { label: 'System', color: '#8B949E' };
+}
+
 // ---------------------------------------------------------------------------
 // Sub-components for each entry type
 // ---------------------------------------------------------------------------
@@ -202,12 +183,10 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
           {formatLocalTime(entry.timestamp)}
         </span>
         {' '}
-        {entry.agentName && entry.streamType === 'assistant' && (
-          <span
-            className="inline-block w-1.5 h-1.5 rounded-full mr-0.5 align-middle"
-            style={{ backgroundColor: color }}
-          />
-        )}
+        <span
+          className="inline-block w-1.5 h-1.5 rounded-full mr-0.5 align-middle"
+          style={{ backgroundColor: color }}
+        />
         <span style={{ color }} className="font-semibold">{label}</span>
         {entry.streamType === 'fc' && entry.subtype && (
           <span className="text-dark-muted text-[10px] ml-1">[{getSubtypeLabel(entry.subtype)}]</span>
@@ -230,12 +209,10 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
         <span className="text-dark-muted">
           {formatLocalTime(entry.timestamp)}
         </span>
-        {entry.agentName && (
-          <span
-            className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
-            style={{ backgroundColor: color }}
-          />
-        )}
+        <span
+          className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+          style={{ backgroundColor: color }}
+        />
         <span style={{ color }} className="font-semibold">{label}</span>
         <span className="text-xs text-dark-muted bg-dark-border/30 px-1.5 py-0.5 rounded">
           {entry.tool.name}
@@ -282,8 +259,9 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
   const isLifecycle = LIFECYCLE_TYPES.has(entry.eventType);
   const isError = ERROR_TYPES.has(entry.eventType);
   const errorMsg = isError ? extractPayloadError(entry.payload) : null;
+  const { label, color } = resolveHookAgentLabel(entry);
 
-  // Lifecycle events — colored badge
+  // Lifecycle events — agent dot + name + event badge
   if (isLifecycle) {
     const lifecycleColor = entry.eventType === 'SessionStart' || entry.eventType === 'SubagentStart'
       ? '#3FB950'
@@ -294,23 +272,22 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
         <span className="text-dark-muted">
           {formatLocalTime(entry.timestamp)}
         </span>
-        <span className="text-dark-muted shrink-0">
-          {getEventIcon(entry.eventType)}
-        </span>
+        <span
+          className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+          style={{ backgroundColor: color }}
+        />
+        <span style={{ color }} className="font-semibold">{label}</span>
         <span
           className="text-xs font-medium px-1.5 py-0.5 rounded"
           style={{ color: lifecycleColor, backgroundColor: lifecycleColor + '18' }}
         >
           {entry.eventType}
         </span>
-        {entry.agentName && (
-          <span className="text-xs text-dark-muted">{entry.agentName}</span>
-        )}
       </div>
     );
   }
 
-  // Error events — red
+  // Error events — agent dot + name + red error info
   if (isError) {
     return (
       <div className="py-1 leading-relaxed">
@@ -318,9 +295,11 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
           <span className="text-dark-muted">
             {formatLocalTime(entry.timestamp)}
           </span>
-          <span className="text-[#F85149] shrink-0">
-            {getEventIcon(entry.eventType)}
-          </span>
+          <span
+            className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+            style={{ backgroundColor: color }}
+          />
+          <span style={{ color }} className="font-semibold">{label}</span>
           <span className="text-xs font-medium text-[#F85149]">
             {entry.eventType}
           </span>
@@ -339,26 +318,23 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
     );
   }
 
-  // Generic hook event
+  // Generic hook event — agent dot + name + event type + tool badge
   return (
     <div className="py-0.5 leading-relaxed flex items-center gap-1.5">
       <span className="text-dark-muted">
         {formatLocalTime(entry.timestamp)}
       </span>
-      <span className="text-dark-muted shrink-0">
-        {getEventIcon(entry.eventType)}
-      </span>
+      <span
+        className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+        style={{ backgroundColor: color }}
+      />
+      <span style={{ color }} className="font-semibold">{label}</span>
       <span className="text-xs text-dark-text font-medium">
         {entry.eventType}
       </span>
       {entry.toolName && (
         <span className="text-xs text-dark-muted bg-dark-border/30 px-1.5 py-0.5 rounded">
           {entry.toolName}
-        </span>
-      )}
-      {entry.agentName && (
-        <span className="text-xs text-dark-muted">
-          {entry.agentName}
         </span>
       )}
     </div>
@@ -486,10 +462,10 @@ export function UnifiedTimeline({
         }
       } else {
         const hook = entry;
+        const agent = hook.agentName ? agentDisplayName(hook.agentName) : 'System';
         let detail = hook.eventType;
         if (hook.toolName) detail += ` (${hook.toolName})`;
-        if (hook.agentName) detail += ` [${hook.agentName}]`;
-        lines.push(`[${ts}] hook: ${detail}`);
+        lines.push(`[${ts}] ${agent}: ${detail}`);
       }
     }
 
