@@ -48,13 +48,26 @@ export const STATES: StateMachineState[] = [
 export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
   // ---- Lifecycle transitions ----
   {
+    id: 'queued-blocked',
+    from: 'queued',
+    to: 'queued',
+    trigger: 'system',
+    triggerLabel: 'Queue processor skips blocked team',
+    description:
+      'Queue processor checks dependencies and skips teams with open blockers. ' +
+      'The team remains queued until all dependencies resolve. Auto-launches when ' +
+      'the GitHub poller detects all blockers are closed.',
+    condition: 'Issue has unresolved dependencies (open blockers)',
+    hookEvent: null,
+  },
+  {
     id: 'queued-launching',
     from: 'queued',
     to: 'launching',
     trigger: 'system',
     triggerLabel: 'Queue processor',
-    description: 'Team slot becomes available; next queued team is launched',
-    condition: 'Active teams < maxActiveTeams for project',
+    description: 'Team slot becomes available and all dependencies are resolved; next queued team is launched',
+    condition: 'Active teams < maxActiveTeams for project AND no open dependencies',
     hookEvent: null,
   },
   {

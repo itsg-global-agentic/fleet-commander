@@ -501,11 +501,15 @@ class GitHubPoller {
 
   /**
    * Check dependency resolution for issues that were previously blocked.
-   * When all blockers close, broadcasts a `dependency_resolved` SSE event.
-   * Does NOT auto-launch — the user must manually trigger launch.
+   * When all blockers close, broadcasts a `dependency_resolved` SSE event
+   * and triggers processQueue() to auto-launch newly unblocked teams.
    */
   private async checkDependencyResolution(): Promise<void> {
     if (this.previouslyBlocked.size === 0) return;
+
+    // Collect project IDs that had dependencies resolve so we can trigger
+    // processQueue once per project after the loop.
+    const resolvedProjectIds = new Set<number>();
 
     try {
       const { getIssueFetcher } = await import('./issue-fetcher.js');
@@ -528,6 +532,9 @@ class GitHubPoller {
 
             // Remove from tracking
             this.previouslyBlocked.delete(key);
+
+            // Track this project for queue processing
+            resolvedProjectIds.add(entry.projectId);
           }
         } catch (err) {
           // Log and continue — don't let one failure stop others
@@ -542,6 +549,28 @@ class GitHubPoller {
         '[GitHubPoller] Failed to import issue-fetcher for dependency check:',
         err instanceof Error ? err.message : err
       );
+    }
+
+    // Trigger queue processing for projects that had dependencies resolve,
+    // so newly unblocked teams are auto-launched.
+    if (resolvedProjectIds.size > 0) {
+      try {
+        const { getTeamManager } = await import('./team-manager.js');
+        const manager = getTeamManager();
+        for (const pid of resolvedProjectIds) {
+          manager.processQueue(pid).catch((err) => {
+            console.error(
+              `[GitHubPoller] processQueue error after dependency resolution for project ${pid}:`,
+              err instanceof Error ? err.message : err,
+            );
+          });
+        }
+      } catch (err) {
+        console.error(
+          '[GitHubPoller] Failed to import team-manager for auto-launch after dependency resolution:',
+          err instanceof Error ? err.message : err,
+        );
+      }
     }
   }
 

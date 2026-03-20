@@ -8,7 +8,7 @@
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseDependenciesFromBody } from '../../src/server/services/issue-fetcher.js';
+import { parseDependenciesFromBody, detectCircularDependencies } from '../../src/server/services/issue-fetcher.js';
 
 // ---------------------------------------------------------------------------
 // parseDependenciesFromBody — regex parsing tests
@@ -412,5 +412,90 @@ describe('409 dependency block response shape', () => {
     expect(response.dependencies).toBe(depInfo);
     expect(response.hint).toContain('force');
     expect(response.message).toContain('#42');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectCircularDependencies — cycle detection tests
+// ---------------------------------------------------------------------------
+
+describe('detectCircularDependencies', () => {
+  it('returns null when there are no dependencies', () => {
+    const deps = new Map<number, number[]>();
+    expect(detectCircularDependencies(1, deps)).toBeNull();
+  });
+
+  it('returns null for a linear dependency chain (no cycle)', () => {
+    const deps = new Map<number, number[]>();
+    deps.set(1, [2]);
+    deps.set(2, [3]);
+    deps.set(3, []);
+    expect(detectCircularDependencies(1, deps)).toBeNull();
+  });
+
+  it('detects a simple 2-node cycle: 1 -> 2 -> 1', () => {
+    const deps = new Map<number, number[]>();
+    deps.set(1, [2]);
+    deps.set(2, [1]);
+    const cycle = detectCircularDependencies(1, deps);
+    expect(cycle).not.toBeNull();
+    expect(cycle).toContain(1);
+    expect(cycle).toContain(2);
+    // Cycle should start and end with the same node
+    expect(cycle![0]).toBe(cycle![cycle!.length - 1]);
+  });
+
+  it('detects a 3-node cycle: 1 -> 2 -> 3 -> 1', () => {
+    const deps = new Map<number, number[]>();
+    deps.set(1, [2]);
+    deps.set(2, [3]);
+    deps.set(3, [1]);
+    const cycle = detectCircularDependencies(1, deps);
+    expect(cycle).not.toBeNull();
+    expect(cycle).toEqual([1, 2, 3, 1]);
+  });
+
+  it('detects a self-loop: 1 -> 1', () => {
+    const deps = new Map<number, number[]>();
+    deps.set(1, [1]);
+    const cycle = detectCircularDependencies(1, deps);
+    expect(cycle).not.toBeNull();
+    expect(cycle).toEqual([1, 1]);
+  });
+
+  it('returns null when dependencies exist but starting node has no deps', () => {
+    const deps = new Map<number, number[]>();
+    deps.set(2, [3]);
+    deps.set(3, [2]);
+    // Issue 1 has no dependencies at all — should not find a cycle
+    expect(detectCircularDependencies(1, deps)).toBeNull();
+  });
+
+  it('handles a branching graph where only one branch has a cycle', () => {
+    const deps = new Map<number, number[]>();
+    deps.set(1, [2, 3]);
+    deps.set(2, []); // no deps — dead end
+    deps.set(3, [4]);
+    deps.set(4, [1]); // cycle back to 1
+    const cycle = detectCircularDependencies(1, deps);
+    expect(cycle).not.toBeNull();
+    expect(cycle).toContain(1);
+    expect(cycle).toContain(3);
+    expect(cycle).toContain(4);
+  });
+
+  it('returns null when nodes reference unknown issue numbers (not in map)', () => {
+    const deps = new Map<number, number[]>();
+    deps.set(1, [99, 100]); // 99 and 100 are not in the map
+    expect(detectCircularDependencies(1, deps)).toBeNull();
+  });
+
+  it('handles a diamond dependency shape without cycles', () => {
+    const deps = new Map<number, number[]>();
+    deps.set(1, [2, 3]);
+    deps.set(2, [4]);
+    deps.set(3, [4]);
+    deps.set(4, []);
+    expect(detectCircularDependencies(1, deps)).toBeNull();
   });
 });

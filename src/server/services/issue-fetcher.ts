@@ -1028,6 +1028,56 @@ export class IssueFetcher {
 }
 
 // ---------------------------------------------------------------------------
+// Circular dependency detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect circular dependencies in a dependency graph using DFS cycle detection.
+ *
+ * @param issueNumber - The starting issue number to check
+ * @param deps - Map of issue number -> array of blocking issue numbers
+ * @returns The cycle path (array of issue numbers) if a cycle is found, null otherwise
+ *
+ * Example: if issue 1 depends on 2, 2 depends on 3, and 3 depends on 1,
+ * calling detectCircularDependencies(1, {1->[2], 2->[3], 3->[1]}) returns [1, 2, 3, 1].
+ */
+export function detectCircularDependencies(
+  issueNumber: number,
+  deps: Map<number, number[]>,
+): number[] | null {
+  const visited = new Set<number>();
+  const path: number[] = [];
+  const inPath = new Set<number>();
+
+  function dfs(node: number): number[] | null {
+    if (inPath.has(node)) {
+      // Found a cycle — extract the cycle from path
+      const cycleStart = path.indexOf(node);
+      return [...path.slice(cycleStart), node];
+    }
+    if (visited.has(node)) {
+      return null; // Already fully explored, no cycle through this node
+    }
+
+    visited.add(node);
+    inPath.add(node);
+    path.push(node);
+
+    const neighbors = deps.get(node) ?? [];
+    for (const neighbor of neighbors) {
+      const cycle = dfs(neighbor);
+      if (cycle) return cycle;
+    }
+
+    inPath.delete(node);
+    path.pop();
+    return null;
+  }
+
+  return dfs(issueNumber);
+}
+
+// ---------------------------------------------------------------------------
 // Singleton
 // ---------------------------------------------------------------------------
 
