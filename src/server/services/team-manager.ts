@@ -166,6 +166,7 @@ export class TeamManager {
       const syncEvent: StreamEvent = {
         type: 'fc',
         subtype: 'origin_sync',
+        agentName: '__fc__',
         timestamp: new Date().toISOString(),
         message: {
           content: [{
@@ -989,6 +990,7 @@ export class TeamManager {
       // 'subtype' distinguishes FC message categories for visual differentiation.
       const syntheticEvent: StreamEvent = {
         type: source,
+        agentName: source === 'user' ? '__pm__' : '__fc__',
         timestamp: new Date().toISOString(),
         message: { content: [{ type: 'text', text: message }] },
         ...(subtype ? { subtype } : {}),
@@ -1561,6 +1563,7 @@ export class TeamManager {
       const initEvent: StreamEvent = {
         type: 'fc',
         subtype: 'initial_prompt',
+        agentName: '__fc__',
         timestamp: new Date().toISOString(),
         message: { content: [{ type: 'text', text: prompt }] },
       };
