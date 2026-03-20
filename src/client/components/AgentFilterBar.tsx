@@ -16,16 +16,32 @@ interface AgentFilterBarProps {
   activeFilters: Set<string>;
   /** Callback to update the active filters */
   onFiltersChange: (filters: Set<string>) => void;
+  /** Whether any "user" (You/PM) entries exist in the timeline */
+  hasUserEntries?: boolean;
+  /** Whether any "fc" (Fleet Commander) entries exist in the timeline */
+  hasFcEntries?: boolean;
 }
+
+// Sentinel keys for non-agent pill entries (prefixed with __ to avoid collision)
+const PM_SENTINEL = '__pm__';
+const FC_SENTINEL = '__fc__';
 
 /** Canonical display name for an agent (capitalise first letter) */
 function displayName(name: string): string {
+  if (name === PM_SENTINEL) return 'You';
+  if (name === FC_SENTINEL) return 'FC';
   if (name === 'team-lead' || name === 'tl') return 'TL';
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-export function AgentFilterBar({ roster, activeFilters, onFiltersChange }: AgentFilterBarProps) {
-  // Build ordered list of agent names: team-lead first, then alphabetical
+/** Fixed colors for sentinel pills */
+const SENTINEL_COLORS: Record<string, string> = {
+  [PM_SENTINEL]: '#3FB950',
+  [FC_SENTINEL]: '#D29922',
+};
+
+export function AgentFilterBar({ roster, activeFilters, onFiltersChange, hasUserEntries, hasFcEntries }: AgentFilterBarProps) {
+  // Build ordered list of agent names: team-lead first, then alphabetical, then sentinel pills
   const agentNames = useMemo(() => {
     const names = new Set<string>();
     names.add('team-lead');
@@ -37,10 +53,13 @@ export function AgentFilterBar({ roster, activeFilters, onFiltersChange }: Agent
       if (b === 'team-lead') return 1;
       return a.localeCompare(b);
     });
+    // Append sentinel entries for You/FC when those entry types exist
+    if (hasUserEntries) sorted.push(PM_SENTINEL);
+    if (hasFcEntries) sorted.push(FC_SENTINEL);
     return sorted;
-  }, [roster]);
+  }, [roster, hasUserEntries, hasFcEntries]);
 
-  // Hide when only TL exists (no subagents)
+  // Hide when only TL exists and no user/FC entries
   if (agentNames.length <= 1) return null;
 
   const allActive = activeFilters.size === 0 || activeFilters.size === agentNames.length;
@@ -97,7 +116,7 @@ export function AgentFilterBar({ roster, activeFilters, onFiltersChange }: Agent
       </button>
 
       {agentNames.map((name) => {
-        const color = agentColor(name, name);
+        const color = SENTINEL_COLORS[name] ?? agentColor(name, name);
         const isActive = allActive || activeFilters.has(name);
         return (
           <button

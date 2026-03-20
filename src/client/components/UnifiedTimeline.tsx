@@ -360,6 +360,9 @@ interface UnifiedTimelineProps {
 /** Resolve the agent name for a timeline entry (for filtering purposes) */
 function getEntryAgentName(entry: TimelineEntry): string | undefined {
   if (entry.source === 'stream') {
+    // Map user/fc stream types to sentinel keys for filtering
+    if (entry.streamType === 'user') return '__pm__';
+    if (entry.streamType === 'fc') return '__fc__';
     return entry.agentName;
   }
   // Hook entries already have agentName
@@ -478,6 +481,16 @@ export function UnifiedTimeline({
     });
   }, [filteredEntries]);
 
+  // Compute whether user (You) and FC entries exist in the timeline
+  const hasUserEntries = useMemo(
+    () => entries.some((e) => e.source === 'stream' && e.streamType === 'user'),
+    [entries],
+  );
+  const hasFcEntries = useMemo(
+    () => entries.some((e) => e.source === 'stream' && e.streamType === 'fc'),
+    [entries],
+  );
+
   if (entries.length === 0) {
     const isTerminal = teamStatus === 'done' || teamStatus === 'failed';
     return (
@@ -491,12 +504,14 @@ export function UnifiedTimeline({
 
   return (
     <div className="relative flex-1 min-h-0 flex flex-col">
-      {/* Agent filter pills — only shown when roster has subagents */}
+      {/* Agent filter pills — only shown when roster has subagents or user/FC entries */}
       {roster && onAgentFiltersChange && (
         <AgentFilterBar
           roster={roster}
           activeFilters={agentFilters ?? new Set()}
           onFiltersChange={onAgentFiltersChange}
+          hasUserEntries={hasUserEntries}
+          hasFcEntries={hasFcEntries}
         />
       )}
 
