@@ -326,6 +326,14 @@ describe('TeamManager.processQueue dependency filtering', () => {
     (tm as any).broadcastSnapshot = vi.fn();
   });
 
+  afterEach(async () => {
+    // Flush pending re-drain macrotasks and microtasks to prevent leaks
+    // between tests via shared module-level mocks.
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
   it('skips queued teams with open dependencies', async () => {
     const project = makeProject({ id: 1, maxActiveTeams: 3 });
     const unblockedTeam = makeTeam({ id: 101, issueNumber: 10, worktreeName: 'proj-10', status: 'queued' });
@@ -335,13 +343,13 @@ describe('TeamManager.processQueue dependency filtering', () => {
     mockDb.getActiveTeamCountByProject
       .mockReturnValueOnce(0)  // processQueue: 0 active, 3 available
       .mockReturnValueOnce(1)  // first finally: re-drain check
-      .mockReturnValueOnce(1)  // second processQueue (re-drain): 1 active, 2 available
-      .mockReturnValueOnce(1); // second finally: re-drain check (blocked team is still queued but no unblocked to launch)
+      .mockReturnValueOnce(1); // second processQueue (re-drain): 1 active, 2 available
+    // No 4th value needed: re-drain stops when launchedCount=0 (no unblocked teams)
     mockDb.getQueuedTeamsByProject
       .mockReturnValueOnce([unblockedTeam, blockedTeam])  // first processQueue
       .mockReturnValueOnce([blockedTeam])  // first finally: blocked team still queued
-      .mockReturnValueOnce([blockedTeam])  // second processQueue (re-drain)
-      .mockReturnValueOnce([blockedTeam]); // second finally: still queued but no slots used
+      .mockReturnValueOnce([blockedTeam]); // second processQueue (re-drain)
+    // No 4th value needed: re-drain stops when launchedCount=0
     mockDb.updateTeam.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 

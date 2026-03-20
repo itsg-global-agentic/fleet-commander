@@ -776,6 +776,10 @@ export class TeamManager {
     if (this._processingQueue.has(projectId)) return;
     this._processingQueue.add(projectId);
 
+    // Track whether any teams were actually launched — used by re-drain to
+    // avoid an infinite loop when all queued teams are blocked by dependencies.
+    let launchedCount = 0;
+
     try {
       const db = getDatabase();
       const project = db.getProject(projectId);
@@ -795,6 +799,7 @@ export class TeamManager {
 
       // Filter queued teams by dependency status — only launch unblocked teams
       const toDequeue = await this.filterUnblockedTeams(queued, available, projectId);
+      launchedCount = toDequeue.length;
 
       for (const team of toDequeue) {
         console.log(`[TeamManager] Dequeuing team ${team.id} (${team.worktreeName})`);
@@ -822,20 +827,22 @@ export class TeamManager {
       // while we were awaiting launchQueued, there may still be queued teams
       // with available slots. Schedule a re-check via setImmediate to break
       // the call stack and let the new call acquire the guard cleanly.
-      const db = getDatabase();
-      const project = db.getProject(projectId);
-      if (project) {
-        const activeCount = db.getActiveTeamCountByProject(projectId);
-        const queued = db.getQueuedTeamsByProject(projectId);
-        if (queued.length > 0 && activeCount < project.maxActiveTeams) {
-          // Check if any queued teams are actually unblocked before scheduling re-drain.
-          // We do a lightweight check: if there are queued teams and available slots,
-          // schedule re-drain and let filterUnblockedTeams sort it out.
-          setImmediate(() => {
-            this.processQueue(projectId).catch((err) => {
-              console.error(`[TeamManager] processQueue re-drain error:`, err);
+      // Only re-drain if we actually launched at least one team — otherwise
+      // all remaining queued teams are blocked by dependencies and re-draining
+      // would cause an infinite loop.
+      if (launchedCount > 0) {
+        const db = getDatabase();
+        const project = db.getProject(projectId);
+        if (project) {
+          const activeCount = db.getActiveTeamCountByProject(projectId);
+          const queued = db.getQueuedTeamsByProject(projectId);
+          if (queued.length > 0 && activeCount < project.maxActiveTeams) {
+            setImmediate(() => {
+              this.processQueue(projectId).catch((err) => {
+                console.error(`[TeamManager] processQueue re-drain error:`, err);
+              });
             });
-          });
+          }
         }
       }
     }
