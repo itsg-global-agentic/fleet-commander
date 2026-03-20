@@ -179,7 +179,7 @@ export function UsageViewPage() {
       </section>
 
       {/* -------------------------------------------------------------------
-        Usage History — 24h line chart
+        Usage History — 7-day line chart
       ------------------------------------------------------------------- */}
       <section>
         <h3 className="text-sm font-medium text-dark-muted uppercase tracking-wider mb-3">

@@ -52,7 +52,6 @@ const LINE_KEYS = ['dailyPercent', 'weeklyPercent', 'sonnetPercent', 'extraPerce
 
 interface ChartDataPoint {
   time: number;
-  label: string;
   dailyPercent: number;
   weeklyPercent: number;
   sonnetPercent: number;
@@ -134,7 +133,6 @@ export function UsageChart({ snapshots, redThresholds }: UsageChartProps) {
         const time = new Date(snap.recordedAt).getTime();
         return {
           time,
-          label: formatTickLabel(new Date(time)),
           dailyPercent: snap.dailyPercent,
           weeklyPercent: snap.weeklyPercent,
           sonnetPercent: snap.sonnetPercent,
