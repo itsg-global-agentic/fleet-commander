@@ -319,6 +319,9 @@ export class FleetDatabase {
     // Add stream_events table if missing (v6 migration — persist session log)
     this.addStreamEventsTable();
 
+    // Migrate any 'paused' projects to 'active' (paused status removed in #228)
+    this.migratePausedProjects();
+
     // Resolve schema.sql relative to this file.
     // In dev (tsx): __dirname is src/server
     // In compiled (node): __dirname is dist/server/server
@@ -635,6 +638,23 @@ export class FleetDatabase {
       `);
     } catch {
       // Table may already exist — safe to ignore
+    }
+  }
+
+  /**
+   * Migrate any projects with status 'paused' to 'active'.
+   * The paused status was removed in issue #228.
+   */
+  private migratePausedProjects(): void {
+    try {
+      const result = this.db.prepare(
+        "UPDATE projects SET status = 'active', updated_at = datetime('now') WHERE status = 'paused'"
+      ).run();
+      if (result.changes > 0) {
+        console.log(`[DB] Migrated ${result.changes} paused project(s) to active`);
+      }
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
     }
   }
 

@@ -6,7 +6,7 @@
 // broadcasts changes via SSE.
 //
 // Per-project: each team's github_repo is resolved from its project record.
-// Teams in paused/archived projects are skipped during polling.
+// Teams in archived projects are skipped during polling.
 //
 // Uses `gh` CLI exclusively (never Octokit) as per project conventions.
 // All gh CLI errors are handled gracefully — a single failed poll never
@@ -148,7 +148,7 @@ class GitHubPoller {
     try {
       const db = getDatabase();
 
-      // Get all active projects — skip paused/archived
+      // Get all active projects — skip archived
       const projects = db.getProjects({ status: 'active' });
 
       if (projects.length === 0) {

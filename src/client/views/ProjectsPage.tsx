@@ -10,7 +10,6 @@ import type { ProjectSummary, ProjectStatus, ProjectGroup } from '../../shared/t
 
 const STATUS_STYLES: Record<ProjectStatus, { bg: string; text: string; border: string }> = {
   active: { bg: '#3FB95020', text: '#3FB950', border: '#3FB95040' },
-  paused: { bg: '#D2992220', text: '#D29922', border: '#D2992240' },
   archived: { bg: '#8B949E20', text: '#8B949E', border: '#8B949E40' },
 };
 
@@ -51,7 +50,6 @@ function ProjectCard({
   reinstallResult,
   handleReinstall,
   handleCleanup,
-  handleToggleStatus,
   handleDelete,
   setEditingPromptId,
   onGroupChange,
@@ -80,7 +78,6 @@ function ProjectCard({
   reinstallResult: { id: number; ok: boolean; error?: string } | null;
   handleReinstall: (p: ProjectSummary) => void;
   handleCleanup: (p: ProjectSummary) => void;
-  handleToggleStatus: (p: ProjectSummary) => void;
   handleDelete: (p: ProjectSummary) => void;
   setEditingPromptId: (id: number | null) => void;
   onGroupChange: (projectId: number, groupId: number | null) => void;
@@ -406,12 +403,6 @@ function ProjectCard({
           Clean Up
         </button>
         <button
-          onClick={() => handleToggleStatus(project)}
-          className="px-3 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted transition-colors"
-        >
-          {project.status === 'active' ? 'Pause' : 'Resume'}
-        </button>
-        <button
           onClick={() => handleDelete(project)}
           className="px-3 py-1 text-xs rounded border border-[#F85149]/30 text-[#F85149] hover:bg-[#F85149]/10 transition-colors"
         >
@@ -728,19 +719,6 @@ export function ProjectsPage() {
 
   // --- Project Actions ---
 
-  const handleToggleStatus = useCallback(
-    async (project: ProjectSummary) => {
-      const newStatus: ProjectStatus = project.status === 'active' ? 'paused' : 'active';
-      try {
-        await api.put(`projects/${project.id}`, { status: newStatus });
-        await fetchProjects();
-      } catch {
-        // ignore
-      }
-    },
-    [api, fetchProjects],
-  );
-
   const handleDelete = useCallback(
     async (project: ProjectSummary) => {
       const confirmed = window.confirm(
@@ -930,7 +908,6 @@ export function ProjectsPage() {
     reinstallResult,
     handleReinstall,
     handleCleanup,
-    handleToggleStatus,
     handleDelete,
     setEditingPromptId,
     onGroupChange: handleGroupChange,

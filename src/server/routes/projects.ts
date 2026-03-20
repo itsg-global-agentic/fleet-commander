@@ -227,7 +227,7 @@ const projectsRoutes: FastifyPluginCallback = (
         const statusFilter = (request.query as ProjectListQuery).status;
 
         if (statusFilter) {
-          const validStatuses: ProjectStatus[] = ['active', 'paused', 'archived'];
+          const validStatuses: ProjectStatus[] = ['active', 'archived'];
           if (!validStatuses.includes(statusFilter)) {
             return reply.code(400).send({
               error: 'Bad Request',
@@ -501,7 +501,7 @@ const projectsRoutes: FastifyPluginCallback = (
 
         // Validate status if provided
         if (status !== undefined) {
-          const validStatuses: ProjectStatus[] = ['active', 'paused', 'archived'];
+          const validStatuses: ProjectStatus[] = ['active', 'archived'];
           if (!validStatuses.includes(status)) {
             return reply.code(400).send({
               error: 'Bad Request',

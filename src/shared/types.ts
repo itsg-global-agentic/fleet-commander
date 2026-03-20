@@ -22,7 +22,7 @@ export type CIStatus = 'none' | 'pending' | 'passing' | 'failing';
 export type MergeStatus = 'unknown' | 'clean' | 'behind' | 'blocked' | 'dirty' | 'unstable' | 'has_hooks' | 'draft';
 
 /** Project status */
-export type ProjectStatus = 'active' | 'paused' | 'archived';
+export type ProjectStatus = 'active' | 'archived';
 
 /** Usage zone for queue gating */
 export type UsageZone = 'green' | 'red';
