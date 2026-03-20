@@ -637,7 +637,7 @@ export function TeamDetail() {
                 {/* Tab content */}
                 {activeTab === 'session-log' && (
                   <div className="flex-1 min-h-0 flex flex-col px-5 py-3">
-                    <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                    <div className="flex-1 min-h-0 flex flex-col">
                       <UnifiedTimeline
                         teamId={detail.id}
                         teamStatus={detail.status}

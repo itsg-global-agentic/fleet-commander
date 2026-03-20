@@ -514,7 +514,7 @@ export function UnifiedTimeline({
   }
 
   return (
-    <div className="relative">
+    <div className="relative flex-1 min-h-0 flex flex-col">
       {/* Agent filter pills — only shown when roster has subagents */}
       {roster && onAgentFiltersChange && (
         <AgentFilterBar
@@ -536,7 +536,7 @@ export function UnifiedTimeline({
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className={`font-mono text-xs overflow-y-auto bg-[#0D1117] p-2 rounded border border-dark-border custom-scrollbar${isThinking ? ' thinking-glow' : ''}`}
+        className={`flex-1 min-h-0 font-mono text-xs overflow-y-auto bg-[#0D1117] p-2 rounded border border-dark-border custom-scrollbar${isThinking ? ' thinking-glow' : ''}`}
       >
         {filteredEntries.map((entry) => {
           if (entry.source === 'stream') {
