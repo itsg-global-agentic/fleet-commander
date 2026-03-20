@@ -89,7 +89,7 @@ export interface SseBroker {
 
 /** Optional team message sender for advisory messages (e.g., crash detection) */
 export interface TeamMessageSender {
-  sendMessage(teamId: number, message: string): boolean;
+  sendMessage(teamId: number, message: string, source?: 'user' | 'fc', subtype?: string): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -349,7 +349,7 @@ export function processEvent(
         const crashMsg =
           `Subagent '${subagentName}' appears to have crashed (${durationSec}s after start, ${tracker.eventCount} events). Consider respawning.`;
         try {
-          messageSender.sendMessage(teamId, crashMsg);
+          messageSender.sendMessage(teamId, crashMsg, 'fc', 'subagent_crash');
           console.log(`[EventCollector] Subagent crash advisory sent for ${subagentName} on team ${teamId}`);
         } catch {
           // Non-critical — silently ignore send failures

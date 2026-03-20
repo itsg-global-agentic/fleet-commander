@@ -148,6 +148,7 @@ export class TeamManager {
       // Inject a log event into the team's session log
       const syncEvent: StreamEvent = {
         type: 'fc',
+        subtype: 'origin_sync',
         timestamp: new Date().toISOString(),
         message: {
           content: [{
@@ -1060,7 +1061,7 @@ export class TeamManager {
   // sendMessage — deliver a PM message to a running team via stdin
   // -------------------------------------------------------------------------
 
-  sendMessage(teamId: number, message: string, source: 'user' | 'fc' = 'fc'): boolean {
+  sendMessage(teamId: number, message: string, source: 'user' | 'fc' = 'fc', subtype?: string): boolean {
     const stdin = this.stdinPipes.get(teamId);
     if (!stdin || stdin.destroyed) return false;
 
@@ -1071,10 +1072,12 @@ export class TeamManager {
       // Inject a synthetic event into parsedEvents so it appears in the
       // Session Log alongside assistant responses (issue #5).
       // 'user' = manual PM message, 'fc' = automated Fleet Commander message.
+      // 'subtype' distinguishes FC message categories for visual differentiation.
       const syntheticEvent: StreamEvent = {
         type: source,
         timestamp: new Date().toISOString(),
         message: { content: [{ type: 'text', text: message }] },
+        ...(subtype ? { subtype } : {}),
       };
       const events = this.parsedEvents.get(teamId);
       if (events) {
@@ -1123,7 +1126,7 @@ export class TeamManager {
       PR_NUMBER: String(prNumber),
     });
     if (msg) {
-      this.sendMessage(teamId, msg);
+      this.sendMessage(teamId, msg, 'fc', 'pr_merged_shutdown');
     }
     console.log(`[TeamManager] Graceful shutdown initiated for team ${teamId} (PR #${prNumber}, grace=${graceMs}ms)`);
 
@@ -1515,6 +1518,7 @@ export class TeamManager {
     if (prompt && child.stdin) {
       const initEvent: StreamEvent = {
         type: 'fc',
+        subtype: 'initial_prompt',
         timestamp: new Date().toISOString(),
         message: { content: [{ type: 'text', text: prompt }] },
       };
