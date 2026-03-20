@@ -324,82 +324,21 @@ export class TeamManager {
     const resolvedPrompt = prompt || this.resolvePromptFromFile(project, issueNumber);
     const isHeadless = headless !== false;
 
-    const args = this.buildClaudeArgs({
-      worktreeName,
-      headless,
+    if (!isHeadless && process.platform === 'win32') {
+      // ── Interactive mode (Windows): open Claude Code in a new terminal ──
+      await this.launchInteractive(team, project, worktreeAbsPath, resolvedPrompt);
+      return db.getTeam(team.id)!;
+    }
+
+    // ── Headless mode (default): spawn in background, capture output ──
+    const args = this.buildHeadlessClaudeArgs(worktreeName, {
       model: project.model,
     });
-
-    // In interactive mode, prompt is a positional arg; in headless, sent via stdin.
-    if (!isHeadless) {
-      args.push(resolvedPrompt);
-    }
 
     const spawnEnv = this.buildSpawnEnv(project, worktreeName, projectId);
     const claudePath = resolveClaudePath();
     console.log(`[TeamManager] Spawning: ${claudePath} ${args.join(' ')} (headless=${isHeadless})`);
 
-    if (!isHeadless && process.platform === 'win32') {
-      // ── Interactive mode (Windows): open Claude Code in a new terminal ──
-      const fullCmd = `${config.claudeCmd} ${args.join(' ')}`;
-      const windowTitle = `Team ${worktreeName}`;
-      const gitBash = findGitBash();
-
-      const innerCommand = `cd /d "${worktreeAbsPath}" && set CLAUDE_CODE_GIT_BASH_PATH=${gitBash || ''} && set FLEET_TEAM_ID=${worktreeName} && set FLEET_PROJECT_ID=${projectId} && ${fullCmd}`;
-
-      const termPref = config.terminalCmd;
-      let useWindowsTerminal = false;
-
-      if (termPref === 'wt') {
-        useWindowsTerminal = true;
-      } else if (termPref === 'auto') {
-        try {
-          await execAsync('where wt.exe', { timeout: 3000 });
-          useWindowsTerminal = true;
-        } catch {
-          useWindowsTerminal = false;
-        }
-      }
-
-      let startCommand: string;
-      if (useWindowsTerminal) {
-        startCommand = `wt.exe new-tab --title "${windowTitle}" cmd.exe /k "${innerCommand}"`;
-      } else {
-        startCommand = `start "${windowTitle}" cmd.exe /k "${innerCommand}"`;
-      }
-
-      console.log(`[TeamManager] Interactive spawn command (terminal=${useWindowsTerminal ? 'wt' : 'cmd'}): ${startCommand}`);
-
-      const interactiveChild = spawn(startCommand, [], {
-        env: spawnEnv,
-        shell: true,
-        detached: true,
-        stdio: 'ignore',
-      });
-      interactiveChild.unref();
-
-      console.log(`[TeamManager] Interactive window opened for team ${team.id} (worktree: ${worktreeName})`);
-
-      db.insertTransition({
-        teamId: team.id,
-        fromStatus: 'launching',
-        toStatus: 'running',
-        trigger: 'system',
-        reason: 'Interactive terminal window opened',
-      });
-      db.updateTeam(team.id, { status: 'running' });
-      this.broadcastSnapshot();
-
-      sseBroker.broadcast(
-        'team_launched',
-        { team_id: team.id, issue_number: issueNumber, project_id: projectId },
-        team.id,
-      );
-
-      return db.getTeam(team.id)!;
-    }
-
-    // ── Headless mode (default): spawn in background, capture output ──
     const child = this.spawnAndValidate(claudePath, args, project.repoPath, spawnEnv, team.id);
     if (!child) {
       throw new Error('Failed to spawn Claude Code process — no PID returned');
@@ -563,9 +502,8 @@ export class TeamManager {
       throw new Error(`Worktree ${team.worktreeName} no longer exists at ${worktreeAbsPath}`);
     }
 
-    // Build args with --resume
-    const args = this.buildClaudeArgs({
-      worktreeName: team.worktreeName,
+    // Build args with --resume (headless mode — resume always uses stream-json)
+    const args = this.buildHeadlessClaudeArgs(team.worktreeName, {
       resume: true,
       model: project.model,
     });
@@ -928,78 +866,21 @@ export class TeamManager {
     const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, team.issueNumber);
     const isHeadless = team.headless;
 
-    const args = this.buildClaudeArgs({
-      worktreeName: team.worktreeName,
-      headless: isHeadless ? true : false,
+    if (!isHeadless && process.platform === 'win32') {
+      // ── Interactive mode (Windows): open Claude Code in a new terminal ──
+      await this.launchInteractive(team, project, worktreeAbsPath, resolvedPrompt);
+      return;
+    }
+
+    // ── Headless mode (default): spawn in background, capture output ──
+    const args = this.buildHeadlessClaudeArgs(team.worktreeName, {
       model: project.model,
     });
-
-    // In interactive mode, prompt is a positional arg; in headless, sent via stdin.
-    if (!isHeadless) {
-      args.push(resolvedPrompt);
-    }
 
     const spawnEnv = this.buildSpawnEnv(project, team.worktreeName, projectId);
     const claudePath = resolveClaudePath();
     console.log(`[TeamManager] Spawning dequeued team ${team.id}: ${claudePath} ${args.join(' ')} (headless=${isHeadless})`);
 
-    if (!isHeadless && process.platform === 'win32') {
-      // ── Interactive mode (Windows): open Claude Code in a new terminal ──
-      const fullCmd = `${config.claudeCmd} ${args.join(' ')}`;
-      const windowTitle = `Team ${team.worktreeName}`;
-      const gitBash = findGitBash();
-      const innerCommand = `cd /d "${worktreeAbsPath}" && set CLAUDE_CODE_GIT_BASH_PATH=${gitBash || ''} && set FLEET_TEAM_ID=${team.worktreeName} && set FLEET_PROJECT_ID=${projectId} && ${fullCmd}`;
-
-      const termPref = config.terminalCmd;
-      let useWindowsTerminal = false;
-
-      if (termPref === 'wt') {
-        useWindowsTerminal = true;
-      } else if (termPref === 'auto') {
-        try {
-          await execAsync('where wt.exe', { timeout: 3000 });
-          useWindowsTerminal = true;
-        } catch {
-          useWindowsTerminal = false;
-        }
-      }
-
-      let startCommand: string;
-      if (useWindowsTerminal) {
-        startCommand = `wt.exe new-tab --title "${windowTitle}" cmd.exe /k "${innerCommand}"`;
-      } else {
-        startCommand = `start "${windowTitle}" cmd.exe /k "${innerCommand}"`;
-      }
-
-      console.log(`[TeamManager] Interactive spawn for dequeued team (terminal=${useWindowsTerminal ? 'wt' : 'cmd'}): ${startCommand}`);
-
-      const interactiveChild = spawn(startCommand, [], {
-        env: spawnEnv,
-        shell: true,
-        detached: true,
-        stdio: 'ignore',
-      });
-      interactiveChild.unref();
-
-      db.insertTransition({
-        teamId: team.id,
-        fromStatus: 'launching',
-        toStatus: 'running',
-        trigger: 'system',
-        reason: 'Interactive terminal window opened (dequeued)',
-      });
-      db.updateTeam(team.id, { status: 'running' });
-      this.broadcastSnapshot();
-
-      sseBroker.broadcast(
-        'team_launched',
-        { team_id: team.id, issue_number: team.issueNumber, project_id: projectId },
-        team.id,
-      );
-      return;
-    }
-
-    // ── Headless mode (default): spawn in background, capture output ──
     const child = this.spawnAndValidate(claudePath, args, project.repoPath, spawnEnv, team.id);
     if (!child) return;
 
@@ -1318,6 +1199,7 @@ export class TeamManager {
   /**
    * Build the spawn environment for a Claude Code process.
    * Inherits the server's env and adds fleet/git-bash vars.
+   * This is the SINGLE source of CC env vars for BOTH headless and interactive modes.
    */
   private buildSpawnEnv(
     project: Project,
@@ -1329,51 +1211,168 @@ export class TeamManager {
       FLEET_TEAM_ID: worktreeName,
       FLEET_PROJECT_ID: String(projectId),
       FLEET_GITHUB_REPO: project.githubRepo ?? '',
+      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
     };
     const gitBash = findGitBash();
     if (gitBash) {
       env['CLAUDE_CODE_GIT_BASH_PATH'] = gitBash;
       console.log(`[TeamManager] CLAUDE_CODE_GIT_BASH_PATH=${gitBash}`);
     }
+    console.log(`[TeamManager] Spawn env: FLEET_TEAM_ID=${worktreeName}, FLEET_PROJECT_ID=${projectId}, CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`);
     return env;
   }
 
   /**
-   * Build the Claude CLI args array.
-   * @param options.worktreeName — worktree name for --worktree flag
+   * Build the base Claude CLI args shared by BOTH headless and interactive modes.
+   * @param worktreeName — worktree name for --worktree flag
    * @param options.resume — add --resume flag (for resume flow)
-   * @param options.headless — if false, skip stream-json flags (interactive mode)
    * @param options.model — optional model override from project
+   * @param options.prompt — positional prompt arg (interactive mode only)
    */
-  private buildClaudeArgs(options: {
-    worktreeName: string;
-    resume?: boolean;
-    headless?: boolean;
-    model?: string | null;
-  }): string[] {
+  private buildBaseClaudeArgs(
+    worktreeName: string,
+    options?: {
+      resume?: boolean;
+      model?: string | null;
+      prompt?: string;
+    },
+  ): string[] {
     const args: string[] = [];
-    if (options.resume) {
+    if (options?.resume) {
       args.push('--resume');
     }
-    args.push('--worktree', options.worktreeName);
-
-    // Only add stream-json flags for headless mode
-    const isHeadless = options.headless !== false;
-    if (isHeadless) {
-      args.push('--input-format', 'stream-json');
-      args.push('--output-format', 'stream-json');
-      args.push('--verbose');
-    }
+    args.push('--worktree', worktreeName);
 
     if (config.skipPermissions) {
       args.push('--dangerously-skip-permissions');
     }
 
-    if (options.model) {
+    if (options?.model) {
       args.push('--model', options.model);
     }
 
+    if (options?.prompt) {
+      args.push(options.prompt);
+    }
+
     return args;
+  }
+
+  /**
+   * Build Claude CLI args for headless (stream-json) mode.
+   * Calls buildBaseClaudeArgs() and appends stream-json + verbose flags.
+   */
+  private buildHeadlessClaudeArgs(
+    worktreeName: string,
+    options?: {
+      resume?: boolean;
+      model?: string | null;
+    },
+  ): string[] {
+    const args = this.buildBaseClaudeArgs(worktreeName, options);
+    args.push('--input-format', 'stream-json');
+    args.push('--output-format', 'stream-json');
+    args.push('--verbose');
+    return args;
+  }
+
+  /**
+   * Build the `set VAR=value` portion of the innerCommand for interactive
+   * mode on Windows. Iterates over buildSpawnEnv() output to generate
+   * set commands dynamically, ensuring all env vars are passed.
+   *
+   * Only includes fleet/CC-specific vars (prefixed FLEET_, CLAUDE_CODE_)
+   * to keep the command string manageable and avoid leaking unrelated env.
+   */
+  private buildInteractiveEnvSetCommands(
+    spawnEnv: Record<string, string | undefined>,
+  ): string {
+    const prefixes = ['FLEET_', 'CLAUDE_CODE_'];
+    const setCmds: string[] = [];
+    for (const [key, value] of Object.entries(spawnEnv)) {
+      if (value !== undefined && prefixes.some(p => key.startsWith(p))) {
+        setCmds.push(`set ${key}=${value}`);
+      }
+    }
+    return setCmds.join(' && ');
+  }
+
+  /**
+   * Launch a Claude Code process in interactive mode (Windows terminal).
+   * Extracted from the duplicated logic in launch() and launchQueued().
+   *
+   * Opens a new terminal window (wt.exe or cmd.exe) with the Claude Code
+   * CLI and all required env vars from buildSpawnEnv().
+   */
+  private async launchInteractive(
+    team: Team,
+    project: Project,
+    worktreeAbsPath: string,
+    prompt: string,
+  ): Promise<void> {
+    const db = getDatabase();
+
+    const args = this.buildBaseClaudeArgs(team.worktreeName, {
+      model: project.model,
+      prompt,
+    });
+
+    const spawnEnv = this.buildSpawnEnv(project, team.worktreeName, team.projectId!);
+    const fullCmd = `${config.claudeCmd} ${args.join(' ')}`;
+    const windowTitle = `Team ${team.worktreeName}`;
+
+    // Build env set commands dynamically from buildSpawnEnv()
+    const envSetCmds = this.buildInteractiveEnvSetCommands(spawnEnv);
+    const innerCommand = `cd /d "${worktreeAbsPath}" && ${envSetCmds} && ${fullCmd}`;
+
+    const termPref = config.terminalCmd;
+    let useWindowsTerminal = false;
+
+    if (termPref === 'wt') {
+      useWindowsTerminal = true;
+    } else if (termPref === 'auto') {
+      try {
+        await execAsync('where wt.exe', { timeout: 3000 });
+        useWindowsTerminal = true;
+      } catch {
+        useWindowsTerminal = false;
+      }
+    }
+
+    let startCommand: string;
+    if (useWindowsTerminal) {
+      startCommand = `wt.exe new-tab --title "${windowTitle}" cmd.exe /k "${innerCommand}"`;
+    } else {
+      startCommand = `start "${windowTitle}" cmd.exe /k "${innerCommand}"`;
+    }
+
+    console.log(`[TeamManager] Interactive spawn (terminal=${useWindowsTerminal ? 'wt' : 'cmd'}): ${startCommand}`);
+
+    const interactiveChild = spawn(startCommand, [], {
+      env: spawnEnv,
+      shell: true,
+      detached: true,
+      stdio: 'ignore',
+    });
+    interactiveChild.unref();
+
+    console.log(`[TeamManager] Interactive window opened for team ${team.id} (worktree: ${team.worktreeName})`);
+
+    db.insertTransition({
+      teamId: team.id,
+      fromStatus: 'launching',
+      toStatus: 'running',
+      trigger: 'system',
+      reason: 'Interactive terminal window opened',
+    });
+    db.updateTeam(team.id, { status: 'running' });
+    this.broadcastSnapshot();
+
+    sseBroker.broadcast(
+      'team_launched',
+      { team_id: team.id, issue_number: team.issueNumber, project_id: team.projectId! },
+      team.id,
+    );
   }
 
   /**
