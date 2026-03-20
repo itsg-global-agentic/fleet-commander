@@ -40,9 +40,7 @@ const PM_MESSAGE_CARDS: Array<{
   { id: 'ci_blocked', eventName: 'CI Blocked', description: 'When CI failure count exceeds threshold' },
   { id: 'stuck_nudge', eventName: 'Stuck Nudge', description: 'When a team has been idle too long' },
   { id: 'nudge_progress', eventName: 'Nudge Progress', description: 'Ask TL for a status update' },
-  { id: 'ask_for_pr', eventName: 'Ask for PR', description: 'Request TL to open a pull request' },
   { id: 'check_ci', eventName: 'Check CI', description: 'Tell TL to fix failing CI' },
-  { id: 'wrap_up', eventName: 'Wrap Up', description: 'Tell TL to finish and push' },
 ];
 
 // ---------------------------------------------------------------------------

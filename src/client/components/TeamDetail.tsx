@@ -655,9 +655,7 @@ export function TeamDetail() {
                   <span className="text-xs text-dark-muted mr-1">Quick:</span>
                   {[
                     { id: 'nudge_progress', label: 'Status?', color: '#58A6FF' },
-                    { id: 'ask_for_pr', label: 'Open PR', color: '#3FB950' },
                     { id: 'check_ci', label: 'Fix CI', color: '#F85149', show: !!detail?.prNumber },
-                    { id: 'wrap_up', label: 'Wrap Up', color: '#D29922' },
                   ].filter(a => a.show !== false).map((action) => (
                     <button
                       key={action.id}
