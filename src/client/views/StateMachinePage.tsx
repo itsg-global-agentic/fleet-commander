@@ -320,6 +320,7 @@ interface LayoutNode {
 interface LayoutEdge {
   from: string;
   to: string;
+  trigger: string;
   points: Array<{ x: number; y: number }>;
   transitions: Transition[];
 }
@@ -335,7 +336,7 @@ const ALL_NODE_WIDTH = 70;
 const ALL_NODE_HEIGHT = 30;
 
 function computeLayout(states: StateNode[], transitions: Transition[]): LayoutResult {
-  const g = new dagre.graphlib.Graph();
+  const g = new dagre.graphlib.Graph({ multigraph: true });
   g.setGraph({
     rankdir: 'LR',
     nodesep: 60,
@@ -365,14 +366,15 @@ function computeLayout(states: StateNode[], transitions: Transition[]): LayoutRe
     // Skip edges referencing unknown states (but allow the "*" pseudo-node)
     if (from !== '*' && !stateIds.has(from)) continue;
     if (!stateIds.has(t.to)) continue;
-    const key = `${from}->${t.to}`;
+    const key = `${from}->${t.to}|${t.trigger}`;
     if (!edgeMap.has(key)) edgeMap.set(key, []);
     edgeMap.get(key)!.push(t);
   }
 
   edgeMap.forEach((_trans, key) => {
-    const [from, to] = key.split('->');
-    g.setEdge(from, to);
+    const [fromTo, trigger] = key.split('|');
+    const [from, to] = fromTo.split('->');
+    g.setEdge(from, to, {}, trigger);
   });
 
   dagre.layout(g);
@@ -384,10 +386,11 @@ function computeLayout(states: StateNode[], transitions: Transition[]): LayoutRe
 
   const edges: LayoutEdge[] = g.edges().map((e) => {
     const edge = g.edge(e);
-    const key = `${e.v}->${e.w}`;
+    const key = `${e.v}->${e.w}|${e.name}`;
     return {
       from: e.v,
       to: e.w,
+      trigger: e.name || '',
       points: edge.points || [],
       transitions: edgeMap.get(key) || [],
     };
@@ -845,7 +848,7 @@ export function StateMachinePage() {
 
                 {/* Transition edges */}
                 {layout.edges.map((edge) => {
-                  const edgeKey = `${edge.from}->${edge.to}`;
+                  const edgeKey = `${edge.from}->${edge.to}|${edge.trigger}`;
                   const isHovered = edgeKey === hoveredEdge;
                   const points = edge.points;
                   if (points.length === 0) return null;
