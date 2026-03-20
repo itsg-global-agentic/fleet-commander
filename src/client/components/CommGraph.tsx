@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useCallback, useState } from 'react';
 import ForceGraph from 'react-force-graph-2d';
 import type { ForceGraphMethods } from 'react-force-graph-2d';
+// d3-force-3d is a transitive dep of react-force-graph-2d (no type declarations)
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-expect-error — d3-force-3d has no type declarations
+import { forceCollide, forceY } from 'd3-force-3d';
 import type { MessageEdge, TeamMember } from '../../shared/types';
 import { agentColor } from '../utils/constants';
 
@@ -221,6 +225,27 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
     prevEdgesRef.current = edges;
   }, [edges, graphData.links]);
 
+  // Configure d3 forces for better node distribution
+  useEffect(() => {
+    const fg = graphRef.current;
+    if (!fg || agents.length === 0) return;
+
+    // Stronger charge repulsion to push nodes apart
+    const charge = fg.d3Force('charge');
+    if (charge && typeof charge.strength === 'function') {
+      charge.strength(-200);
+    }
+
+    // Collision force prevents node overlap (NODE_RADIUS + padding)
+    fg.d3Force('collide', forceCollide(NODE_RADIUS + 20));
+
+    // Gentle y-force pushes non-pinned nodes below the TL
+    fg.d3Force('y', forceY(60).strength(0.1));
+
+    // Reheat the simulation so the new forces take effect
+    fg.d3ReheatSimulation();
+  }, [agents.length]);
+
   // Zoom to fit after data loads
   useEffect(() => {
     const fg = graphRef.current;
@@ -243,7 +268,7 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
       // Node circle fill
       ctx.beginPath();
       ctx.arc(x, y, r, 0, 2 * Math.PI);
-      ctx.fillStyle = node.color + '20';
+      ctx.fillStyle = node.color + '66';
       ctx.fill();
 
       // Node circle border
@@ -373,7 +398,7 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
         linkDirectionalArrowRelPos={1}
         linkDirectionalArrowColor={linkColor}
         linkCurvature={0.15}
-        d3AlphaDecay={0.05}
+        d3AlphaDecay={0.02}
         d3VelocityDecay={0.3}
         cooldownTicks={100}
         enableZoomInteraction={true}
