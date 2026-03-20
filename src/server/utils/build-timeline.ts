@@ -126,6 +126,6 @@ export function buildTimeline(
 
   merged.sort((a, b) => toEpoch(a.timestamp) - toEpoch(b.timestamp));
 
-  // 5. Apply limit
-  return merged.slice(0, limit);
+  // 5. Apply limit — take the MOST RECENT entries (tail) rather than oldest
+  return merged.slice(-limit);
 }

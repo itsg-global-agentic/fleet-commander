@@ -785,8 +785,8 @@ const teamsRoutes: FastifyPluginCallback = (
         const manager = getTeamManager();
         const streamEvents = manager.getParsedEvents(teamId);
 
-        // Fetch hook events from DB (no limit — buildTimeline handles it)
-        const hookEvents = db.getEventsByTeam(teamId);
+        // Fetch hook events from DB — cap at 500 to prevent unbounded queries
+        const hookEvents = db.getEventsByTeam(teamId, 500);
 
         const timeline = buildTimeline(streamEvents, hookEvents, teamId, limit);
         return reply.code(200).send(timeline);
