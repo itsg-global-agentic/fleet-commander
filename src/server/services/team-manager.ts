@@ -1741,6 +1741,19 @@ export class TeamManager {
             // FC messages as PM ("You") messages in the Session Log.
             if (event.type === 'user') continue;
 
+            // Detect thinking start/stop from content_block_start/stop events
+            // (must run before the buffer-skip below so thinking state is tracked)
+            this.detectThinking(teamId, event);
+
+            // content_block_start/delta/stop events are high-frequency partial
+            // message fragments emitted by --include-partial-messages.  They are
+            // only needed for thinking detection (above) and must NOT be stored
+            // in the parsedEvents buffer — they would flood the 200-event cap
+            // and evict meaningful session log entries.
+            if (event.type === 'content_block_start' || event.type === 'content_block_delta' || event.type === 'content_block_stop') {
+              continue;
+            }
+
             // Store parsed event with timestamp
             const timestampedEvent: StreamEvent = {
               ...event,
@@ -1753,9 +1766,6 @@ export class TeamManager {
 
             // Accumulate token counts from assistant events
             this.accumulateTokens(teamId, event);
-
-            // Detect thinking start/stop from content_block_start/stop events
-            this.detectThinking(teamId, event);
 
             // Broadcast interesting events via SSE
             if (['assistant', 'tool_use', 'tool_result', 'result'].includes(event.type)) {
@@ -1784,17 +1794,23 @@ export class TeamManager {
 
             // Skip CC-echoed "user" events (same rationale as in 'data' handler)
             if (event.type !== 'user') {
-              const timestampedEvent: StreamEvent = {
-                ...event,
-                timestamp: new Date().toISOString(),
-              };
-              events.push(timestampedEvent);
-              if (events.length > MAX_PARSED_EVENTS) {
-                events.shift();
-              }
+              // Detect thinking state before filtering
+              this.detectThinking(teamId, event);
 
-              // Accumulate token counts from assistant events
-              this.accumulateTokens(teamId, event);
+              // Filter out content_block events (same rationale as in 'data' handler)
+              if (event.type !== 'content_block_start' && event.type !== 'content_block_delta' && event.type !== 'content_block_stop') {
+                const timestampedEvent: StreamEvent = {
+                  ...event,
+                  timestamp: new Date().toISOString(),
+                };
+                events.push(timestampedEvent);
+                if (events.length > MAX_PARSED_EVENTS) {
+                  events.shift();
+                }
+
+                // Accumulate token counts from assistant events
+                this.accumulateTokens(teamId, event);
+              }
             }
           } catch {
             console.log(`[CC:${logPrefix}:raw] ${trimmed.substring(0, 200)}`);

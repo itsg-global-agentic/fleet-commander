@@ -24,7 +24,7 @@ export function FleetProvider({ children }: { children: ReactNode }) {
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
   const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thinkingTeamIdsRef = useRef<Set<number>>(new Set());
-  const [, forceThinkingUpdate] = useState(0);
+  const [thinkingVersion, forceThinkingUpdate] = useState(0);
 
   // Fetch the full team dashboard from the REST API.
   // Used as a fallback when an SSE event signals a change but
@@ -128,7 +128,8 @@ export function FleetProvider({ children }: { children: ReactNode }) {
     lastEvent,
     lastEventTeamId,
     isThinking,
-  }), [teams, selectedTeamId, connected, lastEvent, lastEventTeamId, isThinking]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- thinkingVersion forces recompute so consumers re-render on thinking state changes
+  }), [teams, selectedTeamId, connected, lastEvent, lastEventTeamId, isThinking, thinkingVersion]);
 
   return (
     <FleetContext.Provider value={value}>
