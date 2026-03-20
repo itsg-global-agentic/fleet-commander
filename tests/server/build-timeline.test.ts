@@ -337,6 +337,53 @@ describe('buildTimeline', () => {
     expect(entry.message).toEqual({ content: [{ type: 'text', text: 'Wake up!' }] });
   });
 
+  it('preserves agentName sentinel on synthetic FC stream events', () => {
+    const stream: RawStreamEvent[] = [
+      makeStreamEvent({
+        type: 'fc',
+        subtype: 'initial_prompt',
+        agentName: '__fc__',
+        timestamp: '2026-03-20T10:00:00.000Z',
+        message: { content: [{ type: 'text', text: 'Launch prompt' }] },
+      }),
+      makeStreamEvent({
+        type: 'fc',
+        subtype: 'origin_sync',
+        agentName: '__fc__',
+        timestamp: '2026-03-20T10:00:01.000Z',
+        message: { content: [{ type: 'text', text: 'Synced with origin' }] },
+      }),
+    ];
+
+    const result = buildTimeline(stream, [], 1);
+    expect(result).toHaveLength(2);
+
+    for (const entry of result) {
+      expect(entry.source).toBe('stream');
+      const streamEntry = entry as { agentName?: string; streamType: string };
+      expect(streamEntry.streamType).toBe('fc');
+      expect(streamEntry.agentName).toBe('__fc__');
+    }
+  });
+
+  it('preserves agentName sentinel on synthetic user stream events', () => {
+    const stream: RawStreamEvent[] = [
+      makeStreamEvent({
+        type: 'user',
+        agentName: '__pm__',
+        timestamp: '2026-03-20T10:00:00.000Z',
+        message: { content: [{ type: 'text', text: 'PM message to team' }] },
+      }),
+    ];
+
+    const result = buildTimeline(stream, [], 1);
+    expect(result).toHaveLength(1);
+
+    const entry = result[0] as { agentName?: string; streamType: string };
+    expect(entry.streamType).toBe('user');
+    expect(entry.agentName).toBe('__pm__');
+  });
+
   it('preserves hook event payload and agentName', () => {
     const hooks: Event[] = [
       makeHookEvent({
