@@ -52,16 +52,21 @@ const LINE_KEYS = ['dailyPercent', 'weeklyPercent', 'sonnetPercent', 'extraPerce
 
 interface ChartDataPoint {
   time: number;
-  hour: string;
+  label: string;
   dailyPercent: number;
   weeklyPercent: number;
   sonnetPercent: number;
   extraPercent: number;
 }
 
-/** Format an hour label from a Date for the X axis */
-function formatHourLabel(date: Date): string {
-  return `${String(date.getHours()).padStart(2, '0')}:00`;
+/** Format a date+time label for the X axis (e.g. "Mar 14 12:00") */
+function formatTickLabel(date: Date): string {
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 /** Format a full time string for the tooltip */
@@ -122,14 +127,14 @@ function UsageTooltip({ active, payload, label }: CustomTooltipProps) {
 export function UsageChart({ snapshots, redThresholds }: UsageChartProps) {
   const chartData = useMemo<ChartDataPoint[]>(() => {
     const now = Date.now();
-    const cutoff = now - 24 * 60 * 60 * 1000; // 24 hours ago
+    const cutoff = now - 7 * 24 * 60 * 60 * 1000; // 7 days ago
 
     return snapshots
       .map((snap) => {
         const time = new Date(snap.recordedAt).getTime();
         return {
           time,
-          hour: formatHourLabel(new Date(time)),
+          label: formatTickLabel(new Date(time)),
           dailyPercent: snap.dailyPercent,
           weeklyPercent: snap.weeklyPercent,
           sonnetPercent: snap.sonnetPercent,
@@ -140,16 +145,16 @@ export function UsageChart({ snapshots, redThresholds }: UsageChartProps) {
       .sort((a, b) => a.time - b.time);
   }, [snapshots]);
 
-  // Compute a fixed 24h domain for the X axis
+  // Compute a fixed 7-day domain for the X axis
   const domain = useMemo<[number, number]>(() => {
     const now = Date.now();
-    return [now - 24 * 60 * 60 * 1000, now];
+    return [now - 7 * 24 * 60 * 60 * 1000, now];
   }, [chartData]); // eslint-disable-line -- recalculate when data changes
 
   if (chartData.length === 0) {
     return (
       <div className="flex items-center justify-center py-12">
-        <p className="text-dark-muted text-sm">No usage data in the last 24 hours</p>
+        <p className="text-dark-muted text-sm">No usage data in the last 7 days</p>
       </div>
     );
   }
@@ -167,7 +172,7 @@ export function UsageChart({ snapshots, redThresholds }: UsageChartProps) {
             dataKey="time"
             type="number"
             domain={domain}
-            tickFormatter={(ts: number) => formatHourLabel(new Date(ts))}
+            tickFormatter={(ts: number) => formatTickLabel(new Date(ts))}
             stroke="#8B949E"
             tick={{ fill: '#8B949E', fontSize: 11 }}
             axisLine={{ stroke: '#30363D' }}
