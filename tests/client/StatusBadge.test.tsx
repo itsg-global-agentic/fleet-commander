@@ -18,7 +18,7 @@ const STATUS_EXPECTATIONS: Record<TeamStatus, { label: string; color: string }> 
   idle:      { label: 'Idle',      color: '#D29922' },
   done:      { label: 'Done',      color: '#A371F7' },
   failed:    { label: 'Failed',    color: '#F85149' },
-  launching: { label: 'Launching', color: '#58A6FF' },
+  launching: { label: 'Launching', color: '#D29922' },
   queued:    { label: 'Queued',    color: '#8B949E' },
 };
 

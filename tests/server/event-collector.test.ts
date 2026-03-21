@@ -84,7 +84,8 @@ describe('Valid payload processing', () => {
     'subagent_stop',
     'notification',
     'teammate_idle',
-    'cost_update',
+    'tool_error',
+    'pre_compact',
   ];
 
   const normalizedTypes: Record<string, string> = {
@@ -97,7 +98,8 @@ describe('Valid payload processing', () => {
     subagent_stop: 'SubagentStop',
     notification: 'Notification',
     teammate_idle: 'TeammateIdle',
-    cost_update: 'CostUpdate',
+    tool_error: 'ToolError',
+    pre_compact: 'PreCompact',
   };
 
   for (const eventType of eventTypes) {
@@ -1026,6 +1028,8 @@ describe('Subagent crash detection', () => {
     expect(sender.sendMessage).toHaveBeenCalledWith(
       1,
       expect.stringContaining("Subagent 'fleet-dev' appears to have crashed"),
+      'fc',
+      'subagent_crash',
     );
   });
 
@@ -1129,6 +1133,8 @@ describe('Subagent crash detection', () => {
     expect(sender.sendMessage).toHaveBeenCalledWith(
       1,
       expect.stringContaining("'fleet-dev'"),
+      'fc',
+      'subagent_crash',
     );
 
     sender.sendMessage.mockClear();

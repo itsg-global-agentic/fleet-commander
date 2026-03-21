@@ -274,7 +274,7 @@ describe('Events API', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('POST /api/events returns 400 for unknown team', async () => {
+  it('POST /api/events returns 404 for unknown team', async () => {
     const res = await server.inject({
       method: 'POST',
       url: '/api/events',
@@ -284,7 +284,7 @@ describe('Events API', () => {
       },
     });
 
-    expect(res.statusCode).toBe(400);
+    expect(res.statusCode).toBe(404);
     const body = res.json();
     expect(body.message).toContain('not found');
   });
