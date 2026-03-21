@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:client": "vitest run --config vitest.client.config.ts",
     "test:watch": "vitest",
-    "test:e2e": "bash tests/e2e/smoke-test.sh"
+    "test:e2e": "bash tests/e2e/smoke-test.sh",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.3",

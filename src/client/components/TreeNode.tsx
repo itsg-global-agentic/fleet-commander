@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
 import { PlayIcon, LockIcon } from './Icons';
-import type { TeamStatus, PrioritizedIssue, IssueDependencyInfo } from '../../shared/types';
+import type { TeamStatus, PrioritizedIssue, IssueDependencyInfo, CIStatus } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors IssueNode from the server issue-fetcher)
@@ -278,7 +278,7 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
           <span className="shrink-0 ml-1">
             {/* ciStatus: map PR state to a CI-like indicator when available;
                null means no CI data is present on the issue-tree node */}
-            <PRBadge prNumber={firstPR.number} ciStatus={firstPR.state ?? null} />
+            <PRBadge prNumber={firstPR.number} ciStatus={(firstPR.state as CIStatus) ?? null} />
           </span>
         )}
 

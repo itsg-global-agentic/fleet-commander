@@ -155,14 +155,14 @@ function preprocessTransitions(
   states: StateNode[],
   rawTransitions: Transition[],
 ): PreprocessResult {
-  const stateIds = states.map((s) => s.id);
+  const stateIds = states.map((s) => s.id as Transition['from']);
 
   // Step 1: Expand wildcards — replace from:'*' with one transition per state
   const expanded: Transition[] = rawTransitions.flatMap((t) => {
     if (t.from === '*') {
       return stateIds.map((s) => ({
         ...t,
-        from: s as Transition['from'],
+        from: s,
         id: `${t.id}-${s}`,
       }));
     }
