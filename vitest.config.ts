@@ -4,11 +4,34 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   test: {
-    include: ['src/**/*.test.{ts,tsx}', 'tests/**/*.test.{ts,tsx}'],
-    environment: 'node',
-    environmentMatchGlobs: [
-      ['tests/client/**', 'jsdom'],
-    ],
     globals: true,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: 'client',
+          environment: 'jsdom',
+          include: ['tests/client/**/*.test.{ts,tsx}'],
+          pool: 'forks',
+          poolOptions: {
+            forks: {
+              maxForks: 2,
+            },
+          },
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: 'server',
+          environment: 'node',
+          include: [
+            'src/**/*.test.{ts,tsx}',
+            'tests/server/**/*.test.{ts,tsx}',
+            'tests/integration/**/*.test.{ts,tsx}',
+          ],
+        },
+      },
+    ],
   },
 });
