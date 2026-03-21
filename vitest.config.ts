@@ -15,13 +15,7 @@ export default defineConfig({
       'tests/integration/**/*.test.{ts,tsx}',
       'src/**/*.test.{ts,tsx}',
     ],
-    pool: 'forks',
     logHeapUsage: true,
     teardownTimeout: 1000,
-    poolOptions: {
-      forks: {
-        maxForks: 1,
-      },
-    },
   },
 });
