@@ -14,8 +14,6 @@ import type {
 } from 'fastify';
 import fs from 'fs';
 import path from 'path';
-import { getDatabase } from '../db.js';
-import { sseBroker } from '../services/sse-broker.js';
 import { getDiagnosticsService } from '../services/diagnostics-service.js';
 import { ServiceError } from '../services/service-error.js';
 import config from '../config.js';
@@ -43,19 +41,13 @@ const systemRoutes: FastifyPluginCallback = (
     '/api/diagnostics/stuck',
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const db = getDatabase();
-        const candidates = db.getStuckCandidates(
-          config.idleThresholdMin,
-          config.stuckThresholdMin,
-        );
-
-        return reply.code(200).send({
-          idleThresholdMin: config.idleThresholdMin,
-          stuckThresholdMin: config.stuckThresholdMin,
-          count: candidates.length,
-          teams: candidates,
-        });
+        const service = getDiagnosticsService();
+        const result = service.getStuckTeams();
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         _request.log.error(err, 'Failed to get stuck diagnostics');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -118,24 +110,13 @@ const systemRoutes: FastifyPluginCallback = (
     '/api/status',
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const db = getDatabase();
-        const activeTeams = db.getActiveTeams();
-        const uptimeMs = Date.now() - SERVER_START_TIME;
-        const uptimeSec = Math.floor(uptimeMs / 1000);
-
-        return reply.code(200).send({
-          status: 'ok',
-          uptime: {
-            seconds: uptimeSec,
-            formatted: formatUptime(uptimeSec),
-          },
-          activeTeams: activeTeams.length,
-          sseConnections: sseBroker.getClientCount(),
-          dbSizeBytes: db.getDbFileSize(),
-          serverStartedAt: new Date(SERVER_START_TIME).toISOString(),
-          version: getPackageVersion(),
-        });
+        const service = getDiagnosticsService();
+        const result = service.getServerStatus(SERVER_START_TIME);
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         _request.log.error(err, 'Failed to get server status');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -152,20 +133,13 @@ const systemRoutes: FastifyPluginCallback = (
     '/api/debug/teams',
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const db = getDatabase();
-        const allTeams = db.getTeams();
-        const dashboard = db.getTeamDashboard();
-        const activeTeams = db.getActiveTeams();
-
-        return reply.code(200).send({
-          rawTeams: allTeams,
-          dashboardTeams: dashboard,
-          activeTeams,
-          teamCount: allTeams.length,
-          dashboardCount: dashboard.length,
-          activeCount: activeTeams.length,
-        });
+        const service = getDiagnosticsService();
+        const result = service.getDebugTeams();
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         _request.log.error(err, 'Failed to get debug teams');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -291,38 +265,5 @@ const systemRoutes: FastifyPluginCallback = (
 
   done();
 };
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Read version from package.json (cached after first call) */
-let _cachedVersion: string | null = null;
-function getPackageVersion(): string {
-  if (_cachedVersion) return _cachedVersion;
-  try {
-    const pkgPath = path.join(config.fleetCommanderRoot, 'package.json');
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-    _cachedVersion = pkg.version ?? '0.0.0';
-  } catch {
-    _cachedVersion = '0.0.0';
-  }
-  return _cachedVersion!;
-}
-
-function formatUptime(totalSeconds: number): string {
-  const days = Math.floor(totalSeconds / 86400);
-  const hours = Math.floor((totalSeconds % 86400) / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-
-  const parts: string[] = [];
-  if (days > 0) parts.push(`${days}d`);
-  if (hours > 0) parts.push(`${hours}h`);
-  if (minutes > 0) parts.push(`${minutes}m`);
-  parts.push(`${seconds}s`);
-
-  return parts.join(' ');
-}
 
 export default systemRoutes;

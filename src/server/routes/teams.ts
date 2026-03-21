@@ -13,8 +13,6 @@ import type {
   FastifyRequest,
   FastifyReply,
 } from 'fastify';
-import { getTeamManager } from '../services/team-manager.js';
-import { getDatabase } from '../db.js';
 import { getTeamService } from '../services/team-service.js';
 import { ServiceError } from '../services/service-error.js';
 import type { TeamPhase } from '../../shared/types.js';
@@ -151,10 +149,13 @@ const teamsRoutes: FastifyPluginCallback = (
     '/api/teams/stop-all',
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const manager = getTeamManager();
-        const teams = await manager.stopAll();
+        const service = getTeamService();
+        const teams = await service.stopAll();
         return reply.code(200).send(teams);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to stop all teams');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -175,19 +176,15 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        const manager = getTeamManager();
-        const team = await manager.stop(teamId);
+        const service = getTeamService();
+        const team = await service.stopTeam(teamId);
         return reply.code(200).send(team);
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
 
+        const message = err instanceof Error ? err.message : String(err);
         if (message.includes('not found')) {
           return reply.code(404).send({ error: 'Not Found', message });
         }
@@ -212,19 +209,15 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        const manager = getTeamManager();
-        const team = await manager.forceLaunch(teamId);
+        const service = getTeamService();
+        const team = await service.forceLaunch(teamId);
         return reply.code(200).send(team);
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
 
+        const message = err instanceof Error ? err.message : String(err);
         if (message.includes('not found')) {
           return reply.code(404).send({ error: 'Not Found', message });
         }
@@ -252,28 +245,15 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        // Reject resume for completed teams
-        const existingTeam = getDatabase().getTeam(teamId);
-        if (existingTeam && existingTeam.status === 'done') {
-          return reply.code(409).send({
-            error: 'Conflict',
-            message: 'Cannot resume a completed team',
-          });
-        }
-
-        const manager = getTeamManager();
-        const team = await manager.resume(teamId);
+        const service = getTeamService();
+        const team = await service.resumeTeam(teamId);
         return reply.code(200).send(team);
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
 
+        const message = err instanceof Error ? err.message : String(err);
         if (message.includes('not found')) {
           return reply.code(404).send({ error: 'Not Found', message });
         }
@@ -301,29 +281,16 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        // Reject restart for completed teams
-        const existingTeam = getDatabase().getTeam(teamId);
-        if (existingTeam && existingTeam.status === 'done') {
-          return reply.code(409).send({
-            error: 'Conflict',
-            message: 'Cannot restart a completed team',
-          });
-        }
-
         const { prompt } = request.body || {};
-        const manager = getTeamManager();
-        const team = await manager.restart(teamId, prompt);
+        const service = getTeamService();
+        const team = await service.restartTeam(teamId, prompt);
         return reply.code(200).send(team);
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : String(err);
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
 
+        const message = err instanceof Error ? err.message : String(err);
         if (message.includes('not found')) {
           return reply.code(404).send({ error: 'Not Found', message });
         }
@@ -344,10 +311,13 @@ const teamsRoutes: FastifyPluginCallback = (
     '/api/teams',
     async (_request: FastifyRequest, reply: FastifyReply) => {
       try {
-        const db = getDatabase();
-        const dashboard = db.getTeamDashboard();
+        const service = getTeamService();
+        const dashboard = service.listTeams();
         return reply.code(200).send(dashboard);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         _request.log.error(err, 'Failed to list teams');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -428,34 +398,16 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
         const linesParam = (request.query as OutputQuerystring).lines;
         const lines = linesParam ? parseInt(linesParam, 10) : undefined;
 
-        const manager = getTeamManager();
-        const output = manager.getOutput(teamId, lines);
-
-        return reply.code(200).send({
-          teamId,
-          lines: output,
-          count: output.length,
-        });
+        const service = getTeamService();
+        const result = service.getOutput(teamId, lines);
+        return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get team output');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -476,26 +428,13 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
-        const manager = getTeamManager();
-        const events = manager.getParsedEvents(teamId);
+        const service = getTeamService();
+        const events = service.getStreamEvents(teamId);
         return reply.code(200).send(events);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get team stream events');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -591,28 +530,16 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
         const limitParam = (request.query as { limit?: string }).limit;
         const limit = limitParam ? parseInt(limitParam, 10) : 100;
 
-        const events = db.getEventsByTeam(teamId, limit);
+        const service = getTeamService();
+        const events = service.getEvents(teamId, limit);
         return reply.code(200).send(events);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get team events');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -716,25 +643,13 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
-        const roster = db.getTeamRoster(teamId);
+        const service = getTeamService();
+        const roster = service.getRoster(teamId);
         return reply.code(200).send(roster);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get team roster');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -755,25 +670,13 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
-        const transitions = db.getTransitions(teamId);
+        const service = getTeamService();
+        const transitions = service.getTransitions(teamId);
         return reply.code(200).send(transitions);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get team transitions');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -828,28 +731,16 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
         const limitParam = (request.query as { limit?: string }).limit;
         const limit = limitParam ? parseInt(limitParam, 10) : undefined;
 
-        const messages = db.getAgentMessages(teamId, limit);
+        const service = getTeamService();
+        const messages = service.getMessages(teamId, limit);
         return reply.code(200).send(messages);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get agent messages');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -870,25 +761,13 @@ const teamsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        if (isNaN(teamId) || teamId < 1) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'Invalid team ID',
-          });
-        }
-
-        const db = getDatabase();
-        const team = db.getTeam(teamId);
-        if (!team) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team ${teamId} not found`,
-          });
-        }
-
-        const summary = db.getAgentMessageSummary(teamId);
+        const service = getTeamService();
+        const summary = service.getMessageSummary(teamId);
         return reply.code(200).send(summary);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get agent message summary');
         return reply.code(500).send({
           error: 'Internal Server Error',

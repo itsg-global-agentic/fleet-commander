@@ -8,6 +8,7 @@
 import { execSync } from 'child_process';
 import { getDatabase } from '../db.js';
 import { sseBroker } from './sse-broker.js';
+import { githubPoller } from './github-poller.js';
 import { ServiceError, notFoundError, validationError, externalError } from './service-error.js';
 
 // ---------------------------------------------------------------------------
@@ -222,6 +223,67 @@ export class PRService {
       ok: true,
       message: `Branch updated for PR #${prNumber}`,
       output: result.stdout?.trim() ?? '',
+    };
+  }
+
+  /**
+   * List all tracked pull requests.
+   *
+   * @returns Array of all PR records
+   */
+  listPRs(): unknown[] {
+    const db = getDatabase();
+    return db.getAllPullRequests();
+  }
+
+  /**
+   * Get a single PR detail with checks_json parsed into a proper array.
+   *
+   * @param prNumber - The PR number
+   * @returns PR record with parsed checks array
+   * @throws ServiceError with code VALIDATION if prNumber is invalid
+   * @throws ServiceError with code NOT_FOUND if PR doesn't exist
+   */
+  getPRDetail(prNumber: number): unknown {
+    if (isNaN(prNumber) || prNumber < 1) {
+      throw validationError('Invalid PR number');
+    }
+
+    const db = getDatabase();
+    const pr = db.getPullRequest(prNumber);
+    if (!pr) {
+      throw notFoundError(`PR #${prNumber} not found`);
+    }
+
+    let checks: unknown[] = [];
+    if (pr.checksJson) {
+      try {
+        checks = JSON.parse(pr.checksJson);
+      } catch {
+        checks = [];
+      }
+    }
+
+    return {
+      ...pr,
+      checks,
+    };
+  }
+
+  /**
+   * Trigger an immediate GitHub poller poll.
+   * The poll runs asynchronously; this returns immediately.
+   *
+   * @returns Success acknowledgment
+   */
+  triggerRefresh(): { ok: boolean; message: string } {
+    githubPoller.poll().catch((err) => {
+      console.error('[PRService] Poll failed:', err instanceof Error ? err.message : err);
+    });
+
+    return {
+      ok: true,
+      message: 'GitHub poller poll triggered',
     };
   }
 }

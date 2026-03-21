@@ -4,6 +4,8 @@ import type { EventPayload, EventCollectorDb, SseBroker, TeamMessageSender } fro
 import { getDatabase } from '../db.js';
 import { sseBroker } from '../services/sse-broker.js';
 import { getTeamManager } from '../services/team-manager.js';
+import { getEventService } from '../services/event-service.js';
+import { ServiceError } from '../services/service-error.js';
 
 interface EventQuerystring {
   team_id?: string;
@@ -171,22 +173,18 @@ const eventsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const query = request.query;
-        const db = getDatabase();
-        const teamId = query.team_id ? parseInt(query.team_id, 10) : undefined;
-        const eventType = query.type || undefined;
-        const since = query.since || undefined;
-        const limit = query.limit ? parseInt(query.limit, 10) : 100;
-
-        if (query.team_id && (isNaN(teamId!) || teamId! < 1)) {
-          return reply.code(400).send({ error: 'Bad Request', message: 'Invalid team_id' });
-        }
-        if (query.limit && (isNaN(limit) || limit < 1)) {
-          return reply.code(400).send({ error: 'Bad Request', message: 'Invalid limit' });
-        }
-
-        const events = db.getAllEvents({ teamId, eventType, since, limit });
+        const service = getEventService();
+        const events = service.queryEvents({
+          teamId: query.team_id ? parseInt(query.team_id, 10) : undefined,
+          eventType: query.type || undefined,
+          since: query.since || undefined,
+          limit: query.limit ? parseInt(query.limit, 10) : undefined,
+        });
         return reply.code(200).send(events);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Unexpected error querying events');
         return reply.code(500).send({ error: 'Internal Server Error', message: 'Failed to query events' });
       }

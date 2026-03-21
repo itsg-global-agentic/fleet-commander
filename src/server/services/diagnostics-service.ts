@@ -5,6 +5,8 @@
 // and factory reset capability. Used by system routes and future MCP tools.
 // =============================================================================
 
+import fs from 'fs';
+import path from 'path';
 import { getDatabase } from '../db.js';
 import { getTeamManager } from './team-manager.js';
 import { sseBroker } from './sse-broker.js';
@@ -178,6 +180,111 @@ export class DiagnosticsService {
       templatesSeeded,
     };
   }
+
+  /**
+   * Get teams that are idle or stuck (candidates for intervention).
+   *
+   * @returns Object with thresholds and candidate teams
+   */
+  getStuckTeams(): {
+    idleThresholdMin: number;
+    stuckThresholdMin: number;
+    count: number;
+    teams: unknown[];
+  } {
+    const db = getDatabase();
+    const candidates = db.getStuckCandidates(
+      config.idleThresholdMin,
+      config.stuckThresholdMin,
+    );
+
+    return {
+      idleThresholdMin: config.idleThresholdMin,
+      stuckThresholdMin: config.stuckThresholdMin,
+      count: candidates.length,
+      teams: candidates,
+    };
+  }
+
+  /**
+   * Get server status info (uptime, active teams, SSE connections, DB size).
+   *
+   * @param serverStartTime - The time the server started (millisecond epoch)
+   * @returns Server status object
+   */
+  getServerStatus(serverStartTime: number): unknown {
+    const db = getDatabase();
+    const activeTeams = db.getActiveTeams();
+    const uptimeMs = Date.now() - serverStartTime;
+    const uptimeSec = Math.floor(uptimeMs / 1000);
+
+    return {
+      status: 'ok',
+      uptime: {
+        seconds: uptimeSec,
+        formatted: formatUptime(uptimeSec),
+      },
+      activeTeams: activeTeams.length,
+      sseConnections: sseBroker.getClientCount(),
+      dbSizeBytes: db.getDbFileSize(),
+      serverStartedAt: new Date(serverStartTime).toISOString(),
+      version: getPackageVersion(),
+    };
+  }
+
+  /**
+   * Get raw database state for debugging.
+   *
+   * @returns Debug info with raw teams, dashboard teams, and active teams
+   */
+  getDebugTeams(): unknown {
+    const db = getDatabase();
+    const allTeams = db.getTeams();
+    const dashboard = db.getTeamDashboard();
+    const activeTeams = db.getActiveTeams();
+
+    return {
+      rawTeams: allTeams,
+      dashboardTeams: dashboard,
+      activeTeams,
+      teamCount: allTeams.length,
+      dashboardCount: dashboard.length,
+      activeCount: activeTeams.length,
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Read version from package.json (cached after first call) */
+let _cachedVersion: string | null = null;
+function getPackageVersion(): string {
+  if (_cachedVersion) return _cachedVersion;
+  try {
+    const pkgPath = path.join(config.fleetCommanderRoot, 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    _cachedVersion = pkg.version ?? '0.0.0';
+  } catch {
+    _cachedVersion = '0.0.0';
+  }
+  return _cachedVersion!;
+}
+
+function formatUptime(totalSeconds: number): string {
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const parts: string[] = [];
+  if (days > 0) parts.push(`${days}d`);
+  if (hours > 0) parts.push(`${hours}h`);
+  if (minutes > 0) parts.push(`${minutes}m`);
+  parts.push(`${seconds}s`);
+
+  return parts.join(' ');
 }
 
 // ---------------------------------------------------------------------------

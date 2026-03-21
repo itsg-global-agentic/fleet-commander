@@ -17,6 +17,8 @@ import { installHooks, uninstallHooks } from '../utils/hook-installer.js';
 import config from '../config.js';
 import type { ProjectStatus, InstallStatus, InstallFileStatus } from '../../shared/types.js';
 import { ServiceError, validationError, notFoundError, conflictError } from './service-error.js';
+import { getCleanupPreview as _getCleanupPreview, executeCleanup as _executeCleanup } from './cleanup.js';
+import type { CleanupPreview, CleanupResult } from '../../shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -519,6 +521,161 @@ export class ProjectService {
     fs.writeFileSync(absPath, content, 'utf-8');
 
     return { promptFile: project.promptFile, content };
+  }
+
+  /**
+   * Update a project's fields (name, status, githubRepo, groupId, etc.).
+   * Validates input and broadcasts SSE event.
+   *
+   * @param projectId - The project ID
+   * @param data - Fields to update
+   * @returns The updated project record
+   * @throws ServiceError with code VALIDATION for invalid input
+   * @throws ServiceError with code NOT_FOUND if project doesn't exist
+   */
+  updateProject(projectId: number, data: {
+    name?: string;
+    status?: ProjectStatus;
+    githubRepo?: string | null;
+    groupId?: number | null;
+    hooksInstalled?: boolean;
+    maxActiveTeams?: number;
+    promptFile?: string | null;
+    model?: string | null;
+  }): unknown {
+    if (isNaN(projectId) || projectId < 1) {
+      throw validationError('Invalid project ID');
+    }
+
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project) {
+      throw notFoundError(`Project ${projectId} not found`);
+    }
+
+    const { name, status, githubRepo, groupId, hooksInstalled, maxActiveTeams, promptFile, model } = data;
+
+    // Validate status if provided
+    if (status !== undefined) {
+      const validStatuses: ProjectStatus[] = ['active', 'archived'];
+      if (!validStatuses.includes(status)) {
+        throw validationError(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+      }
+    }
+
+    // Validate name if provided
+    if (name !== undefined && (typeof name !== 'string' || name.trim().length === 0)) {
+      throw validationError('name must be a non-empty string');
+    }
+
+    // Validate maxActiveTeams if provided
+    if (maxActiveTeams !== undefined) {
+      if (typeof maxActiveTeams !== 'number' || maxActiveTeams < 1 || maxActiveTeams > 50) {
+        throw validationError('maxActiveTeams must be a number between 1 and 50');
+      }
+    }
+
+    const updated = db.updateProject(projectId, {
+      name: name?.trim(),
+      status,
+      githubRepo,
+      groupId,
+      hooksInstalled,
+      maxActiveTeams,
+      promptFile,
+      model: model !== undefined ? (model?.trim() || null) : undefined,
+    });
+
+    // Broadcast SSE event
+    sseBroker.broadcast('project_updated', {
+      project_id: projectId,
+      name: updated!.name,
+      status: updated!.status,
+    });
+
+    return updated;
+  }
+
+  /**
+   * Get teams belonging to a project.
+   *
+   * @param projectId - The project ID
+   * @returns Array of teams for the project
+   * @throws ServiceError with code VALIDATION if projectId is invalid
+   * @throws ServiceError with code NOT_FOUND if project doesn't exist
+   */
+  getProjectTeams(projectId: number): unknown[] {
+    if (isNaN(projectId) || projectId < 1) {
+      throw validationError('Invalid project ID');
+    }
+
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project) {
+      throw notFoundError(`Project ${projectId} not found`);
+    }
+
+    return db.getProjectTeams(projectId);
+  }
+
+  /**
+   * Generate a cleanup preview (dry-run) for a project.
+   *
+   * @param projectId - The project ID
+   * @param resetTeams - If true, include team DB records in preview
+   * @returns Cleanup preview with items that would be removed
+   * @throws ServiceError with code VALIDATION if projectId is invalid
+   * @throws ServiceError with code NOT_FOUND if project doesn't exist
+   */
+  getCleanupPreview(projectId: number, resetTeams: boolean): CleanupPreview {
+    if (isNaN(projectId) || projectId < 1) {
+      throw validationError('Invalid project ID');
+    }
+
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project) {
+      throw notFoundError(`Project ${projectId} not found`);
+    }
+
+    return _getCleanupPreview(projectId, resetTeams);
+  }
+
+  /**
+   * Execute cleanup for confirmed items. Broadcasts SSE event.
+   *
+   * @param projectId - The project ID
+   * @param itemPaths - Array of item paths to remove
+   * @param resetTeams - If true, allow removal of team DB records
+   * @returns Cleanup result with removed and failed items
+   * @throws ServiceError with code VALIDATION for invalid input
+   * @throws ServiceError with code NOT_FOUND if project doesn't exist
+   */
+  executeCleanup(projectId: number, itemPaths: string[], resetTeams: boolean): CleanupResult {
+    if (isNaN(projectId) || projectId < 1) {
+      throw validationError('Invalid project ID');
+    }
+
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project) {
+      throw notFoundError(`Project ${projectId} not found`);
+    }
+
+    if (!Array.isArray(itemPaths) || itemPaths.length === 0) {
+      throw validationError('No items provided. Send { items: [...paths] }.');
+    }
+
+    const result = _executeCleanup(projectId, itemPaths, resetTeams);
+
+    // Broadcast SSE event so dashboards refresh
+    sseBroker.broadcast('project_cleanup', {
+      project_id: projectId,
+      removed_count: result.removed.length,
+      failed_count: result.failed.length,
+    });
+
+    return result;
   }
 }
 

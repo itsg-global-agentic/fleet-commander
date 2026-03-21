@@ -12,12 +12,9 @@ import type {
   FastifyRequest,
   FastifyReply,
 } from 'fastify';
-import { getDatabase } from '../db.js';
-import { sseBroker } from '../services/sse-broker.js';
-import { getProjectService, checkInstallStatus } from '../services/project-service.js';
+import { getProjectService } from '../services/project-service.js';
 import { ServiceError } from '../services/service-error.js';
-import type { ProjectStatus, CleanupPreview, CleanupResult } from '../../shared/types.js';
-import { getCleanupPreview, executeCleanup } from '../services/cleanup.js';
+import type { ProjectStatus } from '../../shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Request body / param / query interfaces
@@ -173,66 +170,13 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const db = getDatabase();
-        const project = db.getProject(projectId);
-        if (!project) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Project ${projectId} not found`,
-          });
-        }
-
-        const { name, status, githubRepo, groupId, hooksInstalled, maxActiveTeams, promptFile, model } = request.body || {};
-
-        // Validate status if provided
-        if (status !== undefined) {
-          const validStatuses: ProjectStatus[] = ['active', 'archived'];
-          if (!validStatuses.includes(status)) {
-            return reply.code(400).send({
-              error: 'Bad Request',
-              message: `Invalid status. Must be one of: ${validStatuses.join(', ')}`,
-            });
-          }
-        }
-
-        // Validate name if provided
-        if (name !== undefined && (typeof name !== 'string' || name.trim().length === 0)) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'name must be a non-empty string',
-          });
-        }
-
-        // Validate maxActiveTeams if provided
-        if (maxActiveTeams !== undefined) {
-          if (typeof maxActiveTeams !== 'number' || maxActiveTeams < 1 || maxActiveTeams > 50) {
-            return reply.code(400).send({
-              error: 'Bad Request',
-              message: 'maxActiveTeams must be a number between 1 and 50',
-            });
-          }
-        }
-
-        const updated = db.updateProject(projectId, {
-          name: name?.trim(),
-          status,
-          githubRepo,
-          groupId,
-          hooksInstalled,
-          maxActiveTeams,
-          promptFile,
-          model: model !== undefined ? (model?.trim() || null) : undefined,
-        });
-
-        // Broadcast SSE event
-        sseBroker.broadcast('project_updated', {
-          project_id: projectId,
-          name: updated!.name,
-          status: updated!.status,
-        });
-
+        const service = getProjectService();
+        const updated = service.updateProject(projectId, request.body || {});
         return reply.code(200).send(updated);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to update project');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -328,18 +272,13 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const db = getDatabase();
-        const project = db.getProject(projectId);
-        if (!project) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Project ${projectId} not found`,
-          });
-        }
-
-        const teams = db.getProjectTeams(projectId);
+        const service = getProjectService();
+        const teams = service.getProjectTeams(projectId);
         return reply.code(200).send(teams);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to get project teams');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -367,19 +306,14 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const db = getDatabase();
-        const project = db.getProject(projectId);
-        if (!project) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Project ${projectId} not found`,
-          });
-        }
-
         const resetTeams = (request.query as { resetTeams?: string }).resetTeams === 'true';
-        const preview: CleanupPreview = getCleanupPreview(projectId, resetTeams);
+        const service = getProjectService();
+        const preview = service.getCleanupPreview(projectId, resetTeams);
         return reply.code(200).send(preview);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to generate cleanup preview');
         return reply.code(500).send({
           error: 'Internal Server Error',
@@ -407,37 +341,17 @@ const projectsRoutes: FastifyPluginCallback = (
           });
         }
 
-        const db = getDatabase();
-        const project = db.getProject(projectId);
-        if (!project) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Project ${projectId} not found`,
-          });
-        }
-
         const body = request.body || {};
         const itemPaths = Array.isArray(body.items) ? body.items : [];
         const resetTeams = body.resetTeams === true;
 
-        if (itemPaths.length === 0) {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'No items provided. Send { items: [...paths] }.',
-          });
-        }
-
-        const result: CleanupResult = executeCleanup(projectId, itemPaths, resetTeams);
-
-        // Broadcast SSE event so dashboards refresh
-        sseBroker.broadcast('project_cleanup', {
-          project_id: projectId,
-          removed_count: result.removed.length,
-          failed_count: result.failed.length,
-        });
-
+        const service = getProjectService();
+        const result = service.executeCleanup(projectId, itemPaths, resetTeams);
         return reply.code(200).send(result);
       } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
         request.log.error(err, 'Failed to execute cleanup');
         return reply.code(500).send({
           error: 'Internal Server Error',

@@ -540,6 +540,275 @@ export class TeamService {
 
     return updated;
   }
+
+  /**
+   * Stop a single team by ID.
+   *
+   * @param teamId - The team ID
+   * @returns The stopped team record
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  async stopTeam(teamId: number): Promise<unknown> {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const manager = getTeamManager();
+    return await manager.stop(teamId);
+  }
+
+  /**
+   * Stop all active teams.
+   *
+   * @returns Array of stopped team records
+   */
+  async stopAll(): Promise<unknown[]> {
+    const manager = getTeamManager();
+    return await manager.stopAll();
+  }
+
+  /**
+   * Force-launch a queued team, bypassing normal queue ordering.
+   *
+   * @param teamId - The team ID
+   * @returns The launched team record
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   * @throws ServiceError with code CONFLICT if team is not queued
+   */
+  async forceLaunch(teamId: number): Promise<unknown> {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const manager = getTeamManager();
+    return await manager.forceLaunch(teamId);
+  }
+
+  /**
+   * Resume a stopped team.
+   *
+   * @param teamId - The team ID
+   * @returns The resumed team record
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   * @throws ServiceError with code CONFLICT if team is completed
+   */
+  async resumeTeam(teamId: number): Promise<unknown> {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const existingTeam = db.getTeam(teamId);
+    if (existingTeam && existingTeam.status === 'done') {
+      throw conflictError('Cannot resume a completed team');
+    }
+
+    const manager = getTeamManager();
+    return await manager.resume(teamId);
+  }
+
+  /**
+   * Restart a team (stop and re-launch).
+   *
+   * @param teamId - The team ID
+   * @param prompt - Optional new prompt for the restart
+   * @returns The restarted team record
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   * @throws ServiceError with code CONFLICT if team is completed
+   */
+  async restartTeam(teamId: number, prompt?: string): Promise<unknown> {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const existingTeam = db.getTeam(teamId);
+    if (existingTeam && existingTeam.status === 'done') {
+      throw conflictError('Cannot restart a completed team');
+    }
+
+    const manager = getTeamManager();
+    return await manager.restart(teamId, prompt);
+  }
+
+  /**
+   * List all teams with dashboard data.
+   *
+   * @returns Array of team dashboard records
+   */
+  listTeams(): unknown[] {
+    const db = getDatabase();
+    return db.getTeamDashboard();
+  }
+
+  /**
+   * Get the rolling output buffer for a team.
+   *
+   * @param teamId - The team ID
+   * @param lines - Optional max lines to return
+   * @returns Object with teamId, lines array, and count
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getOutput(teamId: number, lines?: number): { teamId: number; lines: string[]; count: number } {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    const manager = getTeamManager();
+    const output = manager.getOutput(teamId, lines);
+
+    return {
+      teamId,
+      lines: output,
+      count: output.length,
+    };
+  }
+
+  /**
+   * Get parsed NDJSON stream events from Claude Code for a team.
+   *
+   * @param teamId - The team ID
+   * @returns Array of parsed stream events
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getStreamEvents(teamId: number): unknown[] {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    const manager = getTeamManager();
+    return manager.getParsedEvents(teamId);
+  }
+
+  /**
+   * Get hook events for a team.
+   *
+   * @param teamId - The team ID
+   * @param limit - Maximum number of events to return (default 100)
+   * @returns Array of events
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getEvents(teamId: number, limit = 100): unknown[] {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    return db.getEventsByTeam(teamId, limit);
+  }
+
+  /**
+   * Get team member roster derived from events.
+   *
+   * @param teamId - The team ID
+   * @returns Roster data
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getRoster(teamId: number): unknown {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    return db.getTeamRoster(teamId);
+  }
+
+  /**
+   * Get state transition history for a team.
+   *
+   * @param teamId - The team ID
+   * @returns Array of transitions
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getTransitions(teamId: number): unknown[] {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    return db.getTransitions(teamId);
+  }
+
+  /**
+   * Get agent messages for a team.
+   *
+   * @param teamId - The team ID
+   * @param limit - Optional max messages to return
+   * @returns Array of agent messages
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getMessages(teamId: number, limit?: number): unknown[] {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    return db.getAgentMessages(teamId, limit);
+  }
+
+  /**
+   * Get aggregated message counts for a team.
+   *
+   * @param teamId - The team ID
+   * @returns Message summary
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getMessageSummary(teamId: number): unknown {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    return db.getAgentMessageSummary(teamId);
+  }
 }
 
 // ---------------------------------------------------------------------------
