@@ -117,7 +117,7 @@ export function AgentFilterBar({ roster, activeFilters, onFiltersChange, hasUser
 
       {agentNames.map((name) => {
         const color = SENTINEL_COLORS[name] ?? agentColor(name, name);
-        const isActive = allActive || activeFilters.has(name);
+        const isActive = !allActive && activeFilters.has(name);
         return (
           <button
             key={name}

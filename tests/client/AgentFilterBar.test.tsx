@@ -126,17 +126,17 @@ describe('AgentFilterBar', () => {
       expect(screen.queryByText('You')).toBeNull();
     });
 
-    it('uses the correct color (#3FB950)', () => {
+    it('uses the correct color (#3FB950) when individually selected', () => {
       render(
         <AgentFilterBar
           roster={[member('dev')]}
-          activeFilters={new Set()}
+          activeFilters={new Set(['__pm__'])}
           onFiltersChange={NOOP}
           hasUserEntries={true}
         />,
       );
       const pill = screen.getByText('You').closest('button')!;
-      // When allActive, the pill color should be #3FB950
+      // When individually selected, the pill color should be #3FB950
       expect(pill).toHaveStyle({ color: '#3FB950' });
     });
   });
@@ -171,11 +171,11 @@ describe('AgentFilterBar', () => {
       expect(screen.queryByText('FC')).toBeNull();
     });
 
-    it('uses the correct color (#D29922)', () => {
+    it('uses the correct color (#D29922) when individually selected', () => {
       render(
         <AgentFilterBar
           roster={[member('dev')]}
-          activeFilters={new Set()}
+          activeFilters={new Set(['__fc__'])}
           onFiltersChange={NOOP}
           hasFcEntries={true}
         />,
@@ -285,15 +285,65 @@ describe('AgentFilterBar', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Active/inactive visual state correctness
+  // -------------------------------------------------------------------------
+
+  describe('active/inactive visual states', () => {
+    it('agent pills have muted/inactive style when allActive is true', () => {
+      render(
+        <AgentFilterBar
+          roster={[member('dev')]}
+          activeFilters={new Set()}
+          onFiltersChange={NOOP}
+          hasUserEntries={true}
+        />,
+      );
+      // When allActive (empty filters), individual agent pills should be muted
+      const devPill = screen.getByText('Dev').closest('button')!;
+      expect(devPill).toHaveStyle({ color: '#484F58', opacity: 0.5 });
+      const youPill = screen.getByText('You').closest('button')!;
+      expect(youPill).toHaveStyle({ color: '#484F58', opacity: 0.5 });
+      const tlPill = screen.getByText('TL').closest('button')!;
+      expect(tlPill).toHaveStyle({ color: '#484F58', opacity: 0.5 });
+      // "All" pill should be highlighted
+      const allPill = screen.getByText('All');
+      expect(allPill).toHaveStyle({ color: '#C9D1D9' });
+    });
+
+    it('only the selected agent pill has active style and "All" is muted', () => {
+      render(
+        <AgentFilterBar
+          roster={[member('dev')]}
+          activeFilters={new Set(['dev'])}
+          onFiltersChange={NOOP}
+          hasUserEntries={true}
+        />,
+      );
+      // "Dev" pill should have its colored active style (not muted)
+      const devPill = screen.getByText('Dev').closest('button')!;
+      expect(devPill).not.toHaveStyle({ color: '#484F58' });
+      // "TL" pill should be muted
+      const tlPill = screen.getByText('TL').closest('button')!;
+      expect(tlPill).toHaveStyle({ color: '#484F58', opacity: 0.5 });
+      // "You" pill should be muted
+      const youPill = screen.getByText('You').closest('button')!;
+      expect(youPill).toHaveStyle({ color: '#484F58', opacity: 0.5 });
+      // "All" pill should be muted (not highlighted)
+      const allPill = screen.getByText('All');
+      expect(allPill).toHaveStyle({ opacity: 0.7 });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Dot color correctness
   // -------------------------------------------------------------------------
 
   describe('dot colors', () => {
-    it('"You" pill dot has correct background color when active', () => {
+    it('"You" pill dot has correct background color when individually selected', () => {
       const { container } = render(
         <AgentFilterBar
           roster={[member('dev')]}
-          activeFilters={new Set()}
+          activeFilters={new Set(['__pm__'])}
           onFiltersChange={NOOP}
           hasUserEntries={true}
         />,
@@ -304,11 +354,11 @@ describe('AgentFilterBar', () => {
       expect(dot).toHaveStyle({ backgroundColor: '#3FB950' });
     });
 
-    it('"FC" pill dot has correct background color when active', () => {
+    it('"FC" pill dot has correct background color when individually selected', () => {
       const { container } = render(
         <AgentFilterBar
           roster={[member('dev')]}
-          activeFilters={new Set()}
+          activeFilters={new Set(['__fc__'])}
           onFiltersChange={NOOP}
           hasFcEntries={true}
         />,
