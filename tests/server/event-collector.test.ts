@@ -516,7 +516,7 @@ describe('Non-tool_use events never throttled', () => {
     'subagent_stop',
     'notification',
     'teammate_idle',
-    'cost_update',
+    'tool_error',
   ];
 
   for (const eventType of nonToolUseEvents) {
@@ -1190,20 +1190,20 @@ describe('Subagent crash detection', () => {
     const sender = createMockMessageSender();
 
     processEvent(
-      makePayload({ event: 'subagent_start', teammate_name: 'fleet-analyst' }),
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-planner' }),
       db,
       sse,
       sender,
     );
     processEvent(
-      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-analyst' }),
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-planner' }),
       db,
       sse,
       sender,
     );
 
     const msg = sender.sendMessage.mock.calls[0][1] as string;
-    expect(msg).toContain("Subagent 'fleet-analyst' appears to have crashed");
+    expect(msg).toContain("Subagent 'fleet-planner' appears to have crashed");
     expect(msg).toContain('s after start');
     expect(msg).toContain('events');
     expect(msg).toContain('Consider respawning');
@@ -1583,7 +1583,7 @@ describe('cc_stdin payloads through processEvent', () => {
 describe('normalizeAgentName', () => {
   it('strips fleet- prefix', () => {
     expect(normalizeAgentName('fleet-dev')).toBe('dev');
-    expect(normalizeAgentName('fleet-analyst')).toBe('analyst');
+    expect(normalizeAgentName('fleet-planner')).toBe('planner');
     expect(normalizeAgentName('fleet-reviewer')).toBe('reviewer');
   });
 
@@ -1633,7 +1633,7 @@ describe('Agent name normalization in event processing', () => {
     const sse = createMockSse();
     const payload = makePayload({
       event: 'session_start',
-      agent_type: 'fleet-analyst',
+      agent_type: 'fleet-planner',
     });
 
     processEvent(payload, db, sse);
@@ -1641,7 +1641,7 @@ describe('Agent name normalization in event processing', () => {
     expect(sse.broadcast).toHaveBeenCalledWith(
       'team_event',
       expect.objectContaining({
-        agent_name: 'analyst', // fleet- prefix stripped
+        agent_name: 'planner', // fleet- prefix stripped
       }),
     );
   });
@@ -1669,7 +1669,7 @@ describe('Agent name normalization in event processing', () => {
     const payload = makePayload({
       event: 'tool_use',
       tool_name: 'SendMessage',
-      agent_type: 'fleet-analyst',
+      agent_type: 'fleet-planner',
       msg_to: 'fleet-dev',
       msg_summary: 'Here is the brief',
     });
@@ -1678,7 +1678,7 @@ describe('Agent name normalization in event processing', () => {
 
     expect(db.insertAgentMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        sender: 'analyst', // fleet- prefix stripped
+        sender: 'planner', // fleet- prefix stripped
         recipient: 'dev',  // fleet- prefix stripped
       }),
     );

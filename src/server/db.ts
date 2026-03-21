@@ -61,6 +61,7 @@ export function utcify(value: string | null): string | null {
 const ROLE_MAP: Record<string, string> = {
   coordinator: 'Coordinator',
   analyst: 'Analyst',
+  planner: 'Planner',
   reviewer: 'Reviewer',
   'team-lead': 'Team Lead',
   tl: 'Team Lead',
