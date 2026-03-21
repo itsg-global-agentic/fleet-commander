@@ -43,19 +43,18 @@ jobs:
 
       - name: Test (client)
         env:
-          NODE_OPTIONS: "--max-old-space-size=3072"
+          NODE_OPTIONS: "--max-old-space-size=2048"
         run: |
-          SHARDS=10
           FAILED=0
-          for (( i=1; i<=SHARDS; i++ )); do
-            echo ""
-            echo "=== Client shard $i/$SHARDS ==="
-            if ! npx vitest run --project client --reporter=basic --shard=$i/$SHARDS; then
-              echo "::warning::Client shard $i/$SHARDS failed"
+          for f in tests/client/*.test.{ts,tsx}; do
+            [ -f "$f" ] || continue
+            echo "--- $(basename $f) ---"
+            if ! npx vitest run --project client "$f" 2>&1 | tail -3; then
+              echo "::warning::FAILED: $f"
               FAILED=1
             fi
           done
           if [ $FAILED -ne 0 ]; then
-            echo "::error::Some client test shards failed"
+            echo "::error::Some client tests failed"
             exit 1
           fi
