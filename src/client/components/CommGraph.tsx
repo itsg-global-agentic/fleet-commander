@@ -31,6 +31,8 @@ interface GraphNode {
   isTL: boolean;
   fx?: number;
   fy?: number;
+  x?: number;
+  y?: number;
 }
 
 interface GraphLink {
@@ -63,7 +65,7 @@ const FONT_SIZE_LABEL = 10;
 // ---------------------------------------------------------------------------
 
 export function CommGraph({ edges, agents }: CommGraphProps) {
-  const graphRef = useRef<ForceGraphMethods<GraphNode, GraphLink>>();
+  const graphRef = useRef<ForceGraphMethods<GraphNode, GraphLink>>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 500, height: 380 });
   const prevEdgesRef = useRef<MessageEdge[]>([]);

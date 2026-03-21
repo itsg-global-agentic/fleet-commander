@@ -1,3 +1,5 @@
+![CI](https://github.com/hubertciebiada/fleet-commander/actions/workflows/ci.yml/badge.svg)
+
 # Fleet Commander
 
 One-click dashboard for orchestrating multiple Claude Code agent teams across repositories.

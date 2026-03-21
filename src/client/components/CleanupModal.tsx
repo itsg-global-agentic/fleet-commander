@@ -178,7 +178,7 @@ export function CleanupModal({ projectId, open, onClose, onDone }: CleanupModalP
   // -------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------
-  const groups = preview ? groupByType(preview.items) : new Map();
+  const groups: Map<CleanupItem['type'], CleanupItem[]> = preview ? groupByType(preview.items) : new Map();
 
   return (
     <div
