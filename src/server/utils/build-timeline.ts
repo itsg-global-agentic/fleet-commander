@@ -21,7 +21,7 @@ export interface RawStreamEvent {
   type: string;
   timestamp?: string;
   subtype?: string;
-  message?: { content?: Array<{ type: string; text?: string }> };
+  message?: { content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }> };
   tool?: { name?: string; input?: unknown };
   [key: string]: unknown;
 }
@@ -102,6 +102,33 @@ export function buildTimeline(
     ...(e.description ? { description: e.description as string } : {}),
     ...(e.lastToolName ? { lastToolName: e.lastToolName as string } : {}),
   }));
+
+  // 1b. Extract tool_use content blocks from assistant events into separate
+  //     StreamTimelineEntry objects so they light up the existing rendering
+  //     path for streamType === 'tool_use' and participate in deduplication.
+  const extractedEntries: StreamTimelineEntry[] = [];
+  for (let i = 0; i < streamEntries.length; i++) {
+    const entry = streamEntries[i];
+    if (entry.streamType !== 'assistant') continue;
+    const contentBlocks = entry.message?.content;
+    if (!contentBlocks || !Array.isArray(contentBlocks)) continue;
+    for (let j = 0; j < contentBlocks.length; j++) {
+      const block = contentBlocks[j];
+      if (block.type !== 'tool_use' || !block.name) continue;
+      extractedEntries.push({
+        id: `stream-${i}-tool-${j}`,
+        source: 'stream' as const,
+        timestamp: entry.timestamp,
+        teamId,
+        streamType: 'tool_use',
+        tool: { name: block.name, input: block.input },
+        ...(entry.agentName ? { agentName: entry.agentName } : {}),
+      });
+    }
+  }
+  // Append extracted entries to the stream entries array so they participate
+  // in deduplication and timeline merging.
+  streamEntries.push(...extractedEntries);
 
   // 2. Map hook events to HookTimelineEntry
   const hookEntries: HookTimelineEntry[] = hookEvents.map((e) => ({

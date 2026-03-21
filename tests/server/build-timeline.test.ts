@@ -594,4 +594,339 @@ describe('buildTimeline', () => {
     expect(result[0].id).toBe('stream-0');
     expect(result[1].id).toBe('stream-1');
   });
+
+  // ===========================================================================
+  // Tool-use extraction from assistant events (Issue #320)
+  // ===========================================================================
+
+  describe('tool_use extraction from assistant events', () => {
+    it('extracts tool_use content blocks from assistant events into separate entries', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: {
+            content: [
+              { type: 'tool_use', name: 'Read', input: { file_path: '/src/index.ts' } },
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+
+      // Should have the original assistant entry + 1 extracted tool_use entry
+      expect(result).toHaveLength(2);
+
+      const extracted = result.find((e) => e.id === 'stream-0-tool-0');
+      expect(extracted).toBeDefined();
+      expect(extracted!.source).toBe('stream');
+      const streamEntry = extracted as any;
+      expect(streamEntry.streamType).toBe('tool_use');
+      expect(streamEntry.tool).toEqual({ name: 'Read', input: { file_path: '/src/index.ts' } });
+    });
+
+    it('sets streamType to tool_use and populates tool field on extracted entries', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: {
+            content: [
+              { type: 'tool_use', name: 'Bash', input: { command: 'ls -la' } },
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+      const extracted = result.find((e) => e.id === 'stream-0-tool-0') as any;
+
+      expect(extracted).toBeDefined();
+      expect(extracted.streamType).toBe('tool_use');
+      expect(extracted.tool.name).toBe('Bash');
+      expect(extracted.tool.input).toEqual({ command: 'ls -la' });
+    });
+
+    it('inherits agentName from parent assistant event', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          agentName: 'developer',
+          message: {
+            content: [
+              { type: 'tool_use', name: 'Read', input: { file_path: '/src/app.ts' } },
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+      const extracted = result.find((e) => e.id === 'stream-0-tool-0') as any;
+
+      expect(extracted).toBeDefined();
+      expect(extracted.agentName).toBe('developer');
+    });
+
+    it('preserves text entry AND extracts tool entries from mixed content', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: {
+            content: [
+              { type: 'text', text: 'I will read the file now.' },
+              { type: 'tool_use', name: 'Read', input: { file_path: '/src/index.ts' } },
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+
+      // Original assistant entry with text + extracted tool_use entry
+      expect(result).toHaveLength(2);
+
+      // Original assistant entry should remain with its message content intact
+      const parent = result.find((e) => e.id === 'stream-0') as any;
+      expect(parent).toBeDefined();
+      expect(parent.streamType).toBe('assistant');
+      expect(parent.message.content).toHaveLength(2);
+      expect(parent.message.content[0].text).toBe('I will read the file now.');
+
+      // Extracted tool_use entry (at content index 1 because text block is at index 0)
+      const extracted = result.find((e) => e.id === 'stream-0-tool-1') as any;
+      expect(extracted).toBeDefined();
+      expect(extracted.streamType).toBe('tool_use');
+      expect(extracted.tool.name).toBe('Read');
+    });
+
+    it('does not extract from assistant events with no tool_use content', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: {
+            content: [
+              { type: 'text', text: 'Just a plain text response.' },
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+
+      // Only the original assistant entry, no extracted entries
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('stream-0');
+    });
+
+    it('extracts multiple tool_use blocks from a single assistant event', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: {
+            content: [
+              { type: 'text', text: 'Let me read and edit.' },
+              { type: 'tool_use', name: 'Read', input: { file_path: '/a.ts' } },
+              { type: 'tool_use', name: 'Edit', input: { file_path: '/b.ts', old_string: 'x', new_string: 'y' } },
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+
+      // 1 parent assistant + 2 extracted tool_use entries
+      expect(result).toHaveLength(3);
+
+      const tool0 = result.find((e) => e.id === 'stream-0-tool-1') as any;
+      const tool1 = result.find((e) => e.id === 'stream-0-tool-2') as any;
+
+      expect(tool0).toBeDefined();
+      expect(tool0.tool.name).toBe('Read');
+
+      expect(tool1).toBeDefined();
+      expect(tool1.tool.name).toBe('Edit');
+    });
+
+    it('deduplicates extracted stream tool_use entries against hook ToolUse events', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:05.000Z',
+          message: {
+            content: [
+              { type: 'tool_use', name: 'Read', input: { file_path: '/src/index.ts' } },
+            ],
+          },
+        }),
+      ];
+      const hooks: Event[] = [
+        makeHookEvent({
+          id: 1,
+          eventType: 'ToolUse',
+          toolName: 'Read',
+          createdAt: '2026-03-20T10:00:08.000Z',
+        }),
+      ];
+
+      const result = buildTimeline(stream, hooks, 1);
+
+      // Hook event should be deduped: the extracted stream tool_use entry for
+      // 'Read' at T+5s matches the hook ToolUse for 'Read' at T+8s (within 10s window).
+      const hookEntries = result.filter((e) => e.source === 'hook');
+      expect(hookEntries).toHaveLength(0);
+
+      // Should have the parent assistant + the extracted tool_use
+      const streamEntries = result.filter((e) => e.source === 'stream');
+      expect(streamEntries).toHaveLength(2);
+    });
+
+    it('generates unique and deterministic IDs for extracted entries', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: {
+            content: [
+              { type: 'tool_use', name: 'Read', input: {} },
+              { type: 'tool_use', name: 'Write', input: {} },
+            ],
+          },
+        }),
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:01.000Z',
+          message: {
+            content: [
+              { type: 'tool_use', name: 'Bash', input: {} },
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+
+      // Collect all extracted entry IDs
+      const extractedIds = result
+        .filter((e) => e.id.includes('-tool-'))
+        .map((e) => e.id);
+
+      // 3 extracted entries total
+      expect(extractedIds).toHaveLength(3);
+
+      // IDs should be deterministic based on parent index and block index
+      expect(extractedIds).toContain('stream-0-tool-0');
+      expect(extractedIds).toContain('stream-0-tool-1');
+      expect(extractedIds).toContain('stream-1-tool-0');
+
+      // All IDs must be unique
+      const uniqueIds = new Set(extractedIds);
+      expect(uniqueIds.size).toBe(extractedIds.length);
+
+      // Running the same input produces the same IDs (deterministic)
+      const result2 = buildTimeline(stream, [], 1);
+      const extractedIds2 = result2
+        .filter((e) => e.id.includes('-tool-'))
+        .map((e) => e.id);
+      expect(extractedIds2).toEqual(extractedIds);
+    });
+
+    it('does not extract from non-assistant stream events', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'user',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: {
+            content: [
+              { type: 'tool_use', name: 'Read', input: {} },
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+
+      // Only the original user entry, no extraction
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('stream-0');
+    });
+
+    it('skips tool_use blocks without a name', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: {
+            content: [
+              { type: 'tool_use', input: { data: 'test' } },  // no name
+              { type: 'tool_use', name: 'Read', input: {} },    // has name
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+
+      // Only 1 extracted (the one with a name), plus the parent
+      expect(result).toHaveLength(2);
+      const extracted = result.filter((e) => e.id.includes('-tool-'));
+      expect(extracted).toHaveLength(1);
+      expect((extracted[0] as any).tool.name).toBe('Read');
+    });
+
+    it('handles assistant event with empty content array', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: { content: [] },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+
+      // Only the original entry, no extraction
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('stream-0');
+    });
+
+    it('handles assistant event with undefined message', () => {
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: '2026-03-20T10:00:00.000Z',
+          message: undefined,
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+
+      expect(result).toHaveLength(1);
+      expect(result[0].id).toBe('stream-0');
+    });
+
+    it('extracted entries have same timestamp as parent for correct sort order', () => {
+      const parentTs = '2026-03-20T10:00:05.000Z';
+      const stream: RawStreamEvent[] = [
+        makeStreamEvent({
+          type: 'assistant',
+          timestamp: parentTs,
+          message: {
+            content: [
+              { type: 'tool_use', name: 'Grep', input: { pattern: 'TODO' } },
+            ],
+          },
+        }),
+      ];
+
+      const result = buildTimeline(stream, [], 1);
+      const extracted = result.find((e) => e.id === 'stream-0-tool-0')!;
+
+      expect(extracted.timestamp).toBe(new Date(parentTs).toISOString());
+    });
+  });
 });

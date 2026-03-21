@@ -442,7 +442,7 @@ export interface StreamTimelineEntry extends BaseTimelineEntry {
   source: 'stream';
   streamType: string;
   subtype?: string;
-  message?: { content?: Array<{ type: string; text?: string }> };
+  message?: { content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }> };
   tool?: { name?: string; input?: unknown };
   /** Agent name derived from parent_tool_use_id mapping (e.g. 'team-lead', 'dev', 'planner') */
   agentName?: string;
