@@ -91,7 +91,7 @@ describe('CommGraph', () => {
   it('should show nodes even with zero message edges', () => {
     const agents = [
       makeAgent({ name: 'team-lead', role: 'team-lead' }),
-      makeAgent({ name: 'analyst', role: 'analyst' }),
+      makeAgent({ name: 'planner', role: 'planner' }),
       makeAgent({ name: 'dev', role: 'developer' }),
     ];
 

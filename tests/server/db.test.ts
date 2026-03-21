@@ -824,9 +824,9 @@ describe('Team Roster', () => {
   });
 
   it('marks agent as inactive when stops >= starts', () => {
-    db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'analyst' });
-    db.insertEvent({ teamId: 1, eventType: 'ToolUse', agentName: 'analyst' });
-    db.insertEvent({ teamId: 1, eventType: 'SubagentStop', agentName: 'analyst' });
+    db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'planner' });
+    db.insertEvent({ teamId: 1, eventType: 'ToolUse', agentName: 'planner' });
+    db.insertEvent({ teamId: 1, eventType: 'SubagentStop', agentName: 'planner' });
 
     const roster = db.getTeamRoster(1);
     expect(roster).toHaveLength(1);
@@ -835,14 +835,14 @@ describe('Team Roster', () => {
 
   it('returns all members ordered by first_seen', () => {
     db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'coordinator' });
-    db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'analyst' });
+    db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'planner' });
     db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'reviewer' });
 
     const roster = db.getTeamRoster(1);
     expect(roster).toHaveLength(3);
     const names = roster.map(m => m.name);
     expect(names).toContain('coordinator');
-    expect(names).toContain('analyst');
+    expect(names).toContain('planner');
     expect(names).toContain('reviewer');
   });
 
@@ -862,7 +862,7 @@ describe('Team Roster', () => {
 
   it('derives roles correctly', () => {
     db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'coordinator' });
-    db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'analyst' });
+    db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'planner' });
     db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'reviewer' });
     db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'dev-csharp' });
     db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'some-agent' });
@@ -870,7 +870,7 @@ describe('Team Roster', () => {
     const roster = db.getTeamRoster(1);
     const roles = Object.fromEntries(roster.map(m => [m.name, m.role]));
     expect(roles['coordinator']).toBe('Coordinator');
-    expect(roles['analyst']).toBe('Analyst');
+    expect(roles['planner']).toBe('Planner');
     expect(roles['reviewer']).toBe('Reviewer');
     expect(roles['dev-csharp']).toBe('Developer (csharp)');
     expect(roles['some-agent']).toBe('some-agent');
