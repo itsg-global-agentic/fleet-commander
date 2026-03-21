@@ -1,0 +1,291 @@
+// =============================================================================
+// Fleet Commander — ProjectsPage View Tests
+// =============================================================================
+
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import '@testing-library/jest-dom';
+
+// ---------------------------------------------------------------------------
+// Mock dependencies
+// ---------------------------------------------------------------------------
+
+const mockGet = vi.fn();
+const mockPost = vi.fn();
+const mockPut = vi.fn();
+const mockDel = vi.fn();
+
+const mockApi = {
+  get: mockGet,
+  post: mockPost,
+  put: mockPut,
+  del: mockDel,
+};
+
+vi.mock('../../src/client/hooks/useApi', () => ({
+  useApi: () => mockApi,
+}));
+
+// Import after mocks
+import { ProjectsPage } from '../../src/client/views/ProjectsPage';
+import type { ProjectSummary, ProjectGroup } from '../../src/shared/types';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeProject(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
+  return {
+    id: 1,
+    name: 'test-project',
+    repoPath: '/home/user/repos/test',
+    githubRepo: 'user/test',
+    groupId: null,
+    status: 'active',
+    hooksInstalled: true,
+    maxActiveTeams: 5,
+    promptFile: '/path/to/prompt.md',
+    model: 'claude-sonnet',
+    createdAt: '2025-01-01T00:00:00Z',
+    updatedAt: '2025-01-01T00:00:00Z',
+    teamCount: 3,
+    activeTeamCount: 2,
+    queuedTeamCount: 1,
+    installStatus: {
+      hooks: { installed: true, found: 10, total: 10, files: [{ name: 'on_session_start.sh', exists: true }] },
+      prompt: { installed: true, files: [{ name: 'workflow.md', exists: true }] },
+      agents: { installed: true, files: [{ name: 'agent.yml', exists: true }] },
+      settings: { exists: true },
+    },
+    ...overrides,
+  } as ProjectSummary;
+}
+
+interface ProjectGroupWithCount extends ProjectGroup {
+  projectCount: number;
+}
+
+function makeGroup(overrides: Partial<ProjectGroupWithCount> = {}): ProjectGroupWithCount {
+  return {
+    id: 1,
+    name: 'Backend',
+    description: 'Backend services',
+    sortOrder: 0,
+    createdAt: '2025-01-01T00:00:00Z',
+    projectCount: 1,
+    ...overrides,
+  };
+}
+
+/** Sets up mock API responses for standard page load */
+function setupDefaultMocks(
+  projects: ProjectSummary[] = [makeProject()],
+  groups: ProjectGroupWithCount[] = [],
+) {
+  mockGet.mockImplementation((path: string) => {
+    if (path === 'projects') return Promise.resolve(projects);
+    if (path === 'project-groups') return Promise.resolve(groups);
+    return Promise.resolve({});
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+describe('ProjectsPage', () => {
+  beforeEach(() => {
+    mockGet.mockReset();
+    mockPost.mockReset();
+    mockPut.mockReset();
+    mockDel.mockReset();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  // -----------------------------------------------------------------------
+  // Loading & empty states
+  // -----------------------------------------------------------------------
+
+  it('shows loading state initially', () => {
+    mockGet.mockReturnValue(new Promise(() => {})); // never resolves
+    render(<ProjectsPage />);
+    expect(screen.getByText('Loading projects...')).toBeInTheDocument();
+  });
+
+  it('shows empty state when no projects exist', async () => {
+    setupDefaultMocks([], []);
+    render(<ProjectsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('No projects yet')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Add your first project to get started.')).toBeInTheDocument();
+  });
+
+  // -----------------------------------------------------------------------
+  // Header & action buttons
+  // -----------------------------------------------------------------------
+
+  it('renders page heading and action buttons', async () => {
+    setupDefaultMocks();
+    render(<ProjectsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('Projects')).toBeInTheDocument();
+    });
+    expect(screen.getByText('New Group')).toBeInTheDocument();
+    expect(screen.getByText('Add Project')).toBeInTheDocument();
+  });
+
+  // -----------------------------------------------------------------------
+  // Project rendering
+  // -----------------------------------------------------------------------
+
+  it('renders project names after data loads', async () => {
+    setupDefaultMocks([
+      makeProject({ id: 1, name: 'alpha-project' }),
+      makeProject({ id: 2, name: 'beta-project' }),
+    ]);
+    render(<ProjectsPage />);
+    expect(await screen.findByText('alpha-project')).toBeInTheDocument();
+    expect(await screen.findByText('beta-project')).toBeInTheDocument();
+  });
+
+  it('renders project status badges', async () => {
+    setupDefaultMocks([
+      makeProject({ id: 1, name: 'my-project', status: 'active' }),
+    ]);
+    render(<ProjectsPage />);
+    const badges = await screen.findAllByText('active');
+    expect(badges.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('renders team stats with queued count', async () => {
+    setupDefaultMocks([
+      makeProject({ activeTeamCount: 3, maxActiveTeams: 8, queuedTeamCount: 2 }),
+    ]);
+    render(<ProjectsPage />);
+    expect(await screen.findByText(/3\/8 active/)).toBeInTheDocument();
+    expect(await screen.findByText(/2 queued/)).toBeInTheDocument();
+  });
+
+  it('renders Reinstall button for each project', async () => {
+    setupDefaultMocks([
+      makeProject({ id: 1, name: 'proj-a' }),
+      makeProject({ id: 2, name: 'proj-b' }),
+    ]);
+    render(<ProjectsPage />);
+    const buttons = await screen.findAllByText('Reinstall');
+    expect(buttons.length).toBe(2);
+  });
+
+  // -----------------------------------------------------------------------
+  // Ungrouped section
+  // -----------------------------------------------------------------------
+
+  it('renders ungrouped projects under Ungrouped section', async () => {
+    setupDefaultMocks([
+      makeProject({ id: 1, name: 'ungrouped-proj', groupId: null }),
+    ]);
+    render(<ProjectsPage />);
+    expect(await screen.findByText('Ungrouped')).toBeInTheDocument();
+    expect(await screen.findByText('ungrouped-proj')).toBeInTheDocument();
+  });
+
+  // -----------------------------------------------------------------------
+  // Grouped sections
+  // -----------------------------------------------------------------------
+
+  it('renders grouped sections with group names', async () => {
+    const group = makeGroup({ id: 10, name: 'Backend Services' });
+    setupDefaultMocks(
+      [makeProject({ id: 1, name: 'api-server', groupId: 10 })],
+      [group],
+    );
+    render(<ProjectsPage />);
+    expect(await screen.findByText('Backend Services')).toBeInTheDocument();
+    expect(await screen.findByText('api-server')).toBeInTheDocument();
+  });
+
+  it('shows empty message for groups with no projects', async () => {
+    const group = makeGroup({ id: 10, name: 'Empty Group' });
+    // Need at least one project to avoid the "No projects yet" empty state.
+    // This ungrouped project causes the project list to render, including
+    // the empty group section.
+    setupDefaultMocks(
+      [makeProject({ id: 1, name: 'ungrouped-proj', groupId: null })],
+      [group],
+    );
+    render(<ProjectsPage />);
+    expect(await screen.findByText('Empty Group')).toBeInTheDocument();
+    expect(await screen.findByText('No projects in this group')).toBeInTheDocument();
+  });
+
+  // -----------------------------------------------------------------------
+  // Add Project dialog
+  // -----------------------------------------------------------------------
+
+  it('opens Add Project dialog when button is clicked', async () => {
+    setupDefaultMocks();
+    render(<ProjectsPage />);
+    await screen.findByText('Projects');
+    fireEvent.click(screen.getByText('Add Project'));
+    // AddProjectDialog renders a dialog with "Add Project" as heading
+    await waitFor(() => {
+      const dialogs = document.querySelectorAll('[role="dialog"]');
+      expect(dialogs.length).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // New Group dialog
+  // -----------------------------------------------------------------------
+
+  it('opens New Group dialog when button is clicked', async () => {
+    setupDefaultMocks();
+    render(<ProjectsPage />);
+    await screen.findByText('Projects');
+    fireEvent.click(screen.getByText('New Group'));
+    await waitFor(() => {
+      expect(screen.getByText('New Group', { selector: 'h2' })).toBeInTheDocument();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // Project card expand/collapse
+  // -----------------------------------------------------------------------
+
+  it('does not show details by default (collapsed state)', async () => {
+    setupDefaultMocks();
+    render(<ProjectsPage />);
+    await screen.findByText('test-project');
+    expect(screen.queryByText('Repository')).not.toBeInTheDocument();
+    expect(screen.queryByText('Configuration')).not.toBeInTheDocument();
+  });
+
+  it('expands project card to show details on click', async () => {
+    setupDefaultMocks();
+    render(<ProjectsPage />);
+    const projectName = await screen.findByText('test-project');
+    const row = projectName.closest('[class*="cursor-pointer"]');
+    expect(row).not.toBeNull();
+    fireEvent.click(row!);
+
+    expect(await screen.findByText('Repository')).toBeInTheDocument();
+    expect(await screen.findByText('Configuration')).toBeInTheDocument();
+    expect(await screen.findByText('Install Health')).toBeInTheDocument();
+  });
+
+  // -----------------------------------------------------------------------
+  // API calls
+  // -----------------------------------------------------------------------
+
+  it('fetches projects and groups on mount', async () => {
+    setupDefaultMocks();
+    render(<ProjectsPage />);
+    await screen.findByText('test-project');
+    expect(mockGet).toHaveBeenCalledWith('projects');
+    expect(mockGet).toHaveBeenCalledWith('project-groups');
+  });
+});
