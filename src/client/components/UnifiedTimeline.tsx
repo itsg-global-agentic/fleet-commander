@@ -244,7 +244,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
     const desc = entry.description;
 
     return (
-      <div className="py-0 leading-snug flex items-center gap-1.5 text-[10px] text-dark-muted">
+      <div className="py-0 leading-snug flex items-center gap-1.5 text-dark-muted">
         <span>{formatLocalTime(entry.timestamp)}</span>
         <span
           className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
@@ -299,7 +299,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
     const hasDetail = detail !== null;
 
     return (
-      <div className="text-[10px]">
+      <div>
         <div
           className={`py-0 leading-snug flex items-center gap-1.5${hasDetail ? ' cursor-pointer' : ''}`}
           onClick={hasDetail ? () => setExpanded((prev) => !prev) : undefined}
@@ -325,7 +325,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
           </span>
         </div>
         {expanded && detail && (
-          <div className="text-[10px] text-dark-muted pl-6 pb-0.5 font-mono truncate" title={detail}>
+          <div className="text-dark-muted pl-6 pb-0.5 font-mono truncate" title={detail}>
             {detail}
           </div>
         )}
@@ -337,7 +337,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
   if (entry.streamType === 'result' || entry.streamType === 'tool_result') {
     const { color, label } = getStreamStyle(entry.streamType);
     return (
-      <div className="py-0 leading-snug text-[10px] text-dark-muted">
+      <div className="py-0 leading-snug text-dark-muted">
         <span className="text-dark-muted">
           {formatLocalTime(entry.timestamp)}
         </span>
@@ -351,7 +351,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
   if (text) {
     const { color, label } = getStreamStyle(entry.streamType);
     return (
-      <div className="py-0 leading-snug text-[10px] text-dark-muted">
+      <div className="py-0 leading-snug text-dark-muted">
         <span className="text-dark-muted">
           {formatLocalTime(entry.timestamp)}
         </span>
@@ -380,7 +380,7 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
       : '#8B949E';
 
     return (
-      <div className="py-0 leading-snug flex items-center gap-1.5 text-[10px] text-dark-muted">
+      <div className="py-0 leading-snug flex items-center gap-1.5 text-dark-muted">
         <span>{formatLocalTime(entry.timestamp)}</span>
         <span
           className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
@@ -400,7 +400,7 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
   // Error events — agent dot + name + red error info
   if (isError) {
     return (
-      <div className="py-0 leading-snug text-[10px] text-dark-muted">
+      <div className="py-0 leading-snug text-dark-muted">
         <div className="flex items-center gap-1.5">
           <span>{formatLocalTime(entry.timestamp)}</span>
           <span
@@ -428,7 +428,7 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
 
   // Generic hook event — agent dot + name + event type + tool badge
   return (
-    <div className="py-0 leading-snug flex items-center gap-1.5 text-[10px] text-dark-muted">
+    <div className="py-0 leading-snug flex items-center gap-1.5 text-dark-muted">
       <span>{formatLocalTime(entry.timestamp)}</span>
       <span
         className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
@@ -602,7 +602,7 @@ export function UnifiedTimeline({
   if (entries.length === 0) {
     const isTerminal = teamStatus === 'done' || teamStatus === 'failed';
     return (
-      <div className="text-xs text-dark-muted italic py-2">
+      <div className="text-[11px] text-dark-muted italic py-2">
         {isTerminal
           ? 'No session log captured.'
           : 'No events yet. Events appear when Claude Code is running.'}
@@ -635,7 +635,7 @@ export function UnifiedTimeline({
       <div
         ref={containerRef}
         onScroll={handleScroll}
-        className={`flex-1 min-h-0 font-mono text-xs overflow-y-auto bg-[#0D1117] p-2 rounded border border-dark-border custom-scrollbar${isThinking ? ' thinking-glow' : ''}`}
+        className={`flex-1 min-h-0 font-mono text-[11px] overflow-y-auto bg-[#0D1117] p-2 rounded border border-dark-border custom-scrollbar${isThinking ? ' thinking-glow' : ''}`}
       >
         {filteredEntries.map((entry) => {
           if (entry.source === 'stream') {
