@@ -299,9 +299,9 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
     const hasDetail = detail !== null;
 
     return (
-      <div>
+      <div className="text-[10px]">
         <div
-          className={`py-0.5 leading-relaxed flex items-center gap-1.5${hasDetail ? ' cursor-pointer' : ''}`}
+          className={`py-0 leading-snug flex items-center gap-1.5${hasDetail ? ' cursor-pointer' : ''}`}
           onClick={hasDetail ? () => setExpanded((prev) => !prev) : undefined}
           role={hasDetail ? 'button' : undefined}
           aria-expanded={hasDetail ? expanded : undefined}
@@ -320,7 +320,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
             style={{ backgroundColor: color }}
           />
           <span style={{ color }} className="font-semibold">{label}</span>
-          <span className="text-xs text-dark-muted bg-dark-border/30 px-1.5 py-0.5 rounded">
+          <span className="text-dark-muted bg-dark-border/30 px-1.5 py-0.5 rounded">
             {entry.tool.name}
           </span>
         </div>
@@ -337,7 +337,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
   if (entry.streamType === 'result' || entry.streamType === 'tool_result') {
     const { color, label } = getStreamStyle(entry.streamType);
     return (
-      <div className="py-0.5 leading-relaxed">
+      <div className="py-0 leading-snug text-[10px] text-dark-muted">
         <span className="text-dark-muted">
           {formatLocalTime(entry.timestamp)}
         </span>
@@ -351,7 +351,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
   if (text) {
     const { color, label } = getStreamStyle(entry.streamType);
     return (
-      <div className="py-0.5 leading-relaxed">
+      <div className="py-0 leading-snug text-[10px] text-dark-muted">
         <span className="text-dark-muted">
           {formatLocalTime(entry.timestamp)}
         </span>
