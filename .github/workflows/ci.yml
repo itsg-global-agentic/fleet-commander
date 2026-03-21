@@ -38,8 +38,5 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Test (server)
-        run: npx vitest run --project server
-
-      - name: Test (client)
-        run: npx vitest run --project client
+      - name: Test
+        run: npx vitest run
