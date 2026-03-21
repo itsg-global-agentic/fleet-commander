@@ -3,16 +3,47 @@
   "version": "0.1.0",
   "description": "Web dashboard for orchestrating Claude Code agent teams",
   "type": "module",
+  "main": "dist/server/index.js",
+  "bin": {
+    "fleet-commander": "./bin/fleet-commander.js"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "hooks",
+    "scripts",
+    "templates",
+    "prompts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/hubertciebiada/fleet-commander.git"
+  },
+  "author": {
+    "name": "Hubert Ciebiada",
+    "url": "https://github.com/hciebiada"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"npx tsx --watch src/server/index.ts\" \"npx vite --config vite.config.ts\"",
     "build": "tsc -p tsconfig.json && vite build --config vite.config.ts",
+    "postbuild": "node -e \"const fs=require('fs');const path=require('path');const src=path.join('src','server','schema.sql');const dest=path.join('dist','server','schema.sql');fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(src,dest);console.log('Copied schema.sql to dist/server/')\"",
     "start": "node dist/server/index.js",
     "launch": "node scripts/launch.js",
     "test": "vitest run",
     "test:client": "vitest run --config vitest.client.config.ts",
     "test:watch": "vitest",
     "test:e2e": "bash tests/e2e/smoke-test.sh",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm test"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.3",
