@@ -13,8 +13,6 @@ export default defineConfig({
           environment: 'jsdom',
           include: ['tests/client/**/*.test.{ts,tsx}'],
           setupFiles: ['tests/client/setup.ts'],
-          logHeapUsage: true,
-          teardownTimeout: 1000,
         },
       },
       {
