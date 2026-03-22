@@ -254,3 +254,43 @@ The team lifecycle state machine is defined in `src/shared/state-machine.ts`. Th
 - Available {{PLACEHOLDER}} variables for each message
 
 Message templates are stored in the `message_templates` DB table and can be edited from the `/lifecycle` UI view. The `resolveMessage()` utility in `src/server/utils/resolve-message.ts` reads templates from DB and replaces placeholders at runtime.
+
+## MCP Server
+
+Fleet Commander exposes tools via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio transport. This allows Claude Code (or any MCP client) to query fleet state programmatically.
+
+### Starting the MCP Server
+
+```bash
+node bin/fleet-commander-mcp.js
+```
+
+The MCP server is a separate process from the Fastify HTTP server. It initializes the database and background services but does NOT start HTTP. All logging goes to stderr since stdout is reserved for MCP JSON-RPC.
+
+### `.mcp.json` Configuration
+
+```json
+{
+  "mcpServers": {
+    "fleet-commander": {
+      "command": "node",
+      "args": ["bin/fleet-commander-mcp.js"],
+      "cwd": "/path/to/fleet-commander"
+    }
+  }
+}
+```
+
+### Tool Naming Convention
+
+All MCP tools use the `fleet_` prefix (e.g., `fleet_system_health`, `fleet_list_teams`).
+
+### Adding New Tools
+
+1. Create a new file in `src/server/mcp/tools/` (kebab-case filename without the `fleet_` prefix, e.g., `list-teams.ts`)
+2. Export a single `register<ToolName>Tool(server: McpServer)` function
+3. Use `server.tool(name, description, handler)` for zero-arg tools or `server.tool(name, description, schema, handler)` with Zod schemas for tools with parameters
+4. Call exactly one service method from the handler — keep the tool thin
+5. Return `{ content: [{ type: "text", text: JSON.stringify(result, null, 2) }] }`
+6. Register the tool in `src/server/mcp/index.ts`
+7. Add tests in `tests/server/mcp/`
