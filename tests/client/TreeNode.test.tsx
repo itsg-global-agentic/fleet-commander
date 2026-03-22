@@ -210,4 +210,45 @@ describe('TreeNode', () => {
     expect(screen.getByText('blocked by')).toBeInTheDocument();
     expect(screen.getByText('#50')).toBeInTheDocument();
   });
+
+  // -------------------------------------------------------------------------
+  // Closed parent with open children (Issue #348 fix)
+  // -------------------------------------------------------------------------
+
+  it('renders closed parent with open children correctly', () => {
+    const closedParent = makeNode({
+      number: 5,
+      title: 'Closed epic',
+      state: 'closed',
+      children: [
+        makeNode({ number: 10, title: 'Open sub-issue A', state: 'open' }),
+        makeNode({ number: 11, title: 'Open sub-issue B', state: 'open' }),
+      ],
+    });
+    render(<TreeNode node={closedParent} {...defaultProps} depth={0} />);
+
+    // Parent should have closed styling
+    const parentTitle = screen.getByText('Closed epic');
+    expect(parentTitle.className).toContain('line-through');
+
+    // Children should be visible (expanded by default at depth 0)
+    expect(screen.getByText('Open sub-issue A')).toBeInTheDocument();
+    expect(screen.getByText('Open sub-issue B')).toBeInTheDocument();
+
+    // Children should NOT have line-through styling
+    const childA = screen.getByText('Open sub-issue A');
+    expect(childA.className).not.toContain('line-through');
+
+    // Play button should be available for open leaf children
+    expect(screen.getByTitle('Launch team for #10')).toBeInTheDocument();
+    expect(screen.getByTitle('Launch team for #11')).toBeInTheDocument();
+
+    // No Play button for the closed parent (it also has children)
+    expect(screen.queryByTitle('Launch team for #5')).not.toBeInTheDocument();
+  });
+
+  it('does not render Play button for closed parent even without children', () => {
+    render(<TreeNode node={makeNode({ number: 5, state: 'closed', children: [] })} {...defaultProps} />);
+    expect(screen.queryByTitle(/Launch team for #5/)).not.toBeInTheDocument();
+  });
 });

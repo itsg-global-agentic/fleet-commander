@@ -175,4 +175,63 @@ describe('IssueTreeView', () => {
       expect(screen.getByPlaceholderText(/search/i)).toBeInTheDocument();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Closed parent with open children (Issue #348 fix)
+  // -------------------------------------------------------------------------
+
+  it('renders closed parent nodes with their open children', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [
+            {
+              number: 5,
+              title: 'Closed parent',
+              state: 'closed',
+              labels: [],
+              children: [
+                {
+                  number: 10,
+                  title: 'Open child under closed parent',
+                  state: 'open',
+                  labels: [],
+                  children: [],
+                  activeTeam: null,
+                },
+              ],
+              activeTeam: null,
+            },
+            {
+              number: 20,
+              title: 'Regular open issue',
+              state: 'open',
+              labels: [],
+              children: [],
+              activeTeam: null,
+            },
+          ],
+          cachedAt: '2026-03-21T10:00:00Z',
+          count: 3,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      // Both the closed parent and the open child should be rendered
+      expect(screen.getByTestId('tree-node-5')).toBeInTheDocument();
+      expect(screen.getByTestId('tree-node-20')).toBeInTheDocument();
+    });
+
+    // The open child is nested inside the closed parent TreeNode,
+    // so it gets rendered as part of tree-node-5 by the mock
+    // (the mock TreeNode is a flat div, children are rendered by IssueTreeView recursion)
+    // Since IssueTreeView only renders top-level nodes, tree-node-10 is nested
+    // inside tree-node-5 in the real component. The mock doesn't recurse,
+    // but we verify the closed parent is present as a root node.
+    expect(screen.getByTestId('tree-node-5')).toHaveTextContent('#5');
+  });
 });

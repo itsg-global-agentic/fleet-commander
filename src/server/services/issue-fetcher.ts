@@ -310,6 +310,12 @@ export class IssueFetcher {
     // Track which issues have a parent (so we can identify roots)
     const childNumbers = new Set<number>();
 
+    // Collect orphan parent numbers — parent numbers referenced by open
+    // children but not present in the fetched (OPEN-only) issue set.
+    // These are typically closed parents whose open sub-issues would
+    // otherwise be hidden from the tree (the bug this fixes).
+    const orphanParentNumbers = new Set<number>();
+
     for (const node of allNodes) {
       if (node.parent?.number) {
         childNumbers.add(node.number);
@@ -317,6 +323,50 @@ export class IssueFetcher {
         const childIssue = issueByNumber.get(node.number);
         if (parentIssue && childIssue) {
           parentIssue.children.push(childIssue);
+        } else if (!parentIssue && childIssue) {
+          // Parent is missing from the OPEN-only query — likely closed
+          orphanParentNumbers.add(node.parent.number);
+        }
+      }
+    }
+
+    // Fetch missing (closed) parents so their open children stay visible
+    // in the tree instead of being silently hidden.
+    if (orphanParentNumbers.size > 0) {
+      const fetchedParents = await this.fetchMissingParents(
+        owner, repo, Array.from(orphanParentNumbers),
+      );
+
+      for (const parent of fetchedParents) {
+        issueByNumber.set(parent.number, parent);
+        flatIssues.push(parent);
+      }
+
+      // Re-link orphaned children to their now-present parents.
+      for (const node of allNodes) {
+        if (node.parent?.number && orphanParentNumbers.has(node.parent.number)) {
+          const parentIssue = issueByNumber.get(node.parent.number);
+          const childIssue = issueByNumber.get(node.number);
+          if (parentIssue && childIssue) {
+            // Avoid duplicate children (the child was not linked before)
+            if (!parentIssue.children.includes(childIssue)) {
+              parentIssue.children.push(childIssue);
+            }
+          }
+        }
+      }
+
+      // For any orphan parent number that was NOT successfully fetched,
+      // promote those children to root level so they are always visible.
+      const fetchedParentNumbers = new Set(fetchedParents.map((p) => p.number));
+      for (const orphanParentNum of orphanParentNumbers) {
+        if (!fetchedParentNumbers.has(orphanParentNum)) {
+          // Promote children of this missing parent to root
+          for (const node of allNodes) {
+            if (node.parent?.number === orphanParentNum) {
+              childNumbers.delete(node.number);
+            }
+          }
         }
       }
     }
@@ -783,6 +833,73 @@ export class IssueFetcher {
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Fetch missing parent issues via GitHub REST API (`gh api`).
+   * These are typically closed parents whose open sub-issues reference them.
+   * Since the main GraphQL query only fetches OPEN issues, closed parents
+   * are absent, causing their open children to become invisible in the tree.
+   *
+   * Cap: at most 20 parent fetches to avoid excessive API calls.
+   * Concurrency: limited to MAX_CONCURRENT_RESOLVE (5).
+   * On failure: individual parents that fail to fetch are silently skipped;
+   * their children will be promoted to root level by the caller.
+   */
+  private async fetchMissingParents(
+    owner: string,
+    repo: string,
+    parentNumbers: number[],
+  ): Promise<IssueNode[]> {
+    // Cap the number of parent fetches to avoid excessive API calls
+    const capped = parentNumbers.slice(0, 20);
+    if (capped.length < parentNumbers.length) {
+      console.warn(
+        `[IssueFetcher] Capping orphan parent fetches to 20 (${parentNumbers.length} requested)`
+      );
+    }
+
+    const results: IssueNode[] = [];
+
+    const tasks = capped.map((num) => async () => {
+      try {
+        const { stdout } = await execAsync(
+          `gh api "/repos/${owner}/${repo}/issues/${num}" --jq ".number,.title,.state,.html_url,.labels[].name"`,
+          {
+            encoding: 'utf-8',
+            timeout: 10_000,
+          }
+        );
+        const lines = stdout.trim().split('\n');
+        if (lines.length >= 4) {
+          const issueNumber = parseInt(lines[0], 10);
+          const title = lines[1] ?? '';
+          const state = (lines[2] ?? '').toLowerCase() === 'open' ? 'open' as const : 'closed' as const;
+          const url = lines[3] ?? `https://github.com/${owner}/${repo}/issues/${num}`;
+          const labels = lines.slice(4).filter(Boolean);
+
+          const parentNode: IssueNode = {
+            number: issueNumber,
+            title,
+            state,
+            labels,
+            url,
+            children: [],
+            activeTeam: null,
+          };
+
+          results.push(parentNode);
+        }
+      } catch (err) {
+        console.warn(
+          `[IssueFetcher] Failed to fetch missing parent #${num}: ${err instanceof Error ? err.message : err}`
+        );
+        // Silently skip — caller will promote orphaned children to root
+      }
+    });
+
+    await runWithConcurrency(tasks, MAX_CONCURRENT_RESOLVE);
+    return results;
+  }
 
   /**
    * Parse a github_repo string (e.g. "owner/repo") into [owner, repo].
