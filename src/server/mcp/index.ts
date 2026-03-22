@@ -28,6 +28,8 @@ import { registerListIssuesTool } from './tools/list-issues.js';
 import { registerListProjectsTool } from './tools/list-projects.js';
 import { registerAddProjectTool } from './tools/add-project.js';
 import { registerGetUsageTool } from './tools/get-usage.js';
+import { registerListTeamsTool } from './tools/list-teams.js';
+import { registerGetTeamTool } from './tools/get-team.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -69,6 +71,8 @@ export async function startMcpServer(): Promise<void> {
   registerListProjectsTool(mcpServer);
   registerAddProjectTool(mcpServer);
   registerGetUsageTool(mcpServer);
+  registerListTeamsTool(mcpServer);
+  registerGetTeamTool(mcpServer);
 
   // Initialize database
   const db = getDatabase();
