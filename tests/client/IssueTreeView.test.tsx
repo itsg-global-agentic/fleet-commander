@@ -283,4 +283,86 @@ describe('IssueTreeView', () => {
     fireEvent.click(screen.getByText('Collapse All'));
     expect(mockCollapseAll).toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // Collapse All includes project groups (Issue #353)
+  // -------------------------------------------------------------------------
+
+  it('collapseAll includes project group IDs when groups are present', async () => {
+    const issueA = { number: 10, title: 'Issue A', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueB = { number: 20, title: 'Issue B', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issueA, issueB],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'project-alpha',
+              tree: [issueA],
+              cachedAt: null,
+              count: 1,
+            },
+            {
+              projectId: 2,
+              projectName: 'project-beta',
+              tree: [issueB],
+              cachedAt: null,
+              count: 1,
+            },
+          ],
+          cachedAt: '2026-03-22T10:00:00Z',
+          count: 2,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Collapse All')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Collapse All'));
+
+    // collapseAll should be called with an array that includes project-1, project-2,
+    // plus the issue node IDs (10, 20)
+    expect(mockCollapseAll).toHaveBeenCalledWith(
+      expect.arrayContaining(['project-1', 'project-2', '10', '20']),
+    );
+  });
+
+  it('project group toggle calls onToggleCollapse with project node ID', async () => {
+    const groupIssue = { number: 1, title: 'Issue 1', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [groupIssue],
+          groups: [
+            {
+              projectId: 5,
+              projectName: 'my-repo',
+              tree: [groupIssue],
+              cachedAt: null,
+              count: 1,
+            },
+          ],
+          cachedAt: '2026-03-22T10:00:00Z',
+          count: 1,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('my-repo')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    // Click the project group header to toggle
+    fireEvent.click(screen.getByText('my-repo'));
+    expect(mockToggleCollapse).toHaveBeenCalledWith('project-5');
+  });
 });

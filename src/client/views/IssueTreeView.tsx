@@ -333,9 +333,13 @@ export function IssueTreeView() {
   }, [groups, search, statusFilter]);
 
   // Collect all node IDs from the full (unfiltered) tree for Collapse All
+  // Includes project group IDs (project-{id}) so Collapse All covers project groups too
   const allNodeIds = useMemo(() => {
     if (groups.length > 0) {
-      return groups.flatMap((g) => collectAllNodeIds(g.tree));
+      return groups.flatMap((g) => [
+        `project-${g.projectId}`,
+        ...collectAllNodeIds(g.tree),
+      ]);
     }
     return collectAllNodeIds(tree);
   }, [tree, groups]);
@@ -761,7 +765,8 @@ interface ProjectGroupProps {
 
 function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: ProjectGroupProps) {
   const api = useApi();
-  const [expanded, setExpanded] = React.useState(true);
+  const projectNodeId = `project-${group.projectId}`;
+  const expanded = !collapsedNodes.has(projectNodeId);
   const prioritization = usePrioritization();
 
   const displayTree = useMemo(() => {
@@ -774,7 +779,7 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
       {/* Project section header */}
       <div className="flex items-center gap-2 py-2 px-2 rounded hover:bg-dark-surface/60 transition-colors">
         <button
-          onClick={() => setExpanded(!expanded)}
+          onClick={() => onToggleCollapse(projectNodeId)}
           className="flex items-center gap-2 flex-1 text-left min-w-0"
         >
           {/* Expand/collapse arrow */}
