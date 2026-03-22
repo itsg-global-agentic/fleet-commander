@@ -3,7 +3,7 @@ import { useApi } from '../hooks/useApi';
 import type { TimelineEntry, StreamTimelineEntry, HookTimelineEntry, TeamMember } from '../../shared/types';
 import { agentColor } from '../utils/constants';
 import { AgentFilterBar } from './AgentFilterBar';
-import { ChevronRightIcon, SettingsIcon } from './Icons';
+import { SettingsIcon } from './Icons';
 
 // ---------------------------------------------------------------------------
 // Helpers — agent name display
@@ -300,18 +300,7 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
 
     return (
       <div>
-        <div
-          className={`py-0 leading-snug flex items-center gap-1.5${hasDetail ? ' cursor-pointer' : ''}`}
-          onClick={hasDetail ? () => setExpanded((prev) => !prev) : undefined}
-          role={hasDetail ? 'button' : undefined}
-          aria-expanded={hasDetail ? expanded : undefined}
-        >
-          {hasDetail && (
-            <ChevronRightIcon
-              size={10}
-              className={`text-dark-muted shrink-0 transition-transform duration-150${expanded ? ' rotate-90' : ''}`}
-            />
-          )}
+        <div className="py-0 leading-snug flex items-center gap-1.5">
           <span className="text-dark-muted">
             {formatLocalTime(entry.timestamp)}
           </span>
@@ -320,7 +309,14 @@ function StreamEntryRow({ entry }: { entry: StreamTimelineEntry }) {
             style={{ backgroundColor: color }}
           />
           <span style={{ color }} className="font-semibold">{label}</span>
-          <span className="text-dark-muted bg-dark-border/30 px-1.5 py-0.5 rounded">
+          <span
+            className={`text-dark-muted bg-dark-border/30 px-1.5 py-0.5 rounded${hasDetail ? ' cursor-pointer border-b border-dotted border-dark-border hover:bg-dark-border/50' : ''}`}
+            onClick={hasDetail ? () => setExpanded((prev) => !prev) : undefined}
+            onKeyDown={hasDetail ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded((prev) => !prev); } } : undefined}
+            role={hasDetail ? 'button' : undefined}
+            tabIndex={hasDetail ? 0 : undefined}
+            aria-expanded={hasDetail ? expanded : undefined}
+          >
             {entry.tool.name}
           </span>
         </div>
@@ -372,6 +368,7 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
   const isError = ERROR_TYPES.has(entry.eventType);
   const errorMsg = isError ? extractPayloadError(entry.payload) : null;
   const { label, color } = resolveHookAgentLabel(entry);
+  const [expanded, setExpanded] = useState(false);
 
   // Lifecycle events — agent dot + name + event badge
   if (isLifecycle) {
@@ -397,8 +394,10 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
     );
   }
 
-  // Error events — agent dot + name + red error info
+  // Error events — collapsible, click error badge to expand/collapse
   if (isError) {
+    const hasErrorDetail = errorMsg !== null;
+
     return (
       <div className="py-0 leading-snug text-dark-muted">
         <div className="flex items-center gap-1.5">
@@ -408,7 +407,14 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
             style={{ backgroundColor: color }}
           />
           <span style={{ color }} className="font-medium">{label}</span>
-          <span className="font-normal text-[#F85149]">
+          <span
+            className={`font-normal bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded${hasErrorDetail ? ' cursor-pointer border-b border-dotted border-red-400/40 hover:bg-red-500/30' : ''}`}
+            onClick={hasErrorDetail ? () => setExpanded((prev) => !prev) : undefined}
+            onKeyDown={hasErrorDetail ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setExpanded((prev) => !prev); } } : undefined}
+            role={hasErrorDetail ? 'button' : undefined}
+            tabIndex={hasErrorDetail ? 0 : undefined}
+            aria-expanded={hasErrorDetail ? expanded : undefined}
+          >
             {entry.eventType}
           </span>
           {entry.toolName && (
@@ -417,7 +423,7 @@ function HookEntryRow({ entry }: { entry: HookTimelineEntry }) {
             </span>
           )}
         </div>
-        {errorMsg && (
+        {expanded && errorMsg && (
           <div className="ml-[52px] text-[#F85149] mt-0.5 line-clamp-2">
             {errorMsg}
           </div>
