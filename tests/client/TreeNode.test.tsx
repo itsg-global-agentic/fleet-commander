@@ -251,4 +251,128 @@ describe('TreeNode', () => {
     render(<TreeNode node={makeNode({ number: 5, state: 'closed', children: [] })} {...defaultProps} />);
     expect(screen.queryByTitle(/Launch team for #5/)).not.toBeInTheDocument();
   });
+
+  // -------------------------------------------------------------------------
+  // Controlled collapse state (Issue #349)
+  // -------------------------------------------------------------------------
+
+  it('uses controlled collapse state when collapsedNodes and onToggleCollapse are provided', () => {
+    const collapsedNodes = new Set<string>();
+    const onToggleCollapse = vi.fn();
+    const parent = makeNode({
+      number: 1,
+      title: 'Parent',
+      children: [makeNode({ number: 2, title: 'Child issue' })],
+    });
+
+    // Not in collapsed set = expanded
+    render(
+      <TreeNode
+        node={parent}
+        {...defaultProps}
+        depth={0}
+        collapsedNodes={collapsedNodes}
+        onToggleCollapse={onToggleCollapse}
+      />,
+    );
+    expect(screen.getByText('Child issue')).toBeInTheDocument();
+  });
+
+  it('hides children when node is in collapsedNodes set', () => {
+    const collapsedNodes = new Set<string>(['1']);
+    const onToggleCollapse = vi.fn();
+    const parent = makeNode({
+      number: 1,
+      title: 'Parent',
+      children: [makeNode({ number: 2, title: 'Child issue' })],
+    });
+
+    render(
+      <TreeNode
+        node={parent}
+        {...defaultProps}
+        depth={0}
+        collapsedNodes={collapsedNodes}
+        onToggleCollapse={onToggleCollapse}
+      />,
+    );
+    expect(screen.queryByText('Child issue')).not.toBeInTheDocument();
+  });
+
+  it('calls onToggleCollapse with nodeId when arrow is clicked in controlled mode', () => {
+    const collapsedNodes = new Set<string>();
+    const onToggleCollapse = vi.fn();
+    const parent = makeNode({
+      number: 42,
+      title: 'Parent',
+      children: [makeNode({ number: 2, title: 'Child' })],
+    });
+
+    render(
+      <TreeNode
+        node={parent}
+        {...defaultProps}
+        depth={0}
+        collapsedNodes={collapsedNodes}
+        onToggleCollapse={onToggleCollapse}
+      />,
+    );
+
+    const collapseBtn = screen.getAllByLabelText('Collapse')[0];
+    fireEvent.click(collapseBtn);
+    expect(onToggleCollapse).toHaveBeenCalledWith('42');
+  });
+
+  it('forceExpand overrides controlled collapse state', () => {
+    const collapsedNodes = new Set<string>(['1']);
+    const onToggleCollapse = vi.fn();
+    const parent = makeNode({
+      number: 1,
+      title: 'Parent',
+      children: [makeNode({ number: 2, title: 'Child issue' })],
+    });
+
+    render(
+      <TreeNode
+        node={parent}
+        {...defaultProps}
+        depth={0}
+        forceExpand
+        collapsedNodes={collapsedNodes}
+        onToggleCollapse={onToggleCollapse}
+      />,
+    );
+    // Child should be visible because forceExpand overrides collapse
+    expect(screen.getByText('Child issue')).toBeInTheDocument();
+  });
+
+  it('passes collapsedNodes and onToggleCollapse to child TreeNodes', () => {
+    const collapsedNodes = new Set<string>(['2']);
+    const onToggleCollapse = vi.fn();
+    const parent = makeNode({
+      number: 1,
+      title: 'Parent',
+      children: [
+        makeNode({
+          number: 2,
+          title: 'Child',
+          children: [makeNode({ number: 3, title: 'Grandchild' })],
+        }),
+      ],
+    });
+
+    render(
+      <TreeNode
+        node={parent}
+        {...defaultProps}
+        depth={0}
+        collapsedNodes={collapsedNodes}
+        onToggleCollapse={onToggleCollapse}
+      />,
+    );
+
+    // Parent is expanded (not in collapsed set), Child (2) is collapsed
+    expect(screen.getByText('Child')).toBeInTheDocument();
+    expect(screen.queryByText('Grandchild')).not.toBeInTheDocument();
+  });
 });

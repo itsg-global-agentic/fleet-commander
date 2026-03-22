@@ -168,11 +168,18 @@ interface TreeNodeProps {
   onPrioritizeSubtree?: (subtreeChildren: IssueNode[]) => Promise<void>;
   /** Whether a prioritization request is in progress */
   prioritizing?: boolean;
+  /** Controlled collapse state: set of collapsed node IDs */
+  collapsedNodes?: Set<string>;
+  /** Callback when a node's collapse state is toggled (controlled mode) */
+  onToggleCollapse?: (nodeId: string) => void;
 }
 
-export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, forceExpand, projectId, priorityMap, checkedIssues, onCheckChange, onPrioritizeSubtree, prioritizing }: TreeNodeProps) {
-  const [expanded, setExpanded] = useState(depth < 2);
-  const isExpanded = forceExpand || expanded;
+export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, forceExpand, projectId, priorityMap, checkedIssues, onCheckChange, onPrioritizeSubtree, prioritizing, collapsedNodes, onToggleCollapse }: TreeNodeProps) {
+  const nodeId = node.number.toString();
+  const isControlled = collapsedNodes != null && onToggleCollapse != null;
+  const [localExpanded, setLocalExpanded] = useState(depth < 2);
+  const controlledExpanded = isControlled ? !collapsedNodes.has(nodeId) : localExpanded;
+  const isExpanded = forceExpand || controlledExpanded;
   const hasChildren = node.children.length > 0;
   const hasActiveTeam = node.activeTeam != null;
   const isBlocked = !!(node.dependencies && !node.dependencies.resolved && node.dependencies.openCount > 0);
@@ -200,7 +207,13 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
         {/* Expand/collapse arrow */}
         <button
           disabled={!hasChildren}
-          onClick={() => setExpanded(!isExpanded)}
+          onClick={() => {
+            if (isControlled) {
+              onToggleCollapse(nodeId);
+            } else {
+              setLocalExpanded(!isExpanded);
+            }
+          }}
           className={`w-4 h-4 flex items-center justify-center text-dark-muted shrink-0 transition-transform duration-150 ${
             hasChildren ? 'cursor-pointer hover:text-dark-text' : 'invisible'
           } ${isExpanded ? 'rotate-90' : ''}`}
@@ -376,6 +389,8 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
               onCheckChange={onCheckChange}
               onPrioritizeSubtree={onPrioritizeSubtree}
               prioritizing={prioritizing}
+              collapsedNodes={collapsedNodes}
+              onToggleCollapse={onToggleCollapse}
             />
           ))}
         </div>

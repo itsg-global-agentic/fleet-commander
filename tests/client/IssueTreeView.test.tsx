@@ -43,6 +43,20 @@ vi.mock('../../src/client/hooks/usePrioritization', () => ({
   sortTreeByPriority: (tree: unknown[]) => tree,
 }));
 
+const mockExpandAll = vi.fn();
+const mockCollapseAll = vi.fn();
+const mockToggleCollapse = vi.fn();
+
+vi.mock('../../src/client/hooks/useCollapseState', () => ({
+  useCollapseState: () => ({
+    collapsedNodes: new Set<string>(),
+    toggleCollapse: mockToggleCollapse,
+    expandAll: mockExpandAll,
+    collapseAll: mockCollapseAll,
+    isCollapsed: () => false,
+  }),
+}));
+
 // Mock TreeNode to keep rendering lightweight
 vi.mock('../../src/client/components/TreeNode', () => ({
   TreeNode: (props: { node: { number: number; title: string } }) => (
@@ -233,5 +247,40 @@ describe('IssueTreeView', () => {
     // inside tree-node-5 in the real component. The mock doesn't recurse,
     // but we verify the closed parent is present as a root node.
     expect(screen.getByTestId('tree-node-5')).toHaveTextContent('#5');
+  });
+
+  // -------------------------------------------------------------------------
+  // Expand All / Collapse All buttons (Issue #349)
+  // -------------------------------------------------------------------------
+
+  it('renders Expand All and Collapse All buttons', async () => {
+    setupMockApi();
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Expand All')).toBeInTheDocument();
+      expect(screen.getByText('Collapse All')).toBeInTheDocument();
+    });
+  });
+
+  it('calls expandAll when Expand All button is clicked', async () => {
+    setupMockApi();
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Expand All')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Expand All'));
+    expect(mockExpandAll).toHaveBeenCalled();
+  });
+
+  it('calls collapseAll when Collapse All button is clicked', async () => {
+    setupMockApi();
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Collapse All')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Collapse All'));
+    expect(mockCollapseAll).toHaveBeenCalled();
   });
 });

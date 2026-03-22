@@ -3,6 +3,7 @@ import React from 'react';
 import { useApi } from '../hooks/useApi';
 import { useSSE } from '../hooks/useSSE';
 import { usePrioritization, sortTreeByPriority } from '../hooks/usePrioritization';
+import { useCollapseState } from '../hooks/useCollapseState';
 import { TreeNode, type IssueNode } from '../components/TreeNode';
 import type { ProjectSummary } from '../../shared/types';
 
@@ -65,6 +66,9 @@ export function IssueTreeView() {
   const [groups, setGroups] = useState<ProjectIssueGroup[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+
+  // Collapse state — persisted to localStorage
+  const collapseState = useCollapseState();
 
   // Dependency confirmation dialog state
   const [depConfirm, setDepConfirm] = useState<{
@@ -328,6 +332,14 @@ export function IssueTreeView() {
       .filter((g) => g.tree.length > 0);
   }, [groups, search, statusFilter]);
 
+  // Collect all node IDs from the full (unfiltered) tree for Collapse All
+  const allNodeIds = useMemo(() => {
+    if (groups.length > 0) {
+      return groups.flatMap((g) => collectAllNodeIds(g.tree));
+    }
+    return collectAllNodeIds(tree);
+  }, [tree, groups]);
+
   // -------------------------------------------------------------------------
   // Loading state
   // -------------------------------------------------------------------------
@@ -424,6 +436,30 @@ export function IssueTreeView() {
           ))}
         </div>
 
+        {/* Expand / Collapse All buttons */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={collapseState.expandAll}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-accent/50 transition-colors"
+            title="Expand all tree nodes"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8.177 14.323a.75.75 0 0 1-1.06-.146l-3.5-4.5A.75.75 0 0 1 4.211 8.5h7.578a.75.75 0 0 1 .594 1.177l-3.5 4.5a.75.75 0 0 1-.706.146ZM7.823 1.677a.75.75 0 0 1 1.06.146l3.5 4.5A.75.75 0 0 1 11.789 7.5H4.211a.75.75 0 0 1-.594-1.177l3.5-4.5a.75.75 0 0 1 .706-.146Z" />
+            </svg>
+            Expand All
+          </button>
+          <button
+            onClick={() => collapseState.collapseAll(allNodeIds)}
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-accent/50 transition-colors"
+            title="Collapse all tree nodes"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M4.177 7.823a.75.75 0 0 1 .146-1.06l3.5-3.5A.75.75 0 0 1 8.5 3.557V7.5h-3.5a.75.75 0 0 1-.823-.677ZM11.823 7.823a.75.75 0 0 0-.146-1.06l-3.5-3.5A.75.75 0 0 0 7.5 3.557V7.5h3.5a.75.75 0 0 0 .823-.677ZM4.177 8.177a.75.75 0 0 0 .146 1.06l3.5 3.5a.75.75 0 0 0 .677.823V9.5H5a.75.75 0 0 0-.823.677ZM11.823 8.177a.75.75 0 0 1-.146 1.06l-3.5 3.5a.75.75 0 0 1-.677.823V9.5H11a.75.75 0 0 1 .823.677Z" />
+            </svg>
+            Collapse All
+          </button>
+        </div>
+
         <button
           onClick={handleRefresh}
           disabled={refreshing}
@@ -497,6 +533,8 @@ export function IssueTreeView() {
                 launchErrors={launchErrors}
                 forceExpand={!!search || statusFilter !== 'all'}
                 fetchTree={fetchTree}
+                collapsedNodes={collapseState.collapsedNodes}
+                onToggleCollapse={collapseState.toggleCollapse}
               />
             ))}
           </div>
@@ -510,6 +548,8 @@ export function IssueTreeView() {
             launchErrors={launchErrors}
             forceExpand={!!search || statusFilter !== 'all'}
             fetchTree={fetchTree}
+            collapsedNodes={collapseState.collapsedNodes}
+            onToggleCollapse={collapseState.toggleCollapse}
           />
         )}
       </div>
@@ -715,9 +755,11 @@ interface ProjectGroupProps {
   launchErrors: Map<number, string>;
   forceExpand: boolean;
   fetchTree: () => Promise<void>;
+  collapsedNodes: Set<string>;
+  onToggleCollapse: (nodeId: string) => void;
 }
 
-function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree }: ProjectGroupProps) {
+function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: ProjectGroupProps) {
   const api = useApi();
   const [expanded, setExpanded] = React.useState(true);
   const prioritization = usePrioritization();
@@ -789,6 +831,8 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
               onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
               onPrioritizeSubtree={prioritization.prioritizeSubtree}
               prioritizing={prioritization.loading}
+              collapsedNodes={collapsedNodes}
+              onToggleCollapse={onToggleCollapse}
             />
           ))}
         </div>
@@ -809,9 +853,11 @@ interface SingleProjectTreeProps {
   launchErrors: Map<number, string>;
   forceExpand: boolean;
   fetchTree: () => Promise<void>;
+  collapsedNodes: Set<string>;
+  onToggleCollapse: (nodeId: string) => void;
 }
 
-function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree }: SingleProjectTreeProps) {
+function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: SingleProjectTreeProps) {
   const api = useApi();
   const prioritization = usePrioritization();
 
@@ -859,6 +905,8 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
             onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
             onPrioritizeSubtree={prioritization.prioritizeSubtree}
             prioritizing={prioritization.loading}
+            collapsedNodes={collapsedNodes}
+            onToggleCollapse={onToggleCollapse}
           />
         ))}
       </div>
@@ -911,6 +959,18 @@ function filterTree(nodes: IssueNode[], query: string, statusFilter: string): Is
     }
     return acc;
   }, []);
+}
+
+/** Collect all node IDs (issue numbers as strings) from a tree recursively */
+function collectAllNodeIds(nodes: IssueNode[]): string[] {
+  const ids: string[] = [];
+  for (const node of nodes) {
+    ids.push(node.number.toString());
+    if (node.children.length > 0) {
+      ids.push(...collectAllNodeIds(node.children));
+    }
+  }
+  return ids;
 }
 
 /** Count nodes recursively */
