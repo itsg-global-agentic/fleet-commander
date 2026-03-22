@@ -621,13 +621,127 @@ function DependencyConfirmDialog({ issueNumber, message, onForce, onCancel }: {
 }
 
 // ---------------------------------------------------------------------------
+// RunAllConfirmDialog — confirmation modal for Run All action
+// ---------------------------------------------------------------------------
+
+function RunAllConfirmDialog({ issues, skippedActive, skippedBlocked, projectId, api, fetchTree, onClose }: {
+  issues: IssueNode[];
+  skippedActive: number;
+  skippedBlocked: number;
+  projectId: number;
+  api: ReturnType<typeof useApi>;
+  fetchTree: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [launching, setLaunching] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleLaunchAll = useCallback(async () => {
+    setLaunching(true);
+    setError(null);
+    try {
+      await api.post('teams/launch-batch', {
+        projectId,
+        issues: issues.map((n) => ({ number: n.number, title: n.title })),
+      });
+      onClose();
+      // Give the server a moment to process, then refresh
+      setTimeout(() => fetchTree(), 3000);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      setLaunching(false);
+    }
+  }, [api, projectId, issues, onClose, fetchTree]);
+
+  if (issues.length === 0) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="w-[480px] max-w-[95vw] bg-dark-surface border border-dark-border rounded-lg shadow-2xl">
+        <div className="px-5 py-4 border-b border-dark-border">
+          <h3 className="text-sm font-semibold text-dark-text flex items-center gap-2">
+            <svg className="w-4 h-4 text-[#3FB950]" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .428l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z" />
+            </svg>
+            Launch {issues.length} team{issues.length !== 1 ? 's' : ''}?
+          </h3>
+        </div>
+        <div className="px-5 py-4 max-h-[50vh] overflow-auto">
+          {/* List of issues to launch */}
+          <ul className="space-y-1 mb-3">
+            {issues.map((n) => (
+              <li key={n.number} className="text-xs text-dark-text flex items-center gap-2">
+                <svg className="w-3 h-3 text-[#3FB950] shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                  <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                  <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
+                </svg>
+                <span className="text-dark-muted">#{n.number}</span>
+                <span className="truncate">{n.title}</span>
+              </li>
+            ))}
+          </ul>
+
+          {/* Skipped counts */}
+          {(skippedActive > 0 || skippedBlocked > 0) && (
+            <div className="text-xs text-dark-muted space-y-0.5 mb-3 border-t border-dark-border/40 pt-2">
+              {skippedActive > 0 && (
+                <p>{skippedActive} issue{skippedActive !== 1 ? 's' : ''} skipped (already have active teams)</p>
+              )}
+              {skippedBlocked > 0 && (
+                <p>{skippedBlocked} issue{skippedBlocked !== 1 ? 's' : ''} skipped (blocked by dependencies)</p>
+              )}
+            </div>
+          )}
+
+          {/* Error display */}
+          {error && (
+            <div className="px-3 py-2 rounded border border-[#F85149]/30 bg-[#F85149]/10 text-xs text-[#F85149] mb-3">
+              {error}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center justify-end gap-3 px-5 py-3 border-t border-dark-border">
+          <button
+            onClick={onClose}
+            disabled={launching}
+            className="px-3 py-1.5 text-sm rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted transition-colors disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleLaunchAll}
+            disabled={launching}
+            className="inline-flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium rounded border border-[#3FB950]/40 text-[#3FB950] bg-[#3FB950]/10 hover:bg-[#3FB950]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {launching ? (
+              <svg className="w-3.5 h-3.5 animate-spin" viewBox="0 0 24 24" fill="none">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            ) : (
+              <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .428l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z" />
+              </svg>
+            )}
+            {launching ? 'Launching...' : 'Launch All'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // PrioritizeButtons — shared Prioritize + Reset button pair
 // ---------------------------------------------------------------------------
 
-function PrioritizeButtons({ prioritization, tree, className }: {
+function PrioritizeButtons({ prioritization, tree, className, onRunAll, runAllDisabled }: {
   prioritization: ReturnType<typeof usePrioritization>;
   tree: IssueNode[];
   className?: string;
+  onRunAll?: () => void;
+  runAllDisabled?: boolean;
 }) {
   return (
     <div className={`flex items-center gap-2 ${className ?? ''}`}>
@@ -649,6 +763,20 @@ function PrioritizeButtons({ prioritization, tree, className }: {
         )}
         {prioritization.loading ? 'Prioritizing...' : 'Prioritize'}
       </button>
+
+      {onRunAll && (
+        <button
+          onClick={onRunAll}
+          disabled={runAllDisabled}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-[#3FB950]/50 text-[#3FB950] hover:bg-[#3FB950]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Launch teams for all launchable issues"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M1.5 3.5a.5.5 0 0 1 .8-.4l4.5 3.4a.5.5 0 0 1 0 .8l-4.5 3.4a.5.5 0 0 1-.8-.4V3.5Zm7 0a.5.5 0 0 1 .8-.4l4.5 3.4a.5.5 0 0 1 0 .8l-4.5 3.4a.5.5 0 0 1-.8-.4V3.5Z" />
+          </svg>
+          Run All
+        </button>
+      )}
 
       {prioritization.hasPriority && (
         <button
@@ -768,11 +896,14 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
   const projectNodeId = `project-${group.projectId}`;
   const expanded = !collapsedNodes.has(projectNodeId);
   const prioritization = usePrioritization();
+  const [showRunAllDialog, setShowRunAllDialog] = useState(false);
 
   const displayTree = useMemo(() => {
     if (!prioritization.hasPriority) return group.tree;
     return sortTreeByPriority(group.tree, prioritization.priorityMap);
   }, [group.tree, prioritization.hasPriority, prioritization.priorityMap]);
+
+  const launchableInfo = useMemo(() => collectLaunchableIssues(group.tree), [group.tree]);
 
   return (
     <div>
@@ -800,7 +931,12 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
           </span>
         </button>
 
-        <PrioritizeButtons prioritization={prioritization} tree={group.tree} />
+        <PrioritizeButtons
+          prioritization={prioritization}
+          tree={group.tree}
+          onRunAll={() => setShowRunAllDialog(true)}
+          runAllDisabled={launchableInfo.launchable.length === 0}
+        />
       </div>
 
       {/* Prioritization error banner */}
@@ -842,6 +978,19 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
           ))}
         </div>
       )}
+
+      {/* Run All confirmation dialog */}
+      {showRunAllDialog && (
+        <RunAllConfirmDialog
+          issues={launchableInfo.launchable}
+          skippedActive={launchableInfo.skippedActive}
+          skippedBlocked={launchableInfo.skippedBlocked}
+          projectId={group.projectId}
+          api={api}
+          fetchTree={fetchTree}
+          onClose={() => setShowRunAllDialog(false)}
+        />
+      )}
     </div>
   );
 }
@@ -865,17 +1014,25 @@ interface SingleProjectTreeProps {
 function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: SingleProjectTreeProps) {
   const api = useApi();
   const prioritization = usePrioritization();
+  const [showRunAllDialog, setShowRunAllDialog] = useState(false);
 
   const displayTree = useMemo(() => {
     if (!prioritization.hasPriority) return tree;
     return sortTreeByPriority(tree, prioritization.priorityMap);
   }, [tree, prioritization.hasPriority, prioritization.priorityMap]);
 
+  const launchableInfo = useMemo(() => collectLaunchableIssues(tree), [tree]);
+
   return (
     <div>
       {/* Prioritize controls */}
       <div className="flex items-center gap-2 px-2 pb-2">
-        <PrioritizeButtons prioritization={prioritization} tree={tree} />
+        <PrioritizeButtons
+          prioritization={prioritization}
+          tree={tree}
+          onRunAll={projectId ? () => setShowRunAllDialog(true) : undefined}
+          runAllDisabled={launchableInfo.launchable.length === 0}
+        />
       </div>
 
       {/* Prioritization error banner */}
@@ -915,6 +1072,19 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
           />
         ))}
       </div>
+
+      {/* Run All confirmation dialog */}
+      {showRunAllDialog && projectId && (
+        <RunAllConfirmDialog
+          issues={launchableInfo.launchable}
+          skippedActive={launchableInfo.skippedActive}
+          skippedBlocked={launchableInfo.skippedBlocked}
+          projectId={projectId}
+          api={api}
+          fetchTree={fetchTree}
+          onClose={() => setShowRunAllDialog(false)}
+        />
+      )}
     </div>
   );
 }
@@ -986,6 +1156,35 @@ function countNodes(nodes: IssueNode[]): number {
     count += countNodes(n.children);
   }
   return count;
+}
+
+/** Collect launchable issues from a tree — open, no active team, no unresolved deps */
+function collectLaunchableIssues(nodes: IssueNode[]): {
+  launchable: IssueNode[];
+  skippedActive: number;
+  skippedBlocked: number;
+} {
+  const launchable: IssueNode[] = [];
+  let skippedActive = 0;
+  let skippedBlocked = 0;
+
+  function walk(items: IssueNode[]) {
+    for (const node of items) {
+      if (node.state === 'open') {
+        if (node.activeTeam) {
+          skippedActive++;
+        } else if (node.dependencies && !node.dependencies.resolved) {
+          skippedBlocked++;
+        } else {
+          launchable.push(node);
+        }
+      }
+      walk(node.children);
+    }
+  }
+
+  walk(nodes);
+  return { launchable, skippedActive, skippedBlocked };
 }
 
 /** Format a timestamp as HH:MM local time */

@@ -38,6 +38,16 @@ vi.mock('../../src/client/hooks/usePrioritization', () => ({
     priorityMap: new Map(),
     loading: false,
     error: null,
+    hasPriority: false,
+    prioritize: vi.fn(),
+    prioritizeSubtree: vi.fn(),
+    reset: vi.fn(),
+    toggleCheck: vi.fn(),
+    checkedIssues: new Set(),
+    checkedSortedIssueNumbers: [],
+    sortedIssueNumbers: [],
+    costUsd: null,
+    durationMs: null,
     fetchPriorities: vi.fn(),
   }),
   sortTreeByPriority: (tree: unknown[]) => tree,
@@ -100,7 +110,7 @@ function makeIssuesResponse() {
 
 function makeProjectsResponse() {
   return [
-    { id: 1, name: 'test-project', githubRepo: 'user/test', maxActiveTeams: 5, activeTeamCount: 0, queuedTeamCount: 0 },
+    { id: 1, name: 'test-project', githubRepo: 'user/test', maxActiveTeams: 5, activeTeamCount: 0, queuedTeamCount: 0, status: 'active' },
   ];
 }
 
@@ -364,5 +374,164 @@ describe('IssueTreeView', () => {
     // Click the project group header to toggle
     fireEvent.click(screen.getByText('my-repo'));
     expect(mockToggleCollapse).toHaveBeenCalledWith('project-5');
+  });
+
+  // -------------------------------------------------------------------------
+  // Run All button (Issue #347)
+  // -------------------------------------------------------------------------
+
+  it('renders Run All button in single-project view', async () => {
+    setupMockApi();
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Run All')).toBeInTheDocument();
+    });
+  });
+
+  it('renders Run All button in project group view', async () => {
+    const groupIssue = { number: 1, title: 'Issue 1', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [groupIssue],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'grouped-repo',
+              tree: [groupIssue],
+              cachedAt: null,
+              count: 1,
+            },
+          ],
+          cachedAt: '2026-03-22T10:00:00Z',
+          count: 1,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Run All')).toBeInTheDocument();
+    });
+  });
+
+  it('Run All button is disabled when no launchable issues', async () => {
+    // All issues have active teams — nothing to launch
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [
+            {
+              number: 10,
+              title: 'Already running',
+              state: 'open',
+              labels: [],
+              children: [],
+              activeTeam: { id: 1, status: 'running' },
+            },
+          ],
+          cachedAt: '2026-03-22T10:00:00Z',
+          count: 1,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Run All')).toBeInTheDocument();
+    });
+    const runAllBtn = screen.getByText('Run All').closest('button')!;
+    expect(runAllBtn).toBeDisabled();
+  });
+
+  it('Run All button opens confirmation dialog when clicked', async () => {
+    setupMockApi();
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Run All')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Run All'));
+    await waitFor(() => {
+      expect(screen.getByText(/Launch 2 teams\?/)).toBeInTheDocument();
+    });
+  });
+
+  it('Run All dialog shows skipped issue counts', async () => {
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [
+            { number: 10, title: 'Launchable', state: 'open', labels: [], children: [], activeTeam: null },
+            { number: 20, title: 'Has team', state: 'open', labels: [], children: [], activeTeam: { id: 1, status: 'running' } },
+            {
+              number: 30, title: 'Blocked', state: 'open', labels: [], children: [], activeTeam: null,
+              dependencies: { issueNumber: 30, blockedBy: [{ number: 5, owner: 'o', repo: 'r', state: 'open', title: 'Blocker' }], resolved: false, openCount: 1 },
+            },
+          ],
+          cachedAt: '2026-03-22T10:00:00Z',
+          count: 3,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Run All')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Run All'));
+    await waitFor(() => {
+      expect(screen.getByText(/Launch 1 team\?/)).toBeInTheDocument();
+      expect(screen.getByText(/1 issue skipped \(already have active teams\)/)).toBeInTheDocument();
+      expect(screen.getByText(/1 issue skipped \(blocked by dependencies\)/)).toBeInTheDocument();
+    });
+  });
+
+  it('Run All dialog Cancel button closes the dialog', async () => {
+    setupMockApi();
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Run All')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Run All'));
+    await waitFor(() => {
+      expect(screen.getByText(/Launch 2 teams\?/)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Cancel'));
+    await waitFor(() => {
+      expect(screen.queryByText(/Launch 2 teams\?/)).not.toBeInTheDocument();
+    });
+  });
+
+  it('Run All dialog Launch All button calls launch-batch API', async () => {
+    setupMockApi();
+    mockPost.mockResolvedValue({ launched: 2 });
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Run All')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Run All'));
+    await waitFor(() => {
+      expect(screen.getByText(/Launch 2 teams\?/)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByText('Launch All'));
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith('teams/launch-batch', {
+        projectId: 1,
+        issues: [
+          { number: 10, title: 'Fix login' },
+          { number: 20, title: 'Add feature' },
+        ],
+      });
+    });
   });
 });
