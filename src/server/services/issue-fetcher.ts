@@ -44,6 +44,7 @@ interface GraphQLIssueNode {
   title: string;
   state: string;
   url: string;
+  body?: string | null;
   labels?: { nodes?: Array<{ name: string }> };
   parent?: { number: number; title: string } | null;
   subIssuesSummary?: { total: number; completed: number; percentCompleted: number };
@@ -110,6 +111,7 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String) {
         labels(first: 5) { nodes { name } }
         parent { number title }
         subIssuesSummary { total completed percentCompleted }
+        body
         closedByPullRequestsReferences(first: 3, includeClosedPrs: true) {
           nodes { number state }
         }
@@ -136,6 +138,7 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String) {
         labels(first: 5) { nodes { name } }
         parent { number title }
         subIssuesSummary { total completed percentCompleted }
+        body
         closedByPullRequestsReferences(first: 3, includeClosedPrs: true) {
           nodes { number state }
         }
@@ -373,6 +376,88 @@ export class IssueFetcher {
 
     // Root issues are those with no parent
     const rootIssues = flatIssues.filter((issue) => !childNumbers.has(issue.number));
+
+    // -----------------------------------------------------------------------
+    // Post-pass: enrich all issues with body-based dependency data
+    // -----------------------------------------------------------------------
+    // Parse "blocked by #X" / "depends on #X" / "requires #X" / "after #X"
+    // patterns from each issue body and merge with any inline blockedBy deps
+    // already populated by mapGraphQLNode from GitHub's native tracking.
+    // Body text is stored in a transient map and discarded after enrichment.
+    // -----------------------------------------------------------------------
+    const bodyByNumber = new Map<number, string>();
+    for (const node of allNodes) {
+      if (node.body) {
+        bodyByNumber.set(node.number, node.body);
+      }
+    }
+
+    // Build a set of open issue numbers for resolving blocker state locally
+    const openIssueNumbers = new Set<number>();
+    for (const issue of flatIssues) {
+      if (issue.state === 'open') {
+        openIssueNumbers.add(issue.number);
+      }
+    }
+
+    // Build a map of issue number -> title for populating blocker titles
+    const titleByNumber = new Map<number, string>();
+    for (const issue of flatIssues) {
+      titleByNumber.set(issue.number, issue.title);
+    }
+
+    for (const issue of flatIssues) {
+      const body = bodyByNumber.get(issue.number);
+      if (!body) continue;
+
+      const bodyDeps = parseDependenciesFromBody(body, owner, repo);
+      if (bodyDeps.length === 0) continue;
+
+      // Resolve state and title for same-repo body deps from our local data
+      for (const dep of bodyDeps) {
+        if (dep.owner === owner && dep.repo === repo) {
+          // We know the state from our fetched issue set
+          if (openIssueNumbers.has(dep.number)) {
+            dep.state = 'open';
+          } else {
+            // Not in open issues — either closed or external; assume closed
+            dep.state = 'closed';
+          }
+          // Populate title from the tree if available
+          const title = titleByNumber.get(dep.number);
+          if (title) {
+            dep.title = title;
+          }
+        }
+        // Cross-repo deps keep their default state ('open') — conservative
+      }
+
+      if (issue.dependencies) {
+        // Merge: add body deps that are not already present from inline
+        for (const dep of bodyDeps) {
+          const exists = issue.dependencies.blockedBy.some(
+            (b) => b.number === dep.number && b.owner === dep.owner && b.repo === dep.repo
+          );
+          if (!exists) {
+            issue.dependencies.blockedBy.push(dep);
+          }
+        }
+        // Recalculate openCount and resolved
+        issue.dependencies.openCount = issue.dependencies.blockedBy.filter(
+          (d) => d.state === 'open'
+        ).length;
+        issue.dependencies.resolved = issue.dependencies.openCount === 0;
+      } else {
+        // No inline deps — create new dependency info from body deps only
+        const openCount = bodyDeps.filter((d) => d.state === 'open').length;
+        issue.dependencies = {
+          issueNumber: issue.number,
+          blockedBy: bodyDeps,
+          resolved: openCount === 0,
+          openCount,
+        };
+      }
+    }
 
     // Update the per-project cache
     this.cacheByProject.set(projectId, {

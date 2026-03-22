@@ -5,10 +5,12 @@
 //   - parseDependenciesFromBody regex parsing
 //   - checkDependencies launch-blocking logic (409 responses, force bypass)
 //   - Dependency API endpoints
+//   - Body-based dependency enrichment merging
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseDependenciesFromBody, detectCircularDependencies } from '../../src/server/services/issue-fetcher.js';
+import type { DependencyRef, IssueDependencyInfo } from '../../src/shared/types.js';
 
 // ---------------------------------------------------------------------------
 // parseDependenciesFromBody — regex parsing tests
@@ -497,5 +499,243 @@ describe('detectCircularDependencies', () => {
     deps.set(3, [4]);
     deps.set(4, []);
     expect(detectCircularDependencies(1, deps)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Body-based dependency enrichment merge logic
+// ---------------------------------------------------------------------------
+// These tests verify the merge/dedup logic used by the post-pass in
+// fetchIssueHierarchy: body-parsed deps are merged with inline (GraphQL
+// blockedBy) deps, deduplicating by issue number + owner + repo.
+// The actual post-pass runs inside fetchIssueHierarchy (which requires
+// live gh CLI), so we test the merge logic in isolation here.
+// ---------------------------------------------------------------------------
+
+describe('body-based dependency enrichment merge logic', () => {
+  const owner = 'octocat';
+  const repo = 'hello-world';
+
+  /**
+   * Simulate the enrichment merge logic from fetchIssueHierarchy.
+   * Takes existing inline deps (from GraphQL blockedBy) and body text,
+   * parses body deps, resolves same-repo state from openIssueNumbers,
+   * deduplicates, and returns the merged IssueDependencyInfo.
+   */
+  function enrichWithBodyDeps(
+    issueNumber: number,
+    existingDeps: IssueDependencyInfo | undefined,
+    body: string,
+    openIssueNumbers: Set<number>,
+    titleByNumber: Map<number, string>,
+  ): IssueDependencyInfo | undefined {
+    const bodyDeps = parseDependenciesFromBody(body, owner, repo);
+    if (bodyDeps.length === 0) return existingDeps;
+
+    // Resolve state and title for same-repo body deps from local data
+    for (const dep of bodyDeps) {
+      if (dep.owner === owner && dep.repo === repo) {
+        dep.state = openIssueNumbers.has(dep.number) ? 'open' : 'closed';
+        const title = titleByNumber.get(dep.number);
+        if (title) dep.title = title;
+      }
+    }
+
+    if (existingDeps) {
+      // Merge: add body deps not already present
+      for (const dep of bodyDeps) {
+        const exists = existingDeps.blockedBy.some(
+          (b) => b.number === dep.number && b.owner === dep.owner && b.repo === dep.repo
+        );
+        if (!exists) {
+          existingDeps.blockedBy.push(dep);
+        }
+      }
+      existingDeps.openCount = existingDeps.blockedBy.filter((d) => d.state === 'open').length;
+      existingDeps.resolved = existingDeps.openCount === 0;
+      return existingDeps;
+    } else {
+      const openCount = bodyDeps.filter((d) => d.state === 'open').length;
+      return {
+        issueNumber,
+        blockedBy: bodyDeps,
+        resolved: openCount === 0,
+        openCount,
+      };
+    }
+  }
+
+  it('creates dependency info from body when no inline deps exist', () => {
+    const openIssues = new Set([10, 20]);
+    const titles = new Map([[10, 'Issue 10'], [20, 'Issue 20']]);
+    const result = enrichWithBodyDeps(1, undefined, 'blocked by #10', openIssues, titles);
+
+    expect(result).toBeDefined();
+    expect(result!.issueNumber).toBe(1);
+    expect(result!.blockedBy).toHaveLength(1);
+    expect(result!.blockedBy[0].number).toBe(10);
+    expect(result!.blockedBy[0].state).toBe('open');
+    expect(result!.blockedBy[0].title).toBe('Issue 10');
+    expect(result!.resolved).toBe(false);
+    expect(result!.openCount).toBe(1);
+  });
+
+  it('merges body deps with existing inline deps without duplicates', () => {
+    const existing: IssueDependencyInfo = {
+      issueNumber: 1,
+      blockedBy: [
+        { number: 10, owner, repo, state: 'open', title: 'Inline blocker' },
+      ],
+      resolved: false,
+      openCount: 1,
+    };
+    const openIssues = new Set([10, 20]);
+    const titles = new Map([[10, 'Issue 10'], [20, 'Issue 20']]);
+
+    // Body references #10 (duplicate) and #20 (new)
+    const result = enrichWithBodyDeps(
+      1, existing, 'blocked by #10 and depends on #20', openIssues, titles,
+    );
+
+    expect(result).toBeDefined();
+    expect(result!.blockedBy).toHaveLength(2);
+    // #10 should still have the original inline title, not overwritten
+    expect(result!.blockedBy[0].title).toBe('Inline blocker');
+    // #20 is new from body
+    expect(result!.blockedBy[1].number).toBe(20);
+    expect(result!.blockedBy[1].state).toBe('open');
+    expect(result!.openCount).toBe(2);
+    expect(result!.resolved).toBe(false);
+  });
+
+  it('resolves same-repo deps as closed when not in openIssueNumbers set', () => {
+    const openIssues = new Set([20]); // #10 is NOT open -> closed
+    const titles = new Map([[10, 'Closed issue']]);
+
+    const result = enrichWithBodyDeps(1, undefined, 'blocked by #10', openIssues, titles);
+
+    expect(result).toBeDefined();
+    expect(result!.blockedBy[0].state).toBe('closed');
+    expect(result!.resolved).toBe(true);
+    expect(result!.openCount).toBe(0);
+  });
+
+  it('keeps cross-repo deps as open (conservative default)', () => {
+    const openIssues = new Set<number>();
+    const titles = new Map<number, string>();
+
+    const result = enrichWithBodyDeps(
+      1, undefined, 'blocked by acme/widgets#99', openIssues, titles,
+    );
+
+    expect(result).toBeDefined();
+    expect(result!.blockedBy[0].owner).toBe('acme');
+    expect(result!.blockedBy[0].repo).toBe('widgets');
+    expect(result!.blockedBy[0].state).toBe('open'); // conservative default
+    expect(result!.resolved).toBe(false);
+  });
+
+  it('returns undefined when body has no dependency patterns', () => {
+    const result = enrichWithBodyDeps(
+      1, undefined, 'Just a regular issue body with no deps.', new Set(), new Map(),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it('leaves existing deps unchanged when body has no dependency patterns', () => {
+    const existing: IssueDependencyInfo = {
+      issueNumber: 1,
+      blockedBy: [
+        { number: 10, owner, repo, state: 'open', title: 'Blocker' },
+      ],
+      resolved: false,
+      openCount: 1,
+    };
+
+    const result = enrichWithBodyDeps(
+      1, existing, 'No dependency patterns here', new Set(), new Map(),
+    );
+
+    // Should return the same object unchanged
+    expect(result).toBe(existing);
+    expect(result!.blockedBy).toHaveLength(1);
+  });
+
+  it('recalculates resolved status after merging body deps', () => {
+    // Existing: all inline deps resolved
+    const existing: IssueDependencyInfo = {
+      issueNumber: 1,
+      blockedBy: [
+        { number: 10, owner, repo, state: 'closed', title: 'Done' },
+      ],
+      resolved: true,
+      openCount: 0,
+    };
+    const openIssues = new Set([20]); // #20 is still open
+    const titles = new Map([[20, 'Still open']]);
+
+    const result = enrichWithBodyDeps(
+      1, existing, 'depends on #20', openIssues, titles,
+    );
+
+    expect(result).toBeDefined();
+    expect(result!.blockedBy).toHaveLength(2);
+    // After merge, resolved should be false because #20 is open
+    expect(result!.resolved).toBe(false);
+    expect(result!.openCount).toBe(1);
+  });
+
+  it('handles multiple body deps with mixed resolved states', () => {
+    const openIssues = new Set([10]); // #10 open, #20 closed
+    const titles = new Map([[10, 'Open one'], [20, 'Closed one']]);
+
+    const result = enrichWithBodyDeps(
+      1, undefined,
+      'blocked by #10 and depends on #20',
+      openIssues, titles,
+    );
+
+    expect(result).toBeDefined();
+    expect(result!.blockedBy).toHaveLength(2);
+    expect(result!.blockedBy[0].state).toBe('open');
+    expect(result!.blockedBy[1].state).toBe('closed');
+    expect(result!.openCount).toBe(1);
+    expect(result!.resolved).toBe(false);
+  });
+
+  it('populates title from titleByNumber for same-repo body deps', () => {
+    const openIssues = new Set([42]);
+    const titles = new Map([[42, 'My issue title']]);
+
+    const result = enrichWithBodyDeps(
+      1, undefined, 'blocked by #42', openIssues, titles,
+    );
+
+    expect(result!.blockedBy[0].title).toBe('My issue title');
+  });
+
+  it('deduplicates cross-repo deps correctly (number + owner + repo)', () => {
+    const existing: IssueDependencyInfo = {
+      issueNumber: 1,
+      blockedBy: [
+        { number: 100, owner: 'acme', repo: 'widgets', state: 'open', title: 'Cross-repo' },
+      ],
+      resolved: false,
+      openCount: 1,
+    };
+    const openIssues = new Set<number>();
+    const titles = new Map<number, string>();
+
+    // Body also references acme/widgets#100 (should be deduped)
+    // and acme/widgets#200 (new)
+    const result = enrichWithBodyDeps(
+      1, existing,
+      'blocked by acme/widgets#100 and depends on acme/widgets#200',
+      openIssues, titles,
+    );
+
+    expect(result!.blockedBy).toHaveLength(2); // not 3
+    expect(result!.blockedBy[0].number).toBe(100);
+    expect(result!.blockedBy[1].number).toBe(200);
   });
 });
