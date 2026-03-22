@@ -30,6 +30,9 @@ import { registerAddProjectTool } from './tools/add-project.js';
 import { registerGetUsageTool } from './tools/get-usage.js';
 import { registerListTeamsTool } from './tools/list-teams.js';
 import { registerGetTeamTool } from './tools/get-team.js';
+import { registerStopTeamTool } from './tools/stop-team.js';
+import { registerRestartTeamTool } from './tools/restart-team.js';
+import { registerSendMessageTool } from './tools/send-message.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -73,6 +76,9 @@ export async function startMcpServer(): Promise<void> {
   registerGetUsageTool(mcpServer);
   registerListTeamsTool(mcpServer);
   registerGetTeamTool(mcpServer);
+  registerStopTeamTool(mcpServer);
+  registerRestartTeamTool(mcpServer);
+  registerSendMessageTool(mcpServer);
 
   // Initialize database
   const db = getDatabase();
