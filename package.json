@@ -1,6 +1,6 @@
 {
   "name": "fleet-commander-ai",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Web dashboard for orchestrating Claude Code agent teams",
   "type": "module",
   "main": "dist/server/index.js",

@@ -41,11 +41,6 @@ async function main() {
 
   await server.register(cors, { origin: true });
 
-  // Health check
-  server.get('/api/health', async (_request, _reply) => {
-    return { status: 'ok' };
-  });
-
   // API routes
   await server.register(eventsRoutes);
   await server.register(streamRoutes);
