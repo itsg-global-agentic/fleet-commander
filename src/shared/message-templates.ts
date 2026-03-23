@@ -103,4 +103,18 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
     description: 'Sent to TL when merge conflicts are resolved',
     placeholders: ['PR_NUMBER'],
   },
+  {
+    id: 'branch_behind',
+    template:
+      'Your PR #{{PR_NUMBER}} is behind main. Please rebase onto origin/main and force-push: `git fetch origin main && git rebase origin/main && git push --force-with-lease`.',
+    description: 'Sent to TL when PR branch is behind main',
+    placeholders: ['PR_NUMBER'],
+  },
+  {
+    id: 'branch_behind_resolved',
+    template:
+      'Your PR #{{PR_NUMBER}} branch is now up-to-date with main. No rebase needed.',
+    description: 'Sent to TL when PR branch is no longer behind main',
+    placeholders: ['PR_NUMBER'],
+  },
 ];

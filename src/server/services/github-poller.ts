@@ -353,7 +353,7 @@ class GitHubPoller {
           }
         }
 
-        // Notify the team via stdin when merge status changes to/from dirty
+        // Notify the team via stdin when merge status changes to/from dirty or behind
         if (existing.mergeStatus !== mergeState) {
           try {
             const { getTeamManager } = await import('./team-manager.js');
@@ -369,9 +369,19 @@ class GitHubPoller {
                 PR_NUMBER: String(prNumber),
               });
               if (msg) manager.sendMessage(teamId, msg, 'fc', 'merge_conflict_resolved');
+            } else if (mergeState === 'behind') {
+              const msg = resolveMessage('branch_behind', {
+                PR_NUMBER: String(prNumber),
+              });
+              if (msg) manager.sendMessage(teamId, msg, 'fc', 'branch_behind');
+            } else if (existing.mergeStatus === 'behind') {
+              const msg = resolveMessage('branch_behind_resolved', {
+                PR_NUMBER: String(prNumber),
+              });
+              if (msg) manager.sendMessage(teamId, msg, 'fc', 'branch_behind_resolved');
             }
           } catch (err) {
-            console.error(`[GitHubPoller] Failed to send merge-conflict notification to team ${teamId}:`, err);
+            console.error(`[GitHubPoller] Failed to send merge-status notification to team ${teamId}:`, err);
           }
         }
 
