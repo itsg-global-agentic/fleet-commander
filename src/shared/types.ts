@@ -9,6 +9,9 @@
 /** Team operational status */
 export type TeamStatus = 'queued' | 'launching' | 'running' | 'idle' | 'stuck' | 'done' | 'failed';
 
+/** Terminal statuses — teams in these states should not be transitioned by hook events */
+export const TERMINAL_STATUSES: ReadonlySet<TeamStatus> = new Set(['done', 'failed']);
+
 /** Team domain phase */
 export type TeamPhase = 'init' | 'analyzing' | 'implementing' | 'reviewing' | 'pr' | 'done' | 'blocked';
 

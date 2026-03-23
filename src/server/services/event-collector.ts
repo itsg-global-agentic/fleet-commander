@@ -16,6 +16,7 @@
  */
 
 import type { TeamStatus } from '../../shared/types.js';
+import { TERMINAL_STATUSES } from '../../shared/types.js';
 import type { SSEEventType, SSEEventPayloads } from './sse-broker.js';
 import config from '../config.js';
 
@@ -205,6 +206,12 @@ export function processEvent(
   const now = Date.now();
   const nowIso = new Date(now).toISOString();
 
+  // ── Terminal state guard ───────────────────────────────────────────
+  // Teams in terminal states (done, failed) must NOT be transitioned
+  // by hook events. The event data is still recorded (below) for
+  // debugging, but all transition logic is skipped.
+  const isTerminal = TERMINAL_STATUSES.has(team.status);
+
   // ── State transition: idle/stuck -> running on activity events ─────
   // Most events from an idle or stuck team prove it is alive and doing
   // work. However, dormancy-indicating events (stop, session_end) mean
@@ -218,35 +225,16 @@ export function processEvent(
   const DORMANCY_EVENTS = new Set(['stop', 'stop_failure', 'session_end']);
   const eventNameLower = payload.event.toLowerCase();
 
-  if ((team.status === 'idle' || team.status === 'stuck') && !DORMANCY_EVENTS.has(eventNameLower)) {
-    db.insertTransition({
-      teamId,
-      fromStatus: team.status,
-      toStatus: 'running',
-      trigger: 'hook',
-      reason: `Activity resumed (${payload.event} event received)`,
-    });
-    db.updateTeam(teamId, {
-      status: 'running',
-    });
-    sse.broadcast('team_status_changed', {
-      team_id: teamId,
-      status: 'running',
-      previous_status: team.status,
-    }, teamId);
-  }
-
-  // ── State transition: launching -> running only on session_start/subagent_start
-  // Other events during launching may be noise; wait for an actual session start.
-  if (team.status === 'launching') {
-    const evt = payload.event.toLowerCase();
-    if (evt === 'session_start' || evt === 'subagent_start') {
+  if (!isTerminal && (team.status === 'idle' || team.status === 'stuck') && !DORMANCY_EVENTS.has(eventNameLower)) {
+    // Re-read from DB to avoid stale state (another service may have transitioned the team)
+    const freshTeam = db.getTeamByWorktree(payload.team);
+    if (freshTeam && (freshTeam.status === 'idle' || freshTeam.status === 'stuck') && !TERMINAL_STATUSES.has(freshTeam.status)) {
       db.insertTransition({
         teamId,
-        fromStatus: 'launching',
+        fromStatus: freshTeam.status,
         toStatus: 'running',
         trigger: 'hook',
-        reason: `First ${evt} event received`,
+        reason: `Activity resumed (${payload.event} event received)`,
       });
       db.updateTeam(teamId, {
         status: 'running',
@@ -254,8 +242,35 @@ export function processEvent(
       sse.broadcast('team_status_changed', {
         team_id: teamId,
         status: 'running',
-        previous_status: 'launching',
+        previous_status: freshTeam.status,
       }, teamId);
+    }
+  }
+
+  // ── State transition: launching -> running only on session_start/subagent_start
+  // Other events during launching may be noise; wait for an actual session start.
+  if (!isTerminal && team.status === 'launching') {
+    const evt = payload.event.toLowerCase();
+    if (evt === 'session_start' || evt === 'subagent_start') {
+      // Re-read from DB to avoid stale state (launch timeout may have fired)
+      const freshTeam = db.getTeamByWorktree(payload.team);
+      if (freshTeam && freshTeam.status === 'launching') {
+        db.insertTransition({
+          teamId,
+          fromStatus: 'launching',
+          toStatus: 'running',
+          trigger: 'hook',
+          reason: `First ${evt} event received`,
+        });
+        db.updateTeam(teamId, {
+          status: 'running',
+        });
+        sse.broadcast('team_status_changed', {
+          team_id: teamId,
+          status: 'running',
+          previous_status: 'launching',
+        }, teamId);
+      }
     }
   }
 

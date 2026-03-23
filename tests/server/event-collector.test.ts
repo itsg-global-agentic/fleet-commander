@@ -425,6 +425,175 @@ describe('State transitions', () => {
 });
 
 // =============================================================================
+// Terminal state guards (Issue #388)
+// =============================================================================
+
+describe('Terminal state guards', () => {
+  it('should NOT transition done team to running on activity event', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'done', phase: 'done' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'tool_use' });
+
+    processEvent(payload, db, sse);
+
+    // Should NOT have inserted a transition or changed status
+    expect(db.insertTransition).not.toHaveBeenCalled();
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+  });
+
+  it('should NOT transition failed team to running on session_start', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'failed', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'session_start' });
+
+    processEvent(payload, db, sse);
+
+    // Should NOT have inserted a transition or changed status
+    expect(db.insertTransition).not.toHaveBeenCalled();
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+  });
+
+  it('should NOT transition failed team to running on subagent_start', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'failed', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev' });
+
+    processEvent(payload, db, sse);
+
+    // Should NOT have inserted a transition or changed status
+    expect(db.insertTransition).not.toHaveBeenCalled();
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+  });
+
+  it('should still record events for terminal teams', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'done', phase: 'done' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'notification' });
+
+    const result = processEvent(payload, db, sse);
+
+    // Event should still be inserted and broadcast
+    expect(result.processed).toBe(true);
+    expect(db.insertEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'Notification' }),
+    );
+    expect(sse.broadcast).toHaveBeenCalledWith(
+      'team_event',
+      expect.objectContaining({ event_type: 'Notification' }),
+    );
+    // No status transition should have occurred
+    expect(db.insertTransition).not.toHaveBeenCalled();
+  });
+
+  it('should still update lastEventAt for terminal teams', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'failed', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'tool_use' });
+
+    processEvent(payload, db, sse);
+
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ lastEventAt: expect.any(String) }),
+    );
+  });
+
+  it('should handle stale launching->failed race (fresh re-read prevents transition)', () => {
+    let callCount = 0;
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: team appears to be launching
+          return { id: 1, status: 'launching', phase: 'init' };
+        }
+        // Second call (fresh re-read): launch timeout already fired, team is now failed
+        return { id: 1, status: 'failed', phase: 'init' };
+      }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'session_start' });
+
+    processEvent(payload, db, sse);
+
+    // The fresh re-read should prevent the transition
+    expect(db.insertTransition).not.toHaveBeenCalled();
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+  });
+
+  it('should still allow legitimate launching->running transition', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'launching', phase: 'init' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'session_start' });
+
+    processEvent(payload, db, sse);
+
+    // The transition should proceed normally
+    expect(db.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'launching',
+        toStatus: 'running',
+        trigger: 'hook',
+      }),
+    );
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'running' }),
+    );
+  });
+
+  it('should handle stale idle->done race (fresh re-read prevents transition)', () => {
+    let callCount = 0;
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockImplementation(() => {
+        callCount++;
+        if (callCount === 1) {
+          return { id: 1, status: 'idle', phase: 'implementing' };
+        }
+        // Fresh re-read: poller already transitioned team to done
+        return { id: 1, status: 'done', phase: 'done' };
+      }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'tool_use' });
+
+    processEvent(payload, db, sse);
+
+    // The fresh re-read should prevent the transition
+    expect(db.insertTransition).not.toHaveBeenCalled();
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+  });
+});
+
+// =============================================================================
 // tool_use throttling
 // =============================================================================
 

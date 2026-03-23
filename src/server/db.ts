@@ -1654,6 +1654,11 @@ export class FleetDatabase {
 
   /**
    * Record a team state transition for history/audit purposes.
+   *
+   * Safety net: validates that the team's current DB status matches
+   * fromStatus before inserting. If mismatched, logs a warning and
+   * skips the insert (does not throw). This catches stale-state races
+   * that slip past the event-collector guards.
    */
   insertTransition(data: {
     teamId: number;
@@ -1662,6 +1667,14 @@ export class FleetDatabase {
     trigger: string;
     reason: string;
   }): void {
+    // Validate fromStatus matches actual DB state
+    const team = this.getTeam(data.teamId);
+    if (team && team.status !== data.fromStatus) {
+      console.warn(
+        `[DB] insertTransition: fromStatus mismatch for team ${data.teamId}: expected ${data.fromStatus}, actual ${team.status}. Skipping.`
+      );
+      return;
+    }
     this.db.prepare(
       'INSERT INTO team_transitions (team_id, from_status, to_status, trigger, reason) VALUES (?, ?, ?, ?, ?)'
     ).run(data.teamId, data.fromStatus, data.toStatus, data.trigger, data.reason);
