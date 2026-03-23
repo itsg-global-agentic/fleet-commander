@@ -1,7 +1,33 @@
 import { execSync } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+
+/**
+ * Return the platform-appropriate default path for the Fleet Commander database.
+ *
+ * - Windows:  %APPDATA%\fleet-commander\fleet.db
+ * - macOS:    ~/Library/Application Support/fleet-commander/fleet.db
+ * - Linux:    $XDG_DATA_HOME/fleet-commander/fleet.db  (default ~/.local/share)
+ */
+export function defaultDbPath(): string {
+  const DB_NAME = 'fleet.db';
+  const APP_DIR = 'fleet-commander';
+
+  if (process.platform === 'win32') {
+    const appData = process.env['APPDATA'] || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, APP_DIR, DB_NAME);
+  }
+
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', APP_DIR, DB_NAME);
+  }
+
+  // Linux / other
+  const dataHome = process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share');
+  return path.join(dataHome, APP_DIR, DB_NAME);
+}
 
 /**
  * Determine the Fleet Commander package root directory.
@@ -90,7 +116,7 @@ const config = Object.freeze({
   skipPermissions: process.env['FLEET_SKIP_PERMISSIONS'] !== 'false',
   enableAgentTeams: process.env['FLEET_ENABLE_AGENT_TEAMS'] !== 'false',
 
-  dbPath: process.env['FLEET_DB_PATH'] || path.join(fleetCommanderRoot, 'fleet.db'),
+  dbPath: process.env['FLEET_DB_PATH'] || defaultDbPath(),
 
   logLevel: process.env['LOG_LEVEL'] || 'info',
 
@@ -119,6 +145,9 @@ const config = Object.freeze({
    */
   terminalCmd: (process.env['FLEET_TERMINAL'] || 'auto') as 'auto' | 'wt' | 'cmd',
 });
+
+// Ensure the database directory exists before any DB access
+fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 
 // Validate config
 export function validateConfig(): void {

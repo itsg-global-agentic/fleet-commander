@@ -3,7 +3,8 @@
 // =============================================================================
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { safeParseInt, validateConfig } from '../../src/server/config.js';
+import path from 'path';
+import { safeParseInt, validateConfig, defaultDbPath } from '../../src/server/config.js';
 
 // ---------------------------------------------------------------------------
 // safeParseInt
@@ -119,5 +120,55 @@ describe('safeParseInt edge cases', () => {
   it('handles large numbers', () => {
     expect(safeParseInt('300000', 'TEST')).toBe(300000);
     expect(safeParseInt('65535', 'TEST')).toBe(65535);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// defaultDbPath
+// ---------------------------------------------------------------------------
+
+describe('defaultDbPath', () => {
+  it('returns an absolute path', () => {
+    expect(path.isAbsolute(defaultDbPath())).toBe(true);
+  });
+
+  it('contains the fleet-commander directory segment', () => {
+    const dbPath = defaultDbPath();
+    expect(dbPath).toContain('fleet-commander');
+  });
+
+  it('ends with fleet.db', () => {
+    const dbPath = defaultDbPath();
+    expect(dbPath.endsWith('fleet.db')).toBe(true);
+  });
+
+  it('returns a path under the platform data directory', () => {
+    const dbPath = defaultDbPath();
+    if (process.platform === 'win32') {
+      // Should be under APPDATA or the fallback AppData\Roaming
+      expect(dbPath).toMatch(/AppData/i);
+    } else if (process.platform === 'darwin') {
+      expect(dbPath).toContain(path.join('Library', 'Application Support'));
+    } else {
+      // Linux: should be under XDG_DATA_HOME or ~/.local/share
+      expect(dbPath).toMatch(/\.local[/\\]share|XDG_DATA_HOME/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FLEET_DB_PATH env override
+// ---------------------------------------------------------------------------
+
+describe('FLEET_DB_PATH env override', () => {
+  it('config.dbPath respects FLEET_DB_PATH when set', async () => {
+    const mod = await import('../../src/server/config.js');
+    // If FLEET_DB_PATH is set in the env, config should use it;
+    // otherwise it should use the platform default
+    if (process.env['FLEET_DB_PATH']) {
+      expect(mod.default.dbPath).toBe(process.env['FLEET_DB_PATH']);
+    } else {
+      expect(mod.default.dbPath).toBe(defaultDbPath());
+    }
   });
 });

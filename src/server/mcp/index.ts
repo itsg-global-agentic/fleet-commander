@@ -71,7 +71,7 @@ export async function startMcpServer(): Promise<void> {
   registerLaunchTeamTool(mcpServer);
 
   // Initialize database
-  const db = getDatabase();
+  const db = getDatabase(config.dbPath);
   db.initDefaultTemplates(
     DEFAULT_MESSAGE_TEMPLATES.map((t) => ({ id: t.id, template: t.template })),
   );

@@ -212,7 +212,7 @@ The SSE broker emits 14 event types:
 | `FLEET_EARLY_CRASH_THRESHOLD_SEC` | `120` | Seconds before a SubagentStop is considered an early crash |
 | `FLEET_EARLY_CRASH_MIN_TOOLS` | `5` | Minimum tool-use events for a subagent to be considered healthy |
 | `FLEET_GITHUB_POLL_MS` | `30000` | GitHub poll interval |
-| `FLEET_DB_PATH` | `./fleet.db` | Database file location |
+| `FLEET_DB_PATH` | (platform data dir) | Database file location. Defaults to platform user data dir |
 | `FLEET_TERMINAL` | `auto` | Windows terminal preference (`auto`/`wt`/`cmd`) |
 | `FLEET_CLAUDE_CMD` | `claude` | Claude Code CLI command |
 | `FLEET_SKIP_PERMISSIONS` | `true` | Skip CC permission prompts |

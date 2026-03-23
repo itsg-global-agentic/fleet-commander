@@ -251,9 +251,8 @@ export interface AgentMessageInsert {
 export class FleetDatabase {
   private db: Database.Database;
 
-  constructor(dbPath?: string) {
-    const resolvedPath = dbPath ?? process.env['FLEET_DB_PATH'] ?? 'fleet.db';
-    this.db = new Database(resolvedPath);
+  constructor(dbPath: string) {
+    this.db = new Database(dbPath);
 
     // Enable WAL mode for better concurrent read performance
     this.db.pragma('journal_mode = WAL');
@@ -1956,10 +1955,13 @@ let _instance: FleetDatabase | null = null;
 
 /**
  * Get or create the singleton database instance.
- * Call with a path to override the default on first use.
+ * A dbPath is required on the first call; subsequent calls return the existing instance.
  */
 export function getDatabase(dbPath?: string): FleetDatabase {
   if (!_instance) {
+    if (!dbPath) {
+      throw new Error('getDatabase() requires a dbPath argument on first call');
+    }
     _instance = new FleetDatabase(dbPath);
     _instance.initSchema();
   }

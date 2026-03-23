@@ -75,7 +75,7 @@ async function main() {
   }
 
   // Initialize default message templates from the standalone template list
-  const db = getDatabase();
+  const db = getDatabase(config.dbPath);
   db.initDefaultTemplates(
     DEFAULT_MESSAGE_TEMPLATES.map((t) => ({ id: t.id, template: t.template }))
   );
