@@ -92,14 +92,13 @@ export class IssueService {
     const projectCaches = fetcher.getIssuesByProject();
     const groups = await Promise.all(projectCaches.map(async (entry) => {
       const project = db.getProject(entry.projectId);
-      const cloned = structuredClone(entry.tree);
-      fetcher.enrichWithTeamInfo(cloned, entry.projectId);
+      const enriched = fetcher.enrichWithTeamInfo(entry.tree, entry.projectId);
       return {
         projectId: entry.projectId,
         projectName: project?.name ?? `Project #${entry.projectId}`,
-        tree: cloned,
+        tree: enriched,
         cachedAt: entry.cachedAt,
-        count: countIssues(cloned),
+        count: countIssues(enriched),
       };
     }));
 
@@ -141,15 +140,14 @@ export class IssueService {
     const fetcher = getIssueFetcher();
     const issues = await fetcher.getIssues(projectId);
 
-    const cloned = structuredClone(issues);
-    fetcher.enrichWithTeamInfo(cloned, projectId);
+    const enriched = fetcher.enrichWithTeamInfo(issues, projectId);
 
     return {
       projectId,
       projectName: project.name,
-      tree: cloned,
+      tree: enriched,
       cachedAt: fetcher.getCachedAt(projectId),
-      count: countIssues(cloned),
+      count: countIssues(enriched),
     };
   }
 
@@ -170,11 +168,10 @@ export class IssueService {
       };
     }
 
-    const cloned = structuredClone(nextIssue);
-    fetcher.enrichWithTeamInfo([cloned]);
+    const [enriched] = fetcher.enrichWithTeamInfo([nextIssue]);
 
     return {
-      issue: cloned,
+      issue: enriched,
       reason: 'Highest priority Ready issue with no active team',
     };
   }
@@ -189,12 +186,11 @@ export class IssueService {
     const activeIssues = getActiveTeamIssueNumbers();
     const available = fetcher.getAvailableIssues(activeIssues);
 
-    const cloned = structuredClone(available);
-    fetcher.enrichWithTeamInfo(cloned);
+    const enriched = fetcher.enrichWithTeamInfo(available);
 
     return {
-      issues: cloned,
-      count: cloned.length,
+      issues: enriched,
+      count: enriched.length,
     };
   }
 
@@ -220,10 +216,9 @@ export class IssueService {
       );
     }
 
-    const cloned = structuredClone(issue);
-    fetcher.enrichWithTeamInfo([cloned]);
+    const [enriched] = fetcher.enrichWithTeamInfo([issue]);
 
-    return cloned;
+    return enriched;
   }
 
   /**
@@ -320,13 +315,12 @@ export class IssueService {
     const fetcher = getIssueFetcher();
     const issues = await fetcher.refresh();
 
-    const cloned = structuredClone(issues);
-    fetcher.enrichWithTeamInfo(cloned);
+    const enriched = fetcher.enrichWithTeamInfo(issues);
 
     return {
       refreshedAt: fetcher.getCachedAt(),
-      issueCount: countIssues(cloned),
-      tree: cloned,
+      issueCount: countIssues(enriched),
+      tree: enriched,
     };
   }
 }

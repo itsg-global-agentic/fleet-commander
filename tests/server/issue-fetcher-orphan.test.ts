@@ -5,7 +5,7 @@
 // tree. When the main GraphQL query returns only OPEN issues, closed parents
 // are missing. The orphan detection logic should:
 //   1. Detect children whose parent is not in the fetched set
-//   2. Fetch those missing parents via REST API
+//   2. Fetch those missing parents via a batched GraphQL query (aliases)
 //   3. Inject them as closed nodes in the tree
 //   4. Fall back to promoting orphans to root if the parent fetch fails
 // =============================================================================

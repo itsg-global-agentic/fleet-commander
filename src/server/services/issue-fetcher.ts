@@ -470,12 +470,14 @@ export class IssueFetcher {
 
   /**
    * Fetch issue hierarchies for all active projects.
+   * Uses runWithConcurrency to parallelize fetches (limit 3) instead of
+   * serial iteration, significantly reducing total wall-clock time.
    */
   async fetchAllProjects(): Promise<void> {
     const db = getDatabase();
     const projects = db.getProjects({ status: 'active' });
 
-    for (const project of projects) {
+    const tasks = projects.map((project) => async () => {
       try {
         await this.fetchIssueHierarchy(project.id);
       } catch (err) {
@@ -484,19 +486,30 @@ export class IssueFetcher {
           err instanceof Error ? err.message : err
         );
       }
-    }
+    });
+
+    await runWithConcurrency(tasks, 3);
   }
 
   /**
-   * Returns cached issues for a project. If cache is empty, triggers an async
-   * fetch in the background and returns empty until cache is populated.
+   * Returns cached issues for a project. If cache is empty, kicks off a
+   * background fetch and returns an empty array immediately (non-blocking).
+   * The polling loop or initial fetchAllProjects() will populate the cache.
    * For synchronous access, use getIssuesCached() instead.
    */
   async getIssues(projectId?: number): Promise<IssueNode[]> {
     if (projectId !== undefined) {
       const cached = this.cacheByProject.get(projectId);
       if (!cached || (cached.issues.length === 0 && !cached.cachedAt)) {
-        return this.fetchIssueHierarchy(projectId);
+        // Fire-and-forget background fetch; return empty immediately
+        console.info(`[IssueFetcher] Cache miss for project ${projectId}, triggering background fetch`);
+        this.fetchIssueHierarchy(projectId).catch((err) => {
+          console.error(
+            `[IssueFetcher] Background fetch for project ${projectId} failed:`,
+            err instanceof Error ? err.message : err,
+          );
+        });
+        return [];
       }
       return cached.issues;
     }
@@ -707,7 +720,8 @@ export class IssueFetcher {
 
   /**
    * Enrich issue nodes with active team info from the database.
-   * Modifies nodes in place and returns the same array.
+   * Returns a NEW tree of shallow-copied nodes — the original cached tree
+   * is not mutated, eliminating the need for structuredClone at call sites.
    * When projectId is specified, only teams for that project are matched.
    */
   enrichWithTeamInfo(issues: IssueNode[], projectId?: number): IssueNode[] {
@@ -726,23 +740,23 @@ export class IssueFetcher {
         });
       }
 
-      // Recursively enrich
-      const enrichNode = (node: IssueNode): void => {
+      // Recursively create shallow copies with team info set
+      const enrichNode = (node: IssueNode): IssueNode => {
         const team = teamByIssue.get(node.number);
-        node.activeTeam = team ?? null;
-        for (const child of node.children) {
-          enrichNode(child);
-        }
+        return {
+          ...node,
+          labels: [...node.labels],
+          activeTeam: team ?? null,
+          children: node.children.map((child) => enrichNode(child)),
+        };
       };
 
-      for (const issue of issues) {
-        enrichNode(issue);
-      }
+      return issues.map((issue) => enrichNode(issue));
     } catch (err) {
       console.error('[IssueFetcher] Failed to enrich with team info:', err instanceof Error ? err.message : err);
+      // On error, return shallow copies without enrichment to avoid mutating cache
+      return issues.map((node) => ({ ...node, labels: [...node.labels], children: [...node.children] }));
     }
-
-    return issues;
   }
 
   // -------------------------------------------------------------------------
@@ -920,15 +934,17 @@ export class IssueFetcher {
   // -------------------------------------------------------------------------
 
   /**
-   * Fetch missing parent issues via GitHub REST API (`gh api`).
+   * Fetch missing parent issues via a single batched GraphQL query.
    * These are typically closed parents whose open sub-issues reference them.
    * Since the main GraphQL query only fetches OPEN issues, closed parents
    * are absent, causing their open children to become invisible in the tree.
    *
+   * Uses GraphQL aliases (`p42: issue(number: 42) { ... }`) to fetch up to
+   * 20 parents in a single API call instead of N individual REST calls.
+   *
    * Cap: at most 20 parent fetches to avoid excessive API calls.
-   * Concurrency: limited to MAX_CONCURRENT_RESOLVE (5).
-   * On failure: individual parents that fail to fetch are silently skipped;
-   * their children will be promoted to root level by the caller.
+   * On failure: falls back to empty array; orphaned children will be
+   * promoted to root level by the caller.
    */
   private async fetchMissingParents(
     owner: string,
@@ -943,47 +959,76 @@ export class IssueFetcher {
       );
     }
 
-    const results: IssueNode[] = [];
+    if (capped.length === 0) return [];
 
-    const tasks = capped.map((num) => async () => {
-      try {
-        const { stdout } = await execAsync(
-          `gh api "/repos/${owner}/${repo}/issues/${num}" --jq ".number,.title,.state,.html_url,.labels[].name"`,
-          {
-            encoding: 'utf-8',
-            timeout: 10_000,
-          }
-        );
-        const lines = stdout.trim().split('\n');
-        if (lines.length >= 4) {
-          const issueNumber = parseInt(lines[0], 10);
-          const title = lines[1] ?? '';
-          const state = (lines[2] ?? '').toLowerCase() === 'open' ? 'open' as const : 'closed' as const;
-          const url = lines[3] ?? `https://github.com/${owner}/${repo}/issues/${num}`;
-          const labels = lines.slice(4).filter(Boolean);
+    try {
+      // Build aliased GraphQL query fields for each parent number
+      const aliasedFields = capped.map((num) =>
+        `p${num}: issue(number: ${num}) { number title state url labels(first: 5) { nodes { name } } }`
+      ).join('\n        ');
 
-          const parentNode: IssueNode = {
-            number: issueNumber,
-            title,
-            state,
-            labels,
-            url,
-            children: [],
-            activeTeam: null,
-          };
-
-          results.push(parentNode);
+      const query = `query($owner: String!, $repo: String!) {
+        repository(owner: $owner, name: $repo) {
+          ${aliasedFields}
         }
-      } catch (err) {
-        console.warn(
-          `[IssueFetcher] Failed to fetch missing parent #${num}: ${err instanceof Error ? err.message : err}`
-        );
-        // Silently skip — caller will promote orphaned children to root
-      }
-    });
+      }`;
 
-    await runWithConcurrency(tasks, MAX_CONCURRENT_RESOLVE);
-    return results;
+      const compactQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+      const requestBody = JSON.stringify({
+        query: compactQuery,
+        variables: { owner, repo },
+      });
+
+      const stdout = await this.runGHGraphQL(requestBody, 30_000);
+      const result = JSON.parse(stdout) as {
+        data?: {
+          repository?: Record<string, {
+            number: number;
+            title: string;
+            state: string;
+            url: string;
+            labels?: { nodes?: Array<{ name: string }> };
+          } | null>;
+        };
+        errors?: Array<{ message: string }>;
+      };
+
+      if (result.errors?.length) {
+        console.warn(
+          `[IssueFetcher] GraphQL errors fetching orphan parents: ${result.errors.map((e) => e.message).join('; ')}`
+        );
+      }
+
+      const repoData = result.data?.repository;
+      if (!repoData) return [];
+
+      const results: IssueNode[] = [];
+      for (const key of Object.keys(repoData)) {
+        if (!/^p\d+$/.test(key)) continue;
+        const issueData = repoData[key];
+        if (!issueData) continue; // null = non-existent issue, skip
+
+        const parentNode: IssueNode = {
+          number: issueData.number,
+          title: issueData.title,
+          state: issueData.state.toLowerCase() === 'open' ? 'open' : 'closed',
+          labels: (issueData.labels?.nodes ?? []).map((l) => l.name),
+          url: issueData.url,
+          children: [],
+          activeTeam: null,
+        };
+
+        results.push(parentNode);
+      }
+
+      return results;
+    } catch (err) {
+      console.warn(
+        `[IssueFetcher] Failed to fetch missing parents via GraphQL: ${err instanceof Error ? err.message : err}`
+      );
+      // Fallback: return empty — caller will promote orphaned children to root
+      return [];
+    }
   }
 
   /**
