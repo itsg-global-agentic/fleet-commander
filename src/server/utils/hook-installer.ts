@@ -14,24 +14,63 @@ import config from '../config.js';
 /**
  * Find Git Bash executable on Windows.
  * Avoids WSL's bash which can't handle Windows paths.
+ *
+ * `git --exec-path` returns something like:
+ *   - "C:/Program Files/Git/mingw64/libexec/git-core"  (standard install, 3 levels deep)
+ *   - "C:/Git/scm/mingw64/libexec/git-core"            (custom install, 3 levels deep)
+ *   - "C:/Git/scm/libexec/git-core"                    (portable, 2 levels deep)
+ *
+ * We walk up the tree until we find usr/bin/bash.exe rather than assuming
+ * a fixed depth, since the layout varies across Git for Windows installs.
  */
 let _gitBash: string | null = null;
 export function getGitBash(): string {
   if (_gitBash) return _gitBash;
+
+  // Strategy 1: Walk up from git --exec-path to find usr/bin/bash.exe
   try {
-    // git --exec-path returns e.g. "C:/Git/scm/libexec/git-core"
-    // Git bash is at {git_root}/usr/bin/bash.exe
     const execPath = execSync('git --exec-path', { encoding: 'utf-8', stdio: 'pipe' }).trim();
-    const gitRoot = path.resolve(execPath, '..', '..');
-    const bashPath = path.join(gitRoot, 'usr', 'bin', 'bash.exe');
-    if (fs.existsSync(bashPath)) {
-      _gitBash = bashPath;
+    let dir = path.resolve(execPath);
+    // Walk up at most 5 levels looking for usr/bin/bash.exe
+    for (let i = 0; i < 5; i++) {
+      const candidate = path.join(dir, 'usr', 'bin', 'bash.exe');
+      if (fs.existsSync(candidate)) {
+        _gitBash = candidate;
+        return _gitBash;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break; // reached filesystem root
+      dir = parent;
+    }
+  } catch {
+    // git not in PATH or other error — try fallback locations
+  }
+
+  // Strategy 2: Check common Git for Windows install locations
+  const commonLocations = [
+    'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+    'C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe',
+  ];
+  for (const loc of commonLocations) {
+    if (fs.existsSync(loc)) {
+      _gitBash = loc;
+      return _gitBash;
+    }
+  }
+
+  // Strategy 3: Check if 'bash' in PATH is Git Bash (not WSL)
+  // by looking for the --version containing "pc-msys" or "pc-linux"
+  try {
+    const ver = execSync('bash --version', { encoding: 'utf-8', stdio: 'pipe', timeout: 5000 });
+    if (ver.includes('pc-msys') || ver.includes('Msys') || ver.includes('mintty')) {
+      _gitBash = 'bash';
       return _gitBash;
     }
   } catch {
-    // fallback
+    // bash not found at all
   }
-  _gitBash = 'bash'; // hope for the best
+
+  _gitBash = 'bash'; // last resort — may be WSL, but nothing else to try
   return _gitBash;
 }
 
@@ -54,10 +93,13 @@ export function installHooks(repoPath: string, logger: FastifyBaseLogger): { ok:
     return fail(`install.sh not found at ${scriptPath}`);
   }
 
-  // On Windows, convert paths to MSYS2 format: C:/foo → /c/foo
+  // On Windows, use Git Bash with forward-slash paths (Git Bash handles C:/ natively)
+  const bash = getGitBash();
   const cmd = process.platform === 'win32'
-    ? `"${getGitBash()}" "${toBashPath(scriptPath)}" "${toBashPath(repoPath)}"`
+    ? `"${bash}" "${toBashPath(scriptPath)}" "${toBashPath(repoPath)}"`
     : `"${scriptPath}" "${repoPath}"`;
+
+  logger.info(`[installHooks] bash=${bash}, cmd=${cmd}`);
 
   try {
     const stdout = execSync(cmd, { encoding: 'utf-8', stdio: 'pipe', timeout: 30000 });

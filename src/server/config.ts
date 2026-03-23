@@ -1,12 +1,50 @@
 import { execSync } from 'child_process';
+import fs from 'fs';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
+/**
+ * Determine the Fleet Commander package root directory.
+ *
+ * Resolution order:
+ *   1. FLEET_COMMANDER_ROOT env var (set by bin/fleet-commander.js for npm global installs)
+ *   2. Walk up from this file's location to find package.json (works for both
+ *      development `src/server/config.ts` and compiled `dist/server/config.js`)
+ *   3. `git rev-parse --show-toplevel` (for development from a git clone)
+ *   4. process.cwd() as last resort
+ */
 function findFleetCommanderRoot(): string {
+  // Strategy 1: Walk up from __dirname to find the package root (has package.json + hooks/)
+  // This works whether running from src/ (dev) or dist/ (compiled), and critically,
+  // from an npm global install where there is no git repo.
   try {
-    return execSync('git rev-parse --show-toplevel', { encoding: 'utf-8' }).trim();
+    const __filename = fileURLToPath(import.meta.url);
+    let dir = path.dirname(__filename);
+    for (let i = 0; i < 5; i++) {
+      if (
+        fs.existsSync(path.join(dir, 'package.json')) &&
+        fs.existsSync(path.join(dir, 'hooks'))
+      ) {
+        return dir;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
   } catch {
-    return process.cwd();
+    // import.meta.url not available or other error
   }
+
+  // Strategy 2: git rev-parse (normalize the path for Windows compatibility —
+  // git returns POSIX paths like /c/Users/... which path.join can't handle)
+  try {
+    const gitRoot = execSync('git rev-parse --show-toplevel', { encoding: 'utf-8' }).trim();
+    return path.resolve(gitRoot);
+  } catch {
+    // Not in a git repo
+  }
+
+  return process.cwd();
 }
 
 /** Parse an integer from a string, throwing if the result is NaN. */
