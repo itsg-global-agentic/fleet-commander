@@ -97,6 +97,10 @@ Double-click fleet-commander.bat
     <td align="center"><strong>Lifecycle</strong><br/><img src="docs/screenshots/lifecycle.png" width="400" alt="State machine diagram with team lifecycle transitions" /></td>
     <td align="center"><strong>Usage</strong><br/><img src="docs/screenshots/usage.png" width="400" alt="Usage progress bars for daily, weekly, Sonnet, and extra usage" /></td>
   </tr>
+  <tr>
+    <td align="center"><strong>Projects</strong><br/><img src="docs/screenshots/projects.png" width="400" alt="Projects page with install status, cleanup, and prompt editor" /></td>
+    <td></td>
+  </tr>
 </table>
 
 <p align="center"><em>Screenshots are auto-generated with <code>npm run capture-screenshots</code>. See <a href="scripts/capture-screenshots.ts">scripts/capture-screenshots.ts</a>.</em></p>

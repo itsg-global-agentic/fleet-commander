@@ -15,7 +15,6 @@
  */
 
 import { chromium, type Browser, type Page } from 'playwright';
-import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
