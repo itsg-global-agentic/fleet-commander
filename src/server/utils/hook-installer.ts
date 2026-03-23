@@ -94,9 +94,10 @@ export function installHooks(repoPath: string, logger: FastifyBaseLogger): { ok:
   }
 
   // On Windows, use Git Bash with forward-slash paths (Git Bash handles C:/ natively)
+  // Use --login so /etc/profile is sourced and PATH includes /usr/bin (dirname, mkdir, etc.)
   const bash = getGitBash();
   const cmd = process.platform === 'win32'
-    ? `"${bash}" "${toBashPath(scriptPath)}" "${toBashPath(repoPath)}"`
+    ? `"${bash}" --login "${toBashPath(scriptPath)}" "${toBashPath(repoPath)}"`
     : `"${scriptPath}" "${repoPath}"`;
 
   logger.info(`[installHooks] bash=${bash}, cmd=${cmd}`);
@@ -128,8 +129,9 @@ export function uninstallHooks(repoPath: string, logger: FastifyBaseLogger): voi
       return;
     }
 
+    // Use --login so /etc/profile is sourced and PATH includes /usr/bin
     const cmd = process.platform === 'win32'
-      ? `"${getGitBash()}" "${toBashPath(scriptPath)}" "${toBashPath(repoPath)}"`
+      ? `"${getGitBash()}" --login "${toBashPath(scriptPath)}" "${toBashPath(repoPath)}"`
       : `"${scriptPath}" "${repoPath}"`;
 
     execSync(cmd, { encoding: 'utf-8', stdio: 'pipe', timeout: 30000 });

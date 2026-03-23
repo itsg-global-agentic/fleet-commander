@@ -8,6 +8,10 @@
 #
 # Safe to run on a repo where Fleet Commander was never installed (no-op).
 
+# Ensure standard Unix tools are on PATH — when Git Bash's usr/bin/bash.exe
+# is invoked directly (not via git-bash.exe), /usr/bin may be missing.
+export PATH="/usr/bin:/bin:$PATH"
+
 TARGET="${1:-$(git rev-parse --show-toplevel 2>/dev/null || echo "")}"
 if [ -z "$TARGET" ]; then
   echo "Error: No target repo specified and not in a git repository"

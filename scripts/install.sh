@@ -6,6 +6,10 @@
 # Usage: ./scripts/install.sh [/path/to/target/repo]
 #   If no path given, auto-detects the git repo root from current directory.
 
+# Ensure standard Unix tools are on PATH — when Git Bash's usr/bin/bash.exe
+# is invoked directly (not via git-bash.exe), /usr/bin may be missing.
+export PATH="/usr/bin:/bin:$PATH"
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FC_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
