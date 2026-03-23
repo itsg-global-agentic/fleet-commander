@@ -44,7 +44,7 @@ fleet-commander/
         event-collector.ts  # Hook event processing -> DB -> SSE broadcast
         github-poller.ts    # gh CLI polling (PRs, CI, merges) every 30s
         issue-fetcher.ts    # GraphQL issue fetch with 60s cache
-        stuck-detector.ts   # Idle (3min) and stuck (5min) detection
+        stuck-detector.ts   # Idle (5min) and stuck (10min) detection
         sse-broker.ts       # SSE connection management, 14 event types, 30s heartbeat
         usage-tracker.ts    # Usage percentage polling
         startup-recovery.ts # Recover team state on server restart
@@ -171,11 +171,11 @@ Plus one view: `v_team_dashboard` (joins teams + projects + PRs for the grid).
 |------------|---------|
 | `queued` -> `launching` | Slot available, spawn begins |
 | `launching` -> `running` | CC process started, first event received |
-| `running` -> `idle` | No events for 3 minutes |
+| `running` -> `idle` | No events for 5 minutes |
 | `running` -> `done` | Session ends normally |
 | `running` -> `failed` | Process crashes or exits non-zero |
 | `idle` -> `running` | New event received |
-| `idle` -> `stuck` | No events for 5 minutes |
+| `idle` -> `stuck` | No events for 10 minutes |
 | `stuck` -> `running` | New event received |
 
 Team ID format: `{project_slug}-{issue_number}` (used as worktree name).
@@ -205,8 +205,8 @@ The SSE broker emits 14 event types:
 |----------|---------|-------------|
 | `PORT` | `4680` | Server port |
 | `FLEET_HOST` | `0.0.0.0` | Network interface to bind to |
-| `FLEET_IDLE_THRESHOLD_MIN` | `3` | Minutes before idle status |
-| `FLEET_STUCK_THRESHOLD_MIN` | `5` | Minutes before stuck status |
+| `FLEET_IDLE_THRESHOLD_MIN` | `5` | Minutes before idle status |
+| `FLEET_STUCK_THRESHOLD_MIN` | `10` | Minutes before stuck status |
 | `FLEET_LAUNCH_TIMEOUT_MIN` | `5` | Minutes before a launching team is marked failed |
 | `FLEET_MAX_CI_FAILURES` | `3` | Unique CI failures before blocking |
 | `FLEET_EARLY_CRASH_THRESHOLD_SEC` | `120` | Seconds before a SubagentStop is considered an early crash |

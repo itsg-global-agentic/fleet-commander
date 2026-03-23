@@ -44,8 +44,8 @@ vi.mock('../../src/server/utils/resolve-message.js', () => ({
 vi.mock('../../src/server/config.js', () => ({
   default: {
     stuckCheckIntervalMs: 60000,
-    idleThresholdMin: 3,
-    stuckThresholdMin: 5,
+    idleThresholdMin: 5,
+    stuckThresholdMin: 10,
     launchTimeoutMin: 5,
   },
 }));
@@ -237,7 +237,7 @@ describe('Existing idle/stuck detection', () => {
   it('transitions running -> idle when lastEventAt exceeds idle threshold', () => {
     const team = makeTeam({
       status: 'running',
-      lastEventAt: minutesAgo(4), // 4 min ago, past the 3 min idle threshold
+      lastEventAt: minutesAgo(6), // 6 min ago, past the 5 min idle threshold
     });
     mockDb.getActiveTeams.mockReturnValue([team]);
 
@@ -256,7 +256,7 @@ describe('Existing idle/stuck detection', () => {
   it('transitions idle -> stuck when lastEventAt exceeds stuck threshold', () => {
     const team = makeTeam({
       status: 'idle',
-      lastEventAt: minutesAgo(6), // 6 min ago, past the 5 min stuck threshold
+      lastEventAt: minutesAgo(11), // 11 min ago, past the 10 min stuck threshold
     });
     mockDb.getActiveTeams.mockReturnValue([team]);
 
@@ -281,20 +281,20 @@ describe('Idle nudge message', () => {
   it('sends idle_nudge message when running -> idle and resolveMessage returns a message', async () => {
     const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
     const mockedResolveMessage = vi.mocked(resolveMessage);
-    mockedResolveMessage.mockReturnValue('FC status check: idle for 4 minutes');
+    mockedResolveMessage.mockReturnValue('FC status check: idle for 6 minutes');
 
     const team = makeTeam({
       status: 'running',
-      lastEventAt: minutesAgo(4), // 4 min ago, past the 3 min idle threshold
+      lastEventAt: minutesAgo(6), // 6 min ago, past the 5 min idle threshold
     });
     mockDb.getActiveTeams.mockReturnValue([team]);
 
     stuckDetector.check();
 
     expect(mockedResolveMessage).toHaveBeenCalledWith('idle_nudge', {
-      IDLE_MINUTES: '4',
+      IDLE_MINUTES: '6',
     });
-    expect(mockManager.sendMessage).toHaveBeenCalledWith(1, 'FC status check: idle for 4 minutes', 'fc', 'idle_nudge');
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(1, 'FC status check: idle for 6 minutes', 'fc', 'idle_nudge');
 
     // Reset mock to default
     mockedResolveMessage.mockReturnValue(null);
@@ -307,7 +307,7 @@ describe('Idle nudge message', () => {
 
     const team = makeTeam({
       status: 'running',
-      lastEventAt: minutesAgo(4),
+      lastEventAt: minutesAgo(6),
     });
     mockDb.getActiveTeams.mockReturnValue([team]);
 
@@ -327,7 +327,7 @@ describe('Idle nudge message', () => {
 
     const team = makeTeam({
       status: 'idle',
-      lastEventAt: minutesAgo(6),
+      lastEventAt: minutesAgo(11),
     });
     mockDb.getActiveTeams.mockReturnValue([team]);
 
@@ -349,7 +349,7 @@ describe('Idle nudge message', () => {
 
     const team = makeTeam({
       status: 'running',
-      lastEventAt: minutesAgo(4),
+      lastEventAt: minutesAgo(6),
       prNumber: 42,
     });
     mockDb.getActiveTeams.mockReturnValue([team]);
