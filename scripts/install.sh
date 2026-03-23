@@ -79,10 +79,20 @@ mkdir -p "$HOOK_DIR"
 for SH_FILE in "$FC_ROOT/hooks/"*.sh; do
   [ -f "$SH_FILE" ] || continue
   SH_NAME="$(basename "$SH_FILE")"
-  {
-    echo "# fleet-commander v${FC_VERSION}"
-    cat "$SH_FILE"
-  } > "$HOOK_DIR/$SH_NAME"
+  # Insert version stamp AFTER the shebang line (shebang must stay on line 1)
+  FIRST_LINE="$(head -1 "$SH_FILE")"
+  if echo "$FIRST_LINE" | grep -q '^#!'; then
+    {
+      echo "$FIRST_LINE"
+      echo "# fleet-commander v${FC_VERSION}"
+      tail -n +2 "$SH_FILE"
+    } > "$HOOK_DIR/$SH_NAME"
+  else
+    {
+      echo "# fleet-commander v${FC_VERSION}"
+      cat "$SH_FILE"
+    } > "$HOOK_DIR/$SH_NAME"
+  fi
 done
 # Ensure LF line endings — bash on Windows chokes on CRLF shebangs
 sed -i 's/\r$//' "$HOOK_DIR/"*.sh

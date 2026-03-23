@@ -136,22 +136,24 @@ export function checkRepoSettings(githubRepo: string | null | undefined): RepoSe
 }
 
 /**
- * Extract Fleet Commander version stamp from the first line of a file.
+ * Extract Fleet Commander version stamp from the first few lines of a file.
  * Supports shell scripts (`# fleet-commander vX.Y.Z`) and markdown
  * files (`<!-- fleet-commander vX.Y.Z -->`).
+ * For shell scripts the stamp is on line 2 (after the shebang); for
+ * markdown files it is on line 1.
  *
  * @param filePath - Absolute path to the installed file
  * @returns The version string (e.g. "0.0.6") or undefined if not found
  */
 function extractVersionStamp(filePath: string): string | undefined {
   try {
-    // Read only the first 256 bytes — the stamp is always on line 1
-    const buf = Buffer.alloc(256);
+    // Read first 512 bytes — the stamp is within the first 2 lines
+    const buf = Buffer.alloc(512);
     const fd = fs.openSync(filePath, 'r');
-    const bytesRead = fs.readSync(fd, buf, 0, 256, 0);
+    const bytesRead = fs.readSync(fd, buf, 0, 512, 0);
     fs.closeSync(fd);
-    const firstLine = buf.subarray(0, bytesRead).toString('utf-8').split(/\r?\n/)[0];
-    const match = firstLine.match(/fleet-commander v(\d+\.\d+\.\d+)/);
+    const header = buf.subarray(0, bytesRead).toString('utf-8');
+    const match = header.match(/fleet-commander v(\d+\.\d+\.\d+)/);
     return match ? match[1] : undefined;
   } catch {
     return undefined;
