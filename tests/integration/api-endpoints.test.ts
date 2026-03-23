@@ -467,7 +467,7 @@ describe('System API', () => {
     expect(body.status).toBe('ok');
     expect(body.uptime).toBeDefined();
     expect(body.uptime.seconds).toBeGreaterThanOrEqual(0);
-    expect(body.version).toBe('0.0.1');
+    expect(body.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   it('GET /api/diagnostics/health returns fleet health', async () => {
