@@ -208,6 +208,8 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resetting, setResetting] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetConfirmText, setResetConfirmText] = useState('');
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -226,19 +228,9 @@ export function SettingsPage() {
   }, [fetchSettings]);
 
   const handleFactoryReset = async () => {
-    const confirmed = window.confirm(
-      'FACTORY RESET\n\nThis will:\n- Stop all running teams\n- Uninstall hooks from all projects\n- Delete ALL data (projects, teams, events)\n\nThis cannot be undone. Continue?',
-    );
-    if (!confirmed) return;
-
-    const doubleConfirm = window.confirm(
-      'Are you absolutely sure? All data will be permanently deleted.',
-    );
-    if (!doubleConfirm) return;
-
     setResetting(true);
     try {
-      await api.post('system/factory-reset');
+      await api.post('system/factory-reset', { confirm: 'FACTORY_RESET' });
       window.location.href = '/';
     } catch (err) {
       alert('Factory reset failed: ' + (err instanceof Error ? err.message : String(err)));
@@ -368,13 +360,52 @@ export function SettingsPage() {
           Factory reset will stop all running teams, uninstall hooks from all projects,
           and delete all data. The database will be recreated fresh with default settings.
         </p>
-        <button
-          onClick={handleFactoryReset}
-          disabled={resetting}
-          className="px-4 py-2 text-sm bg-[#F85149]/10 text-[#F85149] border border-[#F85149]/40 rounded hover:bg-[#F85149]/20 disabled:opacity-50"
-        >
-          {resetting ? 'Resetting...' : 'Factory Reset'}
-        </button>
+
+        {!showResetConfirm ? (
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            disabled={resetting}
+            className="px-4 py-2 text-sm bg-[#F85149]/10 text-[#F85149] border border-[#F85149]/40 rounded hover:bg-[#F85149]/20 disabled:opacity-50"
+          >
+            Factory Reset
+          </button>
+        ) : (
+          <div className="mt-2 p-3 bg-[#F85149]/5 border border-[#F85149]/30 rounded">
+            <p className="text-[#F85149] text-sm font-medium mb-1">
+              This action cannot be undone.
+            </p>
+            <p className="text-[#8B949E] text-sm mb-3">
+              Type <code className="font-mono text-xs bg-dark-base/50 px-1.5 py-0.5 rounded text-dark-accent">FACTORY_RESET</code> to confirm.
+            </p>
+            <input
+              type="text"
+              value={resetConfirmText}
+              onChange={(e) => setResetConfirmText(e.target.value)}
+              placeholder="FACTORY_RESET"
+              autoFocus
+              className="w-full px-3 py-1.5 text-sm font-mono bg-dark-base border border-dark-border rounded text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-[#F85149]/60 mb-3"
+            />
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleFactoryReset}
+                disabled={resetting || resetConfirmText !== 'FACTORY_RESET'}
+                className="px-4 py-1.5 text-sm font-medium rounded border border-[#F85149]/40 text-[#F85149] bg-[#F85149]/10 hover:bg-[#F85149]/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {resetting ? 'Resetting...' : 'Confirm Factory Reset'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowResetConfirm(false);
+                  setResetConfirmText('');
+                }}
+                disabled={resetting}
+                className="px-3 py-1.5 text-sm rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

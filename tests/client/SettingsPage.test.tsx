@@ -3,7 +3,7 @@
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
 // ---------------------------------------------------------------------------
@@ -160,5 +160,105 @@ describe('SettingsPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Launch Prompt')).toBeInTheDocument();
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Factory Reset typed-confirmation tests
+  // -------------------------------------------------------------------------
+
+  it('shows confirmation input when Factory Reset button is clicked', async () => {
+    mockGet.mockResolvedValue(makeSettings());
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Factory Reset')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Factory Reset'));
+
+    expect(screen.getByPlaceholderText('FACTORY_RESET')).toBeInTheDocument();
+    expect(screen.getByText('Confirm Factory Reset')).toBeInTheDocument();
+    expect(screen.getByText('Cancel')).toBeInTheDocument();
+  });
+
+  it('disables confirm button until FACTORY_RESET is typed exactly', async () => {
+    mockGet.mockResolvedValue(makeSettings());
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Factory Reset')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Factory Reset'));
+
+    const confirmBtn = screen.getByText('Confirm Factory Reset');
+    const input = screen.getByPlaceholderText('FACTORY_RESET');
+
+    // Button should be disabled initially
+    expect(confirmBtn).toBeDisabled();
+
+    // Type partial text — still disabled
+    fireEvent.change(input, { target: { value: 'FACTORY' } });
+    expect(confirmBtn).toBeDisabled();
+
+    // Type the full text — now enabled
+    fireEvent.change(input, { target: { value: 'FACTORY_RESET' } });
+    expect(confirmBtn).toBeEnabled();
+  });
+
+  it('sends correct API call with confirm body when confirmed', async () => {
+    mockGet.mockResolvedValue(makeSettings());
+    mockPost.mockResolvedValue({ ok: true });
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Factory Reset')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Factory Reset'));
+
+    const input = screen.getByPlaceholderText('FACTORY_RESET');
+    fireEvent.change(input, { target: { value: 'FACTORY_RESET' } });
+    fireEvent.click(screen.getByText('Confirm Factory Reset'));
+
+    expect(mockPost).toHaveBeenCalledWith('system/factory-reset', { confirm: 'FACTORY_RESET' });
+  });
+
+  it('dismisses confirmation when Cancel is clicked', async () => {
+    mockGet.mockResolvedValue(makeSettings());
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Factory Reset')).toBeInTheDocument();
+    });
+
+    // Open confirmation
+    fireEvent.click(screen.getByText('Factory Reset'));
+    expect(screen.getByPlaceholderText('FACTORY_RESET')).toBeInTheDocument();
+
+    // Cancel
+    fireEvent.click(screen.getByText('Cancel'));
+
+    // Confirmation should be gone, original button back
+    expect(screen.queryByPlaceholderText('FACTORY_RESET')).not.toBeInTheDocument();
+    expect(screen.getByText('Factory Reset')).toBeInTheDocument();
+  });
+
+  it('clears input text when Cancel is clicked and reopened', async () => {
+    mockGet.mockResolvedValue(makeSettings());
+    render(<SettingsPage />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Factory Reset')).toBeInTheDocument();
+    });
+
+    // Open, type partial text, then cancel
+    fireEvent.click(screen.getByText('Factory Reset'));
+    fireEvent.change(screen.getByPlaceholderText('FACTORY_RESET'), { target: { value: 'FACT' } });
+    fireEvent.click(screen.getByText('Cancel'));
+
+    // Reopen — input should be empty
+    fireEvent.click(screen.getByText('Factory Reset'));
+    expect(screen.getByPlaceholderText('FACTORY_RESET')).toHaveValue('');
   });
 });
