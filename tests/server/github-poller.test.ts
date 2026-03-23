@@ -79,6 +79,9 @@ vi.mock('../../src/server/utils/exec-gh.js', () => ({
 const { githubPoller } = await import(
   '../../src/server/services/github-poller.js'
 );
+const { resolveMessage: mockResolveMessage } = await import(
+  '../../src/server/utils/resolve-message.js'
+);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -832,5 +835,99 @@ describe('Branch detection', () => {
     await githubPoller.poll();
 
     expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { branchName: 'new-branch' });
+  });
+});
+
+// =============================================================================
+// Branch behind notifications
+// =============================================================================
+
+describe('Branch behind notifications', () => {
+  it('sends branch_behind message when merge status changes to behind', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42, status: 'running' });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'passing',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    (mockResolveMessage as ReturnType<typeof vi.fn>).mockImplementation(
+      (id: string) => (id === 'branch_behind' ? 'Rebase needed' : null),
+    );
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({ mergeStateStatus: 'BEHIND' }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(
+      1,
+      'Rebase needed',
+      'fc',
+      'branch_behind',
+    );
+  });
+
+  it('sends branch_behind_resolved message when merge status changes from behind to clean', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42, status: 'running' });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'passing',
+      mergeStatus: 'behind',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    (mockResolveMessage as ReturnType<typeof vi.fn>).mockImplementation(
+      (id: string) => (id === 'branch_behind_resolved' ? 'Up-to-date now' : null),
+    );
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({ mergeStateStatus: 'CLEAN' }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(
+      1,
+      'Up-to-date now',
+      'fc',
+      'branch_behind_resolved',
+    );
+  });
+
+  it('does not re-send branch_behind on repeated behind polls', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42, status: 'running' });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'passing',
+      mergeStatus: 'behind',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({ mergeStateStatus: 'BEHIND' }),
+    );
+
+    await githubPoller.poll();
+
+    // No change detected (behind -> behind), so no message should be sent
+    expect(mockManager.sendMessage).not.toHaveBeenCalled();
   });
 });

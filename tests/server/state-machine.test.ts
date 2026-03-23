@@ -261,6 +261,24 @@ describe('Self-transitions', () => {
     expect(queuedBlocked!.from).toBe('queued');
     expect(queuedBlocked!.to).toBe('queued');
   });
+
+  it('branch_behind and branch_behind_resolved are self-transitions on running', () => {
+    const branchBehind = STATE_MACHINE_TRANSITIONS.find(
+      (t) => t.id === 'branch_behind',
+    );
+    expect(branchBehind).toBeDefined();
+    expect(branchBehind!.from).toBe('running');
+    expect(branchBehind!.to).toBe('running');
+    expect(branchBehind!.trigger).toBe('poller');
+
+    const branchBehindResolved = STATE_MACHINE_TRANSITIONS.find(
+      (t) => t.id === 'branch_behind_resolved',
+    );
+    expect(branchBehindResolved).toBeDefined();
+    expect(branchBehindResolved!.from).toBe('running');
+    expect(branchBehindResolved!.to).toBe('running');
+    expect(branchBehindResolved!.trigger).toBe('poller');
+  });
 });
 
 // =============================================================================
