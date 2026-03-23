@@ -238,14 +238,14 @@ describe('StuckDetector', () => {
       });
       db.updateTeam(t2.id, { lastEventAt: minutesAgo(11) });
 
-      // Team 3: running, 2 min idle -> should stay running
+      // Team 3: running, 4 min idle -> should stay running
       const t3 = db.insertTeam({
         issueNumber: 503,
         worktreeName: 'kea-503',
         status: 'running',
         phase: 'analyzing',
       });
-      db.updateTeam(t3.id, { lastEventAt: minutesAgo(2) });
+      db.updateTeam(t3.id, { lastEventAt: minutesAgo(4) });
 
       stuckDetector.check();
 
