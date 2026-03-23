@@ -18,6 +18,7 @@ import { getDiagnosticsService } from '../services/diagnostics-service.js';
 import { ServiceError } from '../services/service-error.js';
 import config from '../config.js';
 import { resolveClaudePath } from '../utils/resolve-claude-path.js';
+import { getPackageVersion } from '../utils/version.js';
 
 // ---------------------------------------------------------------------------
 // Server start time (captured at module load)
@@ -29,17 +30,7 @@ const SERVER_START_TIME = Date.now();
 // Read package version once at module load
 // ---------------------------------------------------------------------------
 
-function readPackageVersion(): string {
-  try {
-    const pkgPath = path.join(config.fleetCommanderRoot, 'package.json');
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-    return pkg.version ?? 'unknown';
-  } catch {
-    return 'unknown';
-  }
-}
-
-const PACKAGE_VERSION = readPackageVersion();
+const PACKAGE_VERSION = getPackageVersion();
 
 // ---------------------------------------------------------------------------
 // Plugin

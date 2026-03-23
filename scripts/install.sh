@@ -13,6 +13,12 @@ export PATH="/usr/bin:/bin:$PATH"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FC_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# ── Read FC version from package.json ────────────────────────────
+FC_VERSION="unknown"
+if [ -f "$FC_ROOT/package.json" ]; then
+  FC_VERSION="$(node -e "try{console.log(JSON.parse(require('fs').readFileSync(process.argv[1],'utf-8')).version||'unknown')}catch{console.log('unknown')}" "$FC_ROOT/package.json")"
+fi
+
 # ── Ensure prompts directory and default prompt exist ──────────────
 mkdir -p "$FC_ROOT/prompts"
 if [ ! -f "$FC_ROOT/prompts/default-prompt.md" ]; then
@@ -69,13 +75,20 @@ echo ""
 HOOK_DIR="$TARGET/.claude/hooks/fleet-commander"
 mkdir -p "$HOOK_DIR"
 
-# Copy all .sh files from the hooks directory
-cp "$FC_ROOT/hooks/"*.sh "$HOOK_DIR/"
+# Copy all .sh files from the hooks directory with version stamps
+for SH_FILE in "$FC_ROOT/hooks/"*.sh; do
+  [ -f "$SH_FILE" ] || continue
+  SH_NAME="$(basename "$SH_FILE")"
+  {
+    echo "# fleet-commander v${FC_VERSION}"
+    cat "$SH_FILE"
+  } > "$HOOK_DIR/$SH_NAME"
+done
 # Ensure LF line endings — bash on Windows chokes on CRLF shebangs
 sed -i 's/\r$//' "$HOOK_DIR/"*.sh
 chmod +x "$HOOK_DIR/"*.sh
 
-echo "  Copied hook scripts to $HOOK_DIR"
+echo "  Copied hook scripts to $HOOK_DIR (v${FC_VERSION})"
 
 # ── 2. Merge into .claude/settings.json ──────────────────────────
 SETTINGS="$TARGET/.claude/settings.json"
@@ -112,13 +125,20 @@ if [ -f "$SETTINGS" ]; then
       }
     }
 
+    existing._fleetCommanderVersion = process.argv[3];
     fs.writeFileSync(process.argv[1], JSON.stringify(existing, null, 2) + '\n');
-  " "$SETTINGS" "$EXAMPLE"
-  echo "  Merged hook entries into existing settings.json"
+  " "$SETTINGS" "$EXAMPLE" "$FC_VERSION"
+  echo "  Merged hook entries into existing settings.json (v${FC_VERSION})"
 else
   mkdir -p "$TARGET/.claude"
-  cp "$EXAMPLE" "$SETTINGS"
-  echo "  Created settings.json from template"
+  # Copy template and inject version stamp
+  node -e "
+    const fs = require('fs');
+    const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf-8'));
+    data._fleetCommanderVersion = process.argv[2];
+    fs.writeFileSync(process.argv[3], JSON.stringify(data, null, 2) + '\n');
+  " "$EXAMPLE" "$FC_VERSION" "$SETTINGS"
+  echo "  Created settings.json from template (v${FC_VERSION})"
 fi
 
 # ── 3. Install workflow template and command ─────────────────────
@@ -136,21 +156,33 @@ if [ -z "$BASE_BRANCH" ]; then
   BASE_BRANCH="main"
 fi
 
-# Copy workflow template with placeholder replacement
+# Copy workflow template with placeholder replacement + version stamp
 WORKFLOW_TARGET="$PROMPTS_DIR/fleet-workflow.md"
-NEW_WORKFLOW_CONTENT=$(sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
+VERSION_STAMP="<!-- fleet-commander v${FC_VERSION} -->"
+TEMPLATE_CONTENT=$(sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
     -e "s|{{project_slug}}|$project_slug|g" \
     -e "s|{{BASE_BRANCH}}|$BASE_BRANCH|g" \
     "$FC_ROOT/templates/workflow.md")
+NEW_WORKFLOW_CONTENT="${VERSION_STAMP}
+${TEMPLATE_CONTENT}"
 
 if [ -f "$WORKFLOW_TARGET" ]; then
+  # Strip any existing version stamp line before comparing content
   EXISTING_WORKFLOW_CONTENT=$(cat "$WORKFLOW_TARGET")
-  if [ "$NEW_WORKFLOW_CONTENT" = "$EXISTING_WORKFLOW_CONTENT" ]; then
-    echo "  Workflow template already up to date"
+  EXISTING_STRIPPED=$(echo "$EXISTING_WORKFLOW_CONTENT" | sed '1{/^<!-- fleet-commander v/d}')
+  NEW_STRIPPED="$TEMPLATE_CONTENT"
+  if [ "$NEW_STRIPPED" = "$EXISTING_STRIPPED" ]; then
+    # Content unchanged — just update the version stamp if needed
+    if [ "$(head -1 "$WORKFLOW_TARGET")" != "$VERSION_STAMP" ]; then
+      printf '%s\n' "$NEW_WORKFLOW_CONTENT" > "$WORKFLOW_TARGET"
+      echo "  Updated version stamp in workflow template"
+    else
+      echo "  Workflow template already up to date"
+    fi
   else
     BACKUP="$WORKFLOW_TARGET.backup.$(date +%Y%m%d_%H%M%S)"
     cp "$WORKFLOW_TARGET" "$BACKUP"
-    echo "  ⚠ Backed up existing workflow to $(basename "$BACKUP")"
+    echo "  Backed up existing workflow to $(basename "$BACKUP")"
     printf '%s\n' "$NEW_WORKFLOW_CONTENT" > "$WORKFLOW_TARGET"
     echo "  Installed workflow template to $WORKFLOW_TARGET"
   fi
@@ -170,13 +202,16 @@ if [ -d "$AGENTS_SRC" ]; then
   for AGENT_FILE in "$AGENTS_SRC"/*.md; do
     [ -f "$AGENT_FILE" ] || continue
     AGENT_NAME="$(basename "$AGENT_FILE")"
-    sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
-        -e "s|{{project_slug}}|$project_slug|g" \
-        -e "s|{{BASE_BRANCH}}|$BASE_BRANCH|g" \
-        "$AGENT_FILE" > "$AGENTS_DIR/$AGENT_NAME"
+    {
+      echo "<!-- fleet-commander v${FC_VERSION} -->"
+      sed -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
+          -e "s|{{project_slug}}|$project_slug|g" \
+          -e "s|{{BASE_BRANCH}}|$BASE_BRANCH|g" \
+          "$AGENT_FILE"
+    } > "$AGENTS_DIR/$AGENT_NAME"
     AGENT_COUNT=$((AGENT_COUNT + 1))
   done
-  echo "  Installed $AGENT_COUNT agent templates to $AGENTS_DIR"
+  echo "  Installed $AGENT_COUNT agent templates to $AGENTS_DIR (v${FC_VERSION})"
 else
   echo "  No agent templates found in $AGENTS_SRC (skipped)"
 fi
@@ -192,7 +227,10 @@ if [ -d "$GUIDES_SRC" ]; then
     [ -f "$GUIDE_FILE" ] || continue
     GUIDE_NAME="$(basename "$GUIDE_FILE")"
     if [ ! -f "$GUIDES_DIR/$GUIDE_NAME" ]; then
-      cp "$GUIDE_FILE" "$GUIDES_DIR/$GUIDE_NAME"
+      {
+        echo "<!-- fleet-commander v${FC_VERSION} -->"
+        cat "$GUIDE_FILE"
+      } > "$GUIDES_DIR/$GUIDE_NAME"
       GUIDE_COUNT=$((GUIDE_COUNT + 1))
     fi
   done

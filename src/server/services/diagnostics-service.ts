@@ -5,8 +5,6 @@
 // and factory reset capability. Used by system routes and future MCP tools.
 // =============================================================================
 
-import fs from 'fs';
-import path from 'path';
 import { getDatabase } from '../db.js';
 import { getTeamManager } from './team-manager.js';
 import { sseBroker } from './sse-broker.js';
@@ -15,6 +13,7 @@ import { uninstallHooks } from '../utils/hook-installer.js';
 import { DEFAULT_MESSAGE_TEMPLATES } from '../../shared/message-templates.js';
 import config from '../config.js';
 import { ServiceError, validationError } from './service-error.js';
+import { getPackageVersion } from '../utils/version.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -257,20 +256,6 @@ export class DiagnosticsService {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Read version from package.json (cached after first call) */
-let _cachedVersion: string | null = null;
-function getPackageVersion(): string {
-  if (_cachedVersion) return _cachedVersion;
-  try {
-    const pkgPath = path.join(config.fleetCommanderRoot, 'package.json');
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-    _cachedVersion = pkg.version ?? '0.0.0';
-  } catch {
-    _cachedVersion = '0.0.0';
-  }
-  return _cachedVersion!;
-}
 
 function formatUptime(totalSeconds: number): string {
   const days = Math.floor(totalSeconds / 86400);

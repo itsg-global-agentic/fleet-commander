@@ -11,8 +11,6 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import fs from 'fs';
-import path from 'path';
 import { getDatabase, closeDatabase } from '../db.js';
 import { sseBroker } from '../services/sse-broker.js';
 import { getIssueFetcher } from '../services/issue-fetcher.js';
@@ -22,6 +20,7 @@ import { usagePoller } from '../services/usage-tracker.js';
 import { recoverOnStartup } from '../services/startup-recovery.js';
 import { DEFAULT_MESSAGE_TEMPLATES } from '../../shared/message-templates.js';
 import config from '../config.js';
+import { getPackageVersion } from '../utils/version.js';
 import { registerSystemHealthTool } from './tools/system-health.js';
 import { registerGetTeamTimelineTool } from './tools/get-team-timeline.js';
 import { registerListIssuesTool } from './tools/list-issues.js';
@@ -38,17 +37,6 @@ import { registerLaunchTeamTool } from './tools/launch-team.js';
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Read version from package.json */
-function getPackageVersion(): string {
-  try {
-    const pkgPath = path.join(config.fleetCommanderRoot, 'package.json');
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
-    return pkg.version ?? '0.0.0';
-  } catch {
-    return '0.0.0';
-  }
-}
 
 /** Log to stderr (stdout is reserved for MCP JSON-RPC protocol) */
 function log(message: string): void {

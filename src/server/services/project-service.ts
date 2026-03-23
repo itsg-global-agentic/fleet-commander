@@ -17,6 +17,7 @@ import { installHooks, uninstallHooks } from '../utils/hook-installer.js';
 import config from '../config.js';
 import type { ProjectStatus, InstallStatus, InstallFileStatus, RepoSettings } from '../../shared/types.js';
 import { ServiceError, validationError, notFoundError, conflictError } from './service-error.js';
+import { getPackageVersion } from '../utils/version.js';
 import { getCleanupPreview as _getCleanupPreview, executeCleanup as _executeCleanup } from './cleanup.js';
 import type { CleanupPreview, CleanupResult } from '../../shared/types.js';
 
@@ -135,6 +136,46 @@ export function checkRepoSettings(githubRepo: string | null | undefined): RepoSe
 }
 
 /**
+ * Extract Fleet Commander version stamp from the first line of a file.
+ * Supports shell scripts (`# fleet-commander vX.Y.Z`) and markdown
+ * files (`<!-- fleet-commander vX.Y.Z -->`).
+ *
+ * @param filePath - Absolute path to the installed file
+ * @returns The version string (e.g. "0.0.6") or undefined if not found
+ */
+function extractVersionStamp(filePath: string): string | undefined {
+  try {
+    // Read only the first 256 bytes — the stamp is always on line 1
+    const buf = Buffer.alloc(256);
+    const fd = fs.openSync(filePath, 'r');
+    const bytesRead = fs.readSync(fd, buf, 0, 256, 0);
+    fs.closeSync(fd);
+    const firstLine = buf.subarray(0, bytesRead).toString('utf-8').split(/\r?\n/)[0];
+    const match = firstLine.match(/fleet-commander v(\d+\.\d+\.\d+)/);
+    return match ? match[1] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Extract Fleet Commander version from a JSON file's `_fleetCommanderVersion` field.
+ *
+ * @param filePath - Absolute path to the JSON file
+ * @returns The version string (e.g. "0.0.6") or undefined if not found
+ */
+function extractJsonVersionStamp(filePath: string): string | undefined {
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const data = JSON.parse(content);
+    const ver = data._fleetCommanderVersion;
+    return typeof ver === 'string' ? ver : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Check the install status of artifacts deployed by install.sh:
  * hooks directory and workflow prompt.
  * Returns detailed file-level breakdown for tooltip display.
@@ -158,23 +199,32 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
     'on_teammate_idle.sh',
   ];
 
+  const currentVersion = getPackageVersion();
+
   const hooksDir = path.join(repoPath, '.claude', 'hooks', 'fleet-commander');
   const hookFiles: InstallFileStatus[] = hookNames.map((name) => {
     const filePath = path.join(hooksDir, name);
     const exists = fs.existsSync(filePath);
+    const installedVersion = exists ? extractVersionStamp(filePath) : undefined;
     return {
       name,
       exists,
       hasCrlf: exists ? fileHasCrlf(filePath) : false,
+      installedVersion,
+      currentVersion,
     };
   });
   const hookFoundCount = hookFiles.filter((f) => f.exists).length;
   const hookHasCrlf = hookFiles.some((f) => f.hasCrlf);
 
+  const workflowPath = path.join(repoPath, '.claude', 'prompts', 'fleet-workflow.md');
+  const workflowExists = fs.existsSync(workflowPath);
   const promptFiles: InstallFileStatus[] = [
     {
       name: 'fleet-workflow.md',
-      exists: fs.existsSync(path.join(repoPath, '.claude', 'prompts', 'fleet-workflow.md')),
+      exists: workflowExists,
+      installedVersion: workflowExists ? extractVersionStamp(workflowPath) : undefined,
+      currentVersion,
     },
   ];
 
@@ -184,22 +234,46 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
     'fleet-reviewer.md',
   ];
   const agentsDir = path.join(repoPath, '.claude', 'agents');
-  const agentFiles: InstallFileStatus[] = agentNames.map((name) => ({
-    name,
-    exists: fs.existsSync(path.join(agentsDir, name)),
-  }));
+  const agentFiles: InstallFileStatus[] = agentNames.map((name) => {
+    const filePath = path.join(agentsDir, name);
+    const exists = fs.existsSync(filePath);
+    return {
+      name,
+      exists,
+      installedVersion: exists ? extractVersionStamp(filePath) : undefined,
+      currentVersion,
+    };
+  });
 
   const guidesDir = path.join(repoPath, '.claude', 'guides');
   const guideFiles: InstallFileStatus[] = fs.existsSync(guidesDir)
     ? fs.readdirSync(guidesDir)
         .filter((f) => f.endsWith('.md'))
-        .map((name) => ({ name, exists: true }))
+        .map((name) => {
+          const filePath = path.join(guidesDir, name);
+          return {
+            name,
+            exists: true,
+            installedVersion: extractVersionStamp(filePath),
+            currentVersion,
+          };
+        })
     : [];
 
+  const settingsPath = path.join(repoPath, '.claude', 'settings.json');
+  const settingsExists = fs.existsSync(settingsPath);
   const settingsFile: InstallFileStatus = {
     name: 'settings.json',
-    exists: fs.existsSync(path.join(repoPath, '.claude', 'settings.json')),
+    exists: settingsExists,
+    installedVersion: settingsExists ? extractJsonVersionStamp(settingsPath) : undefined,
+    currentVersion,
   };
+
+  // Count files that exist but have a mismatched or missing version stamp
+  const allFiles = [...hookFiles, ...promptFiles, ...agentFiles, ...guideFiles, settingsFile];
+  const outdatedCount = allFiles.filter(
+    (f) => f.exists && f.installedVersion !== currentVersion,
+  ).length;
 
   return {
     hooks: {
@@ -221,6 +295,8 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
       files: guideFiles,
     },
     settings: settingsFile,
+    outdatedCount,
+    currentVersion,
   };
 }
 

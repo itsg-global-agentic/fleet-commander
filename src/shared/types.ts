@@ -61,6 +61,10 @@ export interface InstallFileStatus {
   name: string;
   exists: boolean;
   hasCrlf?: boolean;
+  /** Version stamp found in the installed file (e.g. "0.0.6"), or undefined if absent */
+  installedVersion?: string;
+  /** Current Fleet Commander version for comparison */
+  currentVersion?: string;
 }
 
 /** Detailed install status for a single category */
@@ -93,6 +97,10 @@ export interface InstallStatus {
   guides?: InstallCategoryStatus;
   settings: InstallFileStatus;
   repoSettings?: RepoSettings;
+  /** Number of installed files whose version stamp does not match the current FC version */
+  outdatedCount: number;
+  /** Current Fleet Commander version */
+  currentVersion: string;
 }
 
 /** Project with team count for list view */

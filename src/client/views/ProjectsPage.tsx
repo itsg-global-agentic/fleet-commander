@@ -42,7 +42,11 @@ function getInstallHealthColor(project: ProjectSummary): HealthColor {
   const settingsOk = s.settings?.exists ?? false;
 
   const allOk = hooksOk && !hooksCrlf && promptOk && agentsOk && settingsOk;
-  if (allOk) return '#3FB950';
+  if (allOk) {
+    // All files present — but check if any are outdated
+    const outdated = s.outdatedCount ?? 0;
+    return outdated > 0 ? '#D29922' : '#3FB950';
+  }
 
   const anyInstalled = hooksOk || promptOk || agentsOk || settingsOk;
   if (anyInstalled || hooksCrlf) return '#D29922';
@@ -50,7 +54,18 @@ function getInstallHealthColor(project: ProjectSummary): HealthColor {
   return '#F85149';
 }
 
-function getInstallHealthLabel(color: HealthColor): string {
+function getInstallHealthLabel(color: HealthColor, project?: ProjectSummary): string {
+  if (color === '#D29922' && project?.installStatus) {
+    const s = project.installStatus;
+    const hooksOk = s.hooks?.installed ?? false;
+    const promptOk = s.prompt?.installed ?? false;
+    const agentsOk = s.agents?.installed ?? false;
+    const settingsOk = s.settings?.exists ?? false;
+    const allPresent = hooksOk && promptOk && agentsOk && settingsOk;
+    if (allPresent && (s.outdatedCount ?? 0) > 0) {
+      return `${s.outdatedCount} file${s.outdatedCount === 1 ? '' : 's'} outdated`;
+    }
+  }
   switch (color) {
     case '#3FB950': return 'All installed';
     case '#D29922': return 'Partially installed';
@@ -73,6 +88,7 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
   }
 
   const s = project.installStatus;
+  const currentVersion = s.currentVersion;
 
   const detailedCategories: {
     key: string;
@@ -80,8 +96,9 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
     installed: boolean;
     hasCrlf: boolean;
     somePresent: boolean;
-    files: { name: string; exists: boolean; hasCrlf?: boolean }[];
+    files: { name: string; exists: boolean; hasCrlf?: boolean; installedVersion?: string; currentVersion?: string }[];
     summary: string;
+    outdatedInCategory: number;
   }[] = [
     {
       key: 'hooks',
@@ -91,6 +108,7 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
       somePresent: (s.hooks?.found ?? 0) > 0,
       files: s.hooks?.files ?? [],
       summary: `Hook Scripts (${s.hooks?.found ?? 0}/${s.hooks?.total ?? 0})`,
+      outdatedInCategory: (s.hooks?.files ?? []).filter((f) => f.exists && f.installedVersion !== currentVersion).length,
     },
     {
       key: 'prompt',
@@ -100,6 +118,7 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
       somePresent: s.prompt?.files?.some((f) => f.exists) ?? false,
       files: s.prompt?.files ?? [],
       summary: 'Prompt Files',
+      outdatedInCategory: (s.prompt?.files ?? []).filter((f) => f.exists && f.installedVersion !== currentVersion).length,
     },
     {
       key: 'agents',
@@ -109,36 +128,46 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
       somePresent: s.agents?.files?.some((f) => f.exists) ?? false,
       files: s.agents?.files ?? [],
       summary: 'Agent Templates',
+      outdatedInCategory: (s.agents?.files ?? []).filter((f) => f.exists && f.installedVersion !== currentVersion).length,
     },
   ];
 
+  const settingsOutdated = s.settings?.exists && s.settings.installedVersion !== currentVersion;
   const booleanCategories: {
     key: string;
     label: string;
     exists: boolean;
     tooltip: string;
+    outdated: boolean;
   }[] = [
     {
       key: 'settings',
       label: 'settings',
       exists: s.settings?.exists ?? false,
-      tooltip: s.settings?.exists ? 'settings.json found' : 'settings.json missing',
+      tooltip: s.settings?.exists
+        ? settingsOutdated
+          ? `settings.json: v${s.settings.installedVersion || '?'} \u2192 v${currentVersion}`
+          : 'settings.json found'
+        : 'settings.json missing',
+      outdated: !!settingsOutdated,
     },
   ];
 
   return (
     <div className="flex items-center gap-3 text-xs flex-wrap">
       {detailedCategories.map((cat) => {
-        const color = cat.installed && !cat.hasCrlf
+        // Determine category color: green if all ok + no outdated, amber for issues, red if missing
+        const hasOutdated = cat.outdatedInCategory > 0;
+        const color = cat.installed && !cat.hasCrlf && !hasOutdated
           ? '#3FB950'
-          : cat.hasCrlf
+          : cat.hasCrlf || hasOutdated
             ? '#D29922'
             : cat.somePresent
               ? '#D29922'
               : '#F85149';
-        const icon = cat.installed && !cat.hasCrlf
+        const icon = cat.installed && !cat.hasCrlf && !hasOutdated
           ? '\u2713'
-          : cat.hasCrlf
+          : cat.hasCrlf || hasOutdated
             ? '\u26A0'
             : cat.somePresent
               ? '\u26A0'
@@ -155,17 +184,23 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
                 {cat.summary}
               </div>
               {cat.files.map((f) => {
+                const isOutdated = f.exists && f.installedVersion !== currentVersion;
                 const fileColor = f.exists
-                  ? f.hasCrlf ? '#D29922' : '#3FB950'
+                  ? f.hasCrlf ? '#D29922' : isOutdated ? '#D29922' : '#3FB950'
                   : '#F85149';
                 const fileIcon = f.exists
-                  ? f.hasCrlf ? '\u26A0' : '\u2713'
+                  ? f.hasCrlf ? '\u26A0' : isOutdated ? '\u26A0' : '\u2713'
                   : '\u2717';
+                const versionSuffix = f.exists && isOutdated
+                  ? ` (v${f.installedVersion || '?'} \u2192 v${currentVersion})`
+                  : f.hasCrlf
+                    ? ' (CRLF)'
+                    : '';
                 return (
                   <div key={f.name} className="flex items-center gap-1.5 py-0.5">
                     <span style={{ color: fileColor }}>{fileIcon}</span>
                     <span className="text-[#8B949E] font-mono">
-                      {f.name}{f.hasCrlf ? ' (CRLF)' : ''}
+                      {f.name}{versionSuffix}
                     </span>
                   </div>
                 );
@@ -175,8 +210,12 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
         );
       })}
       {booleanCategories.map((cat) => {
-        const color = cat.exists ? '#3FB950' : '#F85149';
-        const icon = cat.exists ? '\u2713' : '\u2717';
+        const color = cat.exists
+          ? cat.outdated ? '#D29922' : '#3FB950'
+          : '#F85149';
+        const icon = cat.exists
+          ? cat.outdated ? '\u26A0' : '\u2713'
+          : '\u2717';
 
         return (
           <div key={cat.key} className="relative group shrink-0">
@@ -287,7 +326,7 @@ function ProjectCard({
 
   const statusStyle = STATUS_STYLES[project.status] || STATUS_STYLES.active;
   const healthColor = getInstallHealthColor(project);
-  const healthLabel = getInstallHealthLabel(healthColor);
+  const healthLabel = getInstallHealthLabel(healthColor, project);
 
   // Team stats string
   const queuedCount = project.queuedTeamCount ?? 0;
@@ -350,6 +389,18 @@ function ProjectCard({
 
         {/* Spacer */}
         <span className="flex-1" />
+
+        {/* Update button — only shown when installed files are outdated */}
+        {(project.installStatus?.outdatedCount ?? 0) > 0 && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onReinstall(project); }}
+            disabled={reinstalling === project.id}
+            className="px-3 py-1 text-xs rounded border border-[#D29922]/40 text-[#D29922] bg-[#D29922]/10 hover:bg-[#D29922]/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            title={`Update ${project.installStatus!.outdatedCount} outdated file${project.installStatus!.outdatedCount === 1 ? '' : 's'} to v${project.installStatus!.currentVersion}`}
+          >
+            {reinstalling === project.id ? 'Updating...' : 'Update'}
+          </button>
+        )}
 
         {/* Reinstall button */}
         <button
