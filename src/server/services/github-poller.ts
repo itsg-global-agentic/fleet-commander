@@ -13,12 +13,12 @@
 // crashes the service.
 // =============================================================================
 
-import { execSync } from 'child_process';
 import path from 'path';
 import { getDatabase } from '../db.js';
 import config from '../config.js';
 import { sseBroker } from './sse-broker.js';
 import { resolveMessage } from '../utils/resolve-message.js';
+import { execGHAsync, execGitAsync } from '../utils/exec-gh.js';
 import type { PRState, CIStatus, MergeStatus } from '../../shared/types.js';
 
 // ---------------------------------------------------------------------------
@@ -180,12 +180,12 @@ class GitHubPoller {
             continue;
           }
 
-          // Sync branch name: the agent may have renamed the branch after launch.
           // Check the actual worktree branch and update DB if it differs.
+          // The agent may have renamed the branch after launch.
           if (team.projectId && !team.prNumber) {
             const repoPath = projectPathMap.get(team.projectId);
             if (repoPath && team.worktreeName) {
-              const actualBranch = this.detectWorktreeBranch(repoPath, team.worktreeName);
+              const actualBranch = await this.detectWorktreeBranch(repoPath, team.worktreeName);
               if (actualBranch && actualBranch !== team.branchName) {
                 console.log(
                   `[GitHubPoller] Branch name updated for team ${team.id}: "${team.branchName}" -> "${actualBranch}"`
@@ -206,7 +206,7 @@ class GitHubPoller {
           } else if (team.branchName) {
             // Fast-poll when awaiting PR detection
             wantFast = true;
-            this.detectPR(team.branchName, team.id, githubRepo);
+            await this.detectPR(team.branchName, team.id, githubRepo);
           }
         } catch (err) {
           // Log and continue — never let one team's failure stop the others
@@ -232,7 +232,7 @@ class GitHubPoller {
 
   private async pollPR(prNumber: number, teamId: number, githubRepo: string): Promise<void> {
     // Use gh pr view to get PR status, CI checks, merge state, and auto-merge
-    const result = this.execGH(
+    const result = await execGHAsync(
       `gh pr view ${prNumber} --repo ${githubRepo} ` +
         `--json number,title,state,mergeStateStatus,statusCheckRollup,autoMergeRequest,headRefName,mergedAt`
     );
@@ -603,26 +603,20 @@ class GitHubPoller {
    * to "refactor/fix/767-unit-user-role-logic"), so we must check the actual
    * git state rather than relying on the initially stored branch name.
    */
-  private detectWorktreeBranch(repoPath: string, worktreeName: string): string | null {
+  private async detectWorktreeBranch(repoPath: string, worktreeName: string): Promise<string | null> {
     const worktreeAbsPath = path.join(repoPath, config.worktreeDir, worktreeName);
-    try {
-      const branch = execSync(
-        `git -C "${worktreeAbsPath}" rev-parse --abbrev-ref HEAD`,
-        { encoding: 'utf-8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
-      ).trim();
-      return branch && branch !== 'HEAD' ? branch : null;
-    } catch {
-      // Worktree may not exist yet or git command failed — not an error
-      return null;
-    }
+    const branch = await execGitAsync(
+      `git -C "${worktreeAbsPath}" rev-parse --abbrev-ref HEAD`,
+    );
+    return branch && branch !== 'HEAD' ? branch : null;
   }
 
   // -------------------------------------------------------------------------
   // Private: detect a PR for a branch that doesn't have one yet
   // -------------------------------------------------------------------------
 
-  private detectPR(branchName: string, teamId: number, githubRepo: string): void {
-    const result = this.execGH(
+  private async detectPR(branchName: string, teamId: number, githubRepo: string): Promise<void> {
+    const result = await execGHAsync(
       `gh pr list --head ${branchName} --repo ${githubRepo} --state all --json number --limit 1`
     );
     if (!result) return; // gh CLI failed — skip
@@ -671,30 +665,9 @@ class GitHubPoller {
     return 'pending';
   }
 
-  // -------------------------------------------------------------------------
-  // Private: execute a gh CLI command safely
-  // -------------------------------------------------------------------------
-
-  /**
-   * Execute a `gh` CLI command and return stdout, or `null` on error.
-   * Errors are logged but never thrown — the caller decides how to proceed.
-   */
-  private execGH(command: string): string | null {
-    try {
-      return execSync(command, {
-        encoding: 'utf-8',
-        timeout: 15_000, // 15 seconds — generous timeout for slow connections
-        stdio: ['pipe', 'pipe', 'pipe'], // capture stderr too
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // Only log if it's not a "no PRs found" type error
-      if (!message.includes('no pull requests match')) {
-        console.error(`[GitHubPoller] gh CLI error: ${message.slice(0, 200)}`);
-      }
-      return null;
-    }
-  }
+  // NOTE: The old synchronous execGH method has been removed.
+  // All gh CLI calls now use the shared async execGHAsync utility
+  // from src/server/utils/exec-gh.ts to avoid blocking the event loop.
 }
 
 // ---------------------------------------------------------------------------

@@ -142,7 +142,7 @@ const prsRoutes: FastifyPluginCallback = (
         }
 
         const service = getPRService();
-        const result = service.enableAutoMerge(prNumber);
+        const result = await service.enableAutoMerge(prNumber);
         return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
@@ -180,7 +180,7 @@ const prsRoutes: FastifyPluginCallback = (
         }
 
         const service = getPRService();
-        const result = service.disableAutoMerge(prNumber);
+        const result = await service.disableAutoMerge(prNumber);
         return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
@@ -218,7 +218,7 @@ const prsRoutes: FastifyPluginCallback = (
         }
 
         const service = getPRService();
-        const result = service.updateBranch(prNumber);
+        const result = await service.updateBranch(prNumber);
         return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {

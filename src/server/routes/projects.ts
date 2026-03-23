@@ -94,7 +94,7 @@ const projectsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const service = getProjectService();
-        const project = service.createProject(request.body);
+        const project = await service.createProject(request.body);
         return reply.code(201).send(project);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
@@ -171,7 +171,7 @@ const projectsRoutes: FastifyPluginCallback = (
         }
 
         const service = getProjectService();
-        const settings = service.getRepoSettings(projectId);
+        const settings = await service.getRepoSettings(projectId);
         return reply.code(200).send(settings ?? null);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
