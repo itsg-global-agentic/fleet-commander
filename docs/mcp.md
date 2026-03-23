@@ -130,20 +130,20 @@ All tools return `{ content: [{ type: "text", text: "<JSON>" }] }`. On error, to
 
 ### Quick Reference
 
-| Tool | Parameters | Service Method |
-|------|-----------|----------------|
-| `fleet_system_health` | none | `DiagnosticsService.getHealthSummary()` |
-| `fleet_list_teams` | none | `TeamService.listTeams()` |
-| `fleet_get_team` | `teamId` | `TeamService.getTeamDetail(teamId)` |
-| `fleet_launch_team` | `projectId`, `issueNumber`, ... | `TeamService.launchTeam(params)` |
-| `fleet_launch_batch` | `projectId`, `issues`, ... | `TeamService.launchBatch(params)` |
-| `fleet_stop_team` | `teamId` | `TeamService.stopTeam(teamId)` |
-| `fleet_send_message` | `teamId`, `message` | `TeamService.sendMessage(teamId, message)` |
-| `fleet_list_issues` | `projectId` | `IssueService.getProjectIssues(projectId)` |
-| `fleet_list_projects` | none | `ProjectService.listProjects()` |
-| `fleet_get_usage` | none | `UsageService.getLatest()` |
-| `fleet_get_team_timeline` | `teamId`, `limit?` | `TeamService.getTeamTimeline(teamId, limit)` |
-| `fleet_cleanup_preview` | `projectId`, `resetTeams?` | `ProjectService.getCleanupPreview(projectId, resetTeams)` |
+| Tool | Parameters | Service Method | Implemented |
+|------|-----------|----------------|-------------|
+| `fleet_system_health` | none | `DiagnosticsService.getHealthSummary()` | yes |
+| `fleet_list_teams` | `projectId?`, `status?` | `TeamService.listTeams()` | yes |
+| `fleet_get_team` | `teamId` | `TeamService.getTeamDetail(teamId)` | yes |
+| `fleet_launch_team` | `projectId`, `issueNumber`, ... | `TeamService.launchTeam(params)` | not yet |
+| `fleet_launch_batch` | `projectId`, `issues`, ... | `TeamService.launchBatch(params)` | not yet |
+| `fleet_stop_team` | `teamId` | `TeamService.stopTeam(teamId)` | yes |
+| `fleet_send_message` | `teamId`, `message` | `TeamService.sendMessage(teamId, message)` | yes |
+| `fleet_list_issues` | `projectId` | `IssueService.getProjectIssues(projectId)` | yes |
+| `fleet_list_projects` | none | `ProjectService.listProjects()` | yes |
+| `fleet_get_usage` | none | `UsageService.getLatest()` | yes |
+| `fleet_get_team_timeline` | `teamId`, `limit?` | `TeamService.getTeamTimeline(teamId, limit)` | yes |
+| `fleet_cleanup_preview` | `projectId`, `resetTeams?` | `ProjectService.getCleanupPreview(projectId, resetTeams)` | not yet |
 
 ---
 
@@ -179,11 +179,16 @@ Returns all teams with dashboard data (joined with project and PR info).
 
 | Property | Value |
 |----------|-------|
-| Parameters | none |
+| Parameters | `projectId` (number, optional), `status` (string, optional) |
 | Service method | `TeamService.listTeams()` |
-| Implemented | not yet |
+| Implemented | yes |
 
-**Input schema:** none
+**Input schema:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `projectId` | number | no | Filter teams by project ID |
+| `status` | string | no | Filter teams by status (e.g. running, idle, stuck, done, failed) |
 
 **Example response:**
 
@@ -216,7 +221,7 @@ Returns full detail for a single team including PR info, recent events, and outp
 |----------|-------|
 | Parameters | `teamId` (number, required) |
 | Service method | `TeamService.getTeamDetail(teamId)` |
-| Implemented | not yet |
+| Implemented | yes |
 
 **Input schema:**
 
@@ -330,7 +335,7 @@ Stops a running team by sending SIGTERM to its Claude Code process.
 |----------|-------|
 | Parameters | `teamId` (number, required) |
 | Service method | `TeamService.stopTeam(teamId)` |
-| Implemented | not yet |
+| Implemented | yes |
 
 **Input schema:**
 
@@ -355,7 +360,7 @@ Sends a message to a running team via stdin and writes a `.fleet-pm-message` fil
 |----------|-------|
 | Parameters | `teamId`, `message` |
 | Service method | `TeamService.sendMessage(teamId, message)` |
-| Implemented | not yet |
+| Implemented | yes |
 
 **Input schema:**
 
@@ -465,7 +470,7 @@ Returns the latest usage snapshot with zone and threshold info.
 |----------|-------|
 | Parameters | none |
 | Service method | `UsageService.getLatest()` |
-| Implemented | not yet |
+| Implemented | yes |
 
 **Example response:**
 
@@ -595,7 +600,7 @@ The following 38 tools were evaluated and deferred. They remain available throug
 | Stop all teams | Destructive batch operation -- dashboard confirmation preferred |
 | Force-launch team | Edge case -- bypasses queue ordering |
 | Resume team | Uncommon recovery operation |
-| Restart team | Uncommon recovery operation |
+| Restart team | (promoted -- implemented) Available as `fleet_restart_team` in `src/server/mcp/tools/restart-team.ts`. Accepts `teamId` (number). See [registration in index.ts](../src/server/mcp/index.ts). |
 | Set team phase | Internal state management -- agents set their own phase via hooks |
 | Acknowledge alert | Dashboard workflow with visual confirmation |
 | Get team roster | Niche debugging -- rarely needed programmatically |
@@ -664,10 +669,16 @@ src/server/mcp/
   index.ts                    # MCP server entry, registers all tools
   tools/
     system-health.ts          # fleet_system_health
-    list-projects.ts          # fleet_list_projects
+    list-teams.ts             # fleet_list_teams
+    get-team.ts               # fleet_get_team
+    stop-team.ts              # fleet_stop_team
+    restart-team.ts           # fleet_restart_team
+    send-message.ts           # fleet_send_message
     list-issues.ts            # fleet_list_issues
-    get-team-timeline.ts      # fleet_get_team_timeline
+    list-projects.ts          # fleet_list_projects
     add-project.ts            # fleet_add_project
+    get-usage.ts              # fleet_get_usage
+    get-team-timeline.ts      # fleet_get_team_timeline
 ```
 
 **Naming convention:** kebab-case filename without the `fleet_` prefix. The tool name inside the file uses `fleet_` prefix with underscores (e.g., file `list-teams.ts` exports tool `fleet_list_teams`).
