@@ -140,10 +140,9 @@ export function checkRepoSettings(githubRepo: string | null | undefined): RepoSe
  * Returns detailed file-level breakdown for tooltip display.
  *
  * @param repoPath - Absolute path to the target repository
- * @param githubRepo - Optional GitHub repo slug for repo settings check
- * @returns InstallStatus with hooks, prompt, agents, guides, settings, and repo settings info
+ * @returns InstallStatus with hooks, prompt, agents, guides, and settings info
  */
-export function checkInstallStatus(repoPath: string, githubRepo?: string | null): InstallStatus {
+export function checkInstallStatus(repoPath: string): InstallStatus {
   const hookNames = [
     'send_event.sh',
     'on_session_start.sh',
@@ -222,8 +221,30 @@ export function checkInstallStatus(repoPath: string, githubRepo?: string | null)
       files: guideFiles,
     },
     settings: settingsFile,
-    repoSettings: checkRepoSettings(githubRepo),
   };
+}
+
+// ---------------------------------------------------------------------------
+// TTL-based install status cache
+// ---------------------------------------------------------------------------
+
+interface InstallStatusCacheEntry {
+  status: InstallStatus;
+  cachedAt: number;
+}
+
+/** In-memory cache for checkInstallStatus(), keyed by repoPath */
+const _installStatusCache: Map<string, InstallStatusCacheEntry> = new Map();
+
+/** Cache TTL in milliseconds (30 seconds) */
+const INSTALL_STATUS_CACHE_TTL_MS = 30_000;
+
+/**
+ * Invalidate the install status cache for a specific repo path.
+ * Called after install/uninstall/create operations.
+ */
+function invalidateInstallStatusCache(repoPath: string): void {
+  _installStatusCache.delete(repoPath);
 }
 
 // ---------------------------------------------------------------------------
@@ -265,10 +286,18 @@ export class ProjectService {
       ? summaries.filter((p) => p.status === statusFilter)
       : summaries;
 
-    return filtered.map((p) => ({
-      ...p,
-      installStatus: checkInstallStatus(p.repoPath, p.githubRepo),
-    }));
+    return filtered.map((p) => {
+      const now = Date.now();
+      const cached = _installStatusCache.get(p.repoPath);
+      let installStatus: InstallStatus;
+      if (cached && (now - cached.cachedAt) < INSTALL_STATUS_CACHE_TTL_MS) {
+        installStatus = cached.status;
+      } else {
+        installStatus = checkInstallStatus(p.repoPath);
+        _installStatusCache.set(p.repoPath, { status: installStatus, cachedAt: now });
+      }
+      return { ...p, installStatus };
+    });
   }
 
   /**
@@ -371,6 +400,9 @@ export class ProjectService {
       console.warn(`[ProjectService] Hook installation failed for ${normalizedPath}: ${installResult.stderr}`);
     }
 
+    // Invalidate install status cache after installation
+    invalidateInstallStatusCache(normalizedPath);
+
     // Verify artifacts were actually installed
     const status = checkInstallStatus(normalizedPath);
     const allInstalled = status.hooks.installed && status.prompt.installed;
@@ -423,6 +455,25 @@ export class ProjectService {
   }
 
   /**
+   * Get GitHub repository settings (auto-merge, branch protection) for a project.
+   * This is loaded lazily (on-demand) rather than in the list endpoint,
+   * because it makes synchronous `gh api` CLI calls that are slow.
+   *
+   * @param projectId - The project ID
+   * @returns RepoSettings or undefined if not available
+   * @throws ServiceError with code NOT_FOUND if project doesn't exist
+   */
+  getRepoSettings(projectId: number): RepoSettings | undefined {
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project) {
+      throw notFoundError(`Project ${projectId} not found`);
+    }
+
+    return checkRepoSettings(project.githubRepo);
+  }
+
+  /**
    * Delete a project with full teardown: stop teams, uninstall hooks,
    * clear caches, delete DB records, broadcast SSE.
    *
@@ -456,8 +507,9 @@ export class ProjectService {
       }
     }
 
-    // Uninstall hooks
+    // Uninstall hooks and invalidate install status cache
     uninstallHooks(project.repoPath, _minimalLogger);
+    invalidateInstallStatusCache(project.repoPath);
 
     // Clear cached issues for this project
     const issueFetcher = getIssueFetcher();
@@ -497,8 +549,9 @@ export class ProjectService {
 
     const result = installHooks(project.repoPath, _minimalLogger);
 
-    // Check what actually landed on disk (include repo settings for UI)
-    const status = checkInstallStatus(project.repoPath, project.githubRepo);
+    // Invalidate cache and check what actually landed on disk
+    invalidateInstallStatusCache(project.repoPath);
+    const status = checkInstallStatus(project.repoPath);
     const allInstalled = status.hooks.installed && status.prompt.installed;
     db.updateProject(project.id, { hooksInstalled: allInstalled });
 

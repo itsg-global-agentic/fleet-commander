@@ -63,7 +63,7 @@ function getInstallHealthLabel(color: HealthColor): string {
 // Install detail categories (reused from original)
 // ---------------------------------------------------------------------------
 
-function InstallHealthDetail({ project }: { project: ProjectSummary }) {
+function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummary; repoSettings?: RepoSettings | null }) {
   if (!project.installStatus) {
     return (
       <span className="text-xs text-dark-muted" title="Install status unknown">
@@ -125,9 +125,6 @@ function InstallHealthDetail({ project }: { project: ProjectSummary }) {
       tooltip: s.settings?.exists ? 'settings.json found' : 'settings.json missing',
     },
   ];
-
-  // GitHub repo settings (auto-merge, branch protection)
-  const repoSettings: RepoSettings | undefined = s.repoSettings;
 
   return (
     <div className="flex items-center gap-3 text-xs flex-wrap">
@@ -258,6 +255,7 @@ function ProjectCard({
   onDelete,
   onEditPrompt,
   onGroupChange,
+  fetchRepoSettings,
 }: {
   project: ProjectSummary;
   groups: ProjectGroupWithCount[];
@@ -270,10 +268,22 @@ function ProjectCard({
   onDelete: (p: ProjectSummary) => void;
   onEditPrompt: (id: number) => void;
   onGroupChange: (projectId: number, groupId: number | null) => void;
+  fetchRepoSettings: (projectId: number) => Promise<RepoSettings | null>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [repoSettings, setRepoSettings] = useState<RepoSettings | null | undefined>(undefined);
+  const [repoSettingsLoaded, setRepoSettingsLoaded] = useState(false);
   const limitEdit = useInlineEdit<number>(project.maxActiveTeams);
   const modelEdit = useInlineEdit<string>(project.model ?? '');
+
+  // Lazy-load repo settings when first expanded
+  useEffect(() => {
+    if (!expanded || repoSettingsLoaded) return;
+    setRepoSettingsLoaded(true);
+    fetchRepoSettings(project.id)
+      .then((settings) => setRepoSettings(settings))
+      .catch(() => setRepoSettings(null));
+  }, [expanded, repoSettingsLoaded, fetchRepoSettings, project.id]);
 
   const statusStyle = STATUS_STYLES[project.status] || STATUS_STYLES.active;
   const healthColor = getInstallHealthColor(project);
@@ -489,7 +499,7 @@ function ProjectCard({
             <div className="text-[10px] uppercase tracking-wider text-dark-muted/60 font-medium mb-1">
               Install Health
             </div>
-            <InstallHealthDetail project={project} />
+            <InstallHealthDetail project={project} repoSettings={repoSettings} />
           </div>
 
           {/* Prompt (conditional) */}
@@ -749,6 +759,15 @@ export function ProjectsPage() {
     }
   }, [api]);
 
+  const fetchRepoSettings = useCallback(async (projectId: number): Promise<RepoSettings | null> => {
+    try {
+      const data = await api.get<RepoSettings | null>(`projects/${projectId}/repo-settings`);
+      return data;
+    } catch {
+      return null;
+    }
+  }, [api]);
+
   useEffect(() => {
     fetchProjects();
     fetchGroups();
@@ -802,12 +821,18 @@ export function ProjectsPage() {
 
   const handleGroupChange = useCallback(
     async (projectId: number, groupId: number | null) => {
+      // Optimistic update
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, groupId } : p)),
+      );
       try {
         await api.put(`projects/${projectId}`, { groupId });
-        await fetchProjects();
+        // Refresh groups to update project counts
         await fetchGroups();
       } catch {
-        // ignore
+        // Revert on failure by refetching
+        await fetchProjects();
+        await fetchGroups();
       }
     },
     [api, fetchProjects, fetchGroups],
@@ -822,11 +847,15 @@ export function ProjectsPage() {
       );
       if (!confirmed) return;
 
+      // Optimistic removal
+      setProjects((prev) => prev.filter((p) => p.id !== project.id));
       try {
         await api.del(`projects/${project.id}`);
-        await fetchProjects();
         await fetchGroups();
       } catch (err) {
+        // Revert on failure
+        await fetchProjects();
+        await fetchGroups();
         window.alert(`Failed to delete project: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
@@ -843,12 +872,22 @@ export function ProjectsPage() {
       setReinstalling(project.id);
       setReinstallResult(null);
       try {
-        const data = await api.post<{ ok: boolean; output?: string; error?: string }>(
+        const data = await api.post<{
+          ok: boolean;
+          output?: string;
+          error?: string;
+          installStatus?: ProjectSummary['installStatus'];
+        }>(
           `projects/${project.id}/install`,
           {},
         );
         setReinstallResult({ id: project.id, ok: data.ok, error: data.error });
-        await fetchProjects();
+        // Optimistic update: use the install status from the response
+        if (data.installStatus) {
+          setProjects((prev) =>
+            prev.map((p) => (p.id === project.id ? { ...p, installStatus: data.installStatus } : p)),
+          );
+        }
       } catch (err: unknown) {
         setReinstallResult({
           id: project.id,
@@ -859,7 +898,7 @@ export function ProjectsPage() {
         setReinstalling(null);
       }
     },
-    [api, fetchProjects],
+    [api],
   );
 
   const handleCleanup = useCallback((project: ProjectSummary) => {
@@ -876,11 +915,15 @@ export function ProjectsPage() {
 
   const handleSaveLimit = useCallback(
     async (projectId: number, value: number) => {
+      // Optimistic update
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, maxActiveTeams: value } : p)),
+      );
       try {
         await api.put(`projects/${projectId}`, { maxActiveTeams: value });
-        await fetchProjects();
       } catch {
-        // ignore
+        // Revert on failure by refetching
+        await fetchProjects();
       }
     },
     [api, fetchProjects],
@@ -888,11 +931,16 @@ export function ProjectsPage() {
 
   const handleSaveModel = useCallback(
     async (projectId: number, value: string) => {
+      const trimmed = value.trim() || null;
+      // Optimistic update
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, model: trimmed } : p)),
+      );
       try {
-        await api.put(`projects/${projectId}`, { model: value.trim() || null });
-        await fetchProjects();
+        await api.put(`projects/${projectId}`, { model: trimmed });
       } catch {
-        // ignore
+        // Revert on failure by refetching
+        await fetchProjects();
       }
     },
     [api, fetchProjects],
@@ -963,6 +1011,7 @@ export function ProjectsPage() {
     onDelete: handleDelete,
     onEditPrompt: setEditingPromptId,
     onGroupChange: handleGroupChange,
+    fetchRepoSettings,
   };
 
   // --- Render ---
