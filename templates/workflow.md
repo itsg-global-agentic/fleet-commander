@@ -13,6 +13,15 @@ Fleet Commander (FC) is the orchestration layer that manages your team. Key fact
 - **Messages from FC** — FC may send structured messages to the TL (see "FC Messages" section below). These arrive as stdin messages and should be acted on promptly.
 - **Idle/Stuck thresholds** — FC marks agents idle after 3 minutes of inactivity and stuck after 5 minutes. Agents waiting for peer messages are expected to be idle — this is normal. TL should only intervene when stuck.
 
+## Worktree Awareness
+
+You are running inside a **git worktree**, not the main repository checkout. This has critical implications:
+
+- **NEVER run `git checkout {{BASE_BRANCH}}`** — the base branch is already checked out in the main worktree. Attempting to check it out here will fail with "already used by worktree."
+- **Use `git fetch origin {{BASE_BRANCH}}` and reference `origin/{{BASE_BRANCH}}`** whenever you need the latest base branch state. Do not try to switch to it.
+- **Your branch is your branch.** Create it, work on it, push it. Never switch away from it to {{BASE_BRANCH}}.
+- This applies to ALL agents (planner, dev, reviewer) — none of them should ever attempt to checkout {{BASE_BRANCH}}.
+
 ## Entry Point
 
 ```
@@ -109,8 +118,8 @@ After spawning the first agent, the TL enters a continuous monitoring loop that 
 ### Monitoring Rules
 
 1. **Run `TaskList` every 30-60 seconds** to check the status of all spawned agents. This is your heartbeat — never go more than 60 seconds without checking.
-2. **If any agent exits unexpectedly** (SubagentStop without sending expected output), **respawn immediately** — do not wait for the stuck detector's 5-minute threshold.
-3. **Between phases** (e.g., planner done, waiting for dev), actively verify the next agent is alive via `TaskList`. If the agent is gone, respawn it.
+2. **If any agent exits unexpectedly** (SubagentStop without sending expected output), **respawn immediately** — do not wait for the stuck detector's 5-minute threshold. However, observe the **respawn budget** (see below).
+3. **Between phases** (e.g., planner done, waiting for dev), actively verify the next agent is alive via `TaskList`. If the agent is gone, respawn it (within the respawn budget).
 4. **After each subagent phase completes, immediately proceed** to the next action:
    - **Planner done** — validate the plan — spawn dev with the plan context
    - **Dev done** — check dev output for completeness — spawn reviewer with branch context
@@ -123,6 +132,16 @@ If `TaskList` shows an agent is no longer running:
 1. Check the last output/events from that agent
 2. If the agent completed its work (sent its deliverable), proceed to the next phase
 3. If the agent exited without delivering, respawn it with the same task plus any additional context from the failed attempt
+
+### Respawn Budget
+
+**Maximum 5 total subagent spawns per team run.** This includes all initial spawns and all respawns across all agent types (planner, dev, reviewer).
+
+- Track your spawn count. Each `TaskCreate` call increments the count.
+- If you reach 5 spawns and an agent exits without delivering, **do NOT respawn**. Instead:
+  1. Take over the agent's role yourself (TL fallback).
+  2. If the role is too complex to take over (e.g., full implementation), report BLOCKED to FC.
+- This budget prevents respawn storms that waste time and resources without making progress.
 
 ---
 
@@ -291,8 +310,9 @@ After reviewer sends APPROVE to TL:
 
 1. **Branch freshness check** (MANDATORY):
    ```bash
-   git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}} && git push --force-with-lease
+   git stash --include-untracked && git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}} && git stash pop && git push --force-with-lease
    ```
+   The `git stash --include-untracked` is required because the CC runtime may leave unstaged changes (e.g., `.claude/settings.json`) that block rebase.
    If rebase fails (conflicts) → state Blocked.
 
 2. **TL creates PR**:
@@ -316,7 +336,11 @@ After reviewer sends APPROVE to TL:
 ## Phase 5 — Done
 
 1. Close issue: `gh issue close {N} --comment "Closed. PR #{PR} merged."`
-2. `shutdown_request` to all active subagents → wait for `shutdown_response`
+2. **Explicit shutdown sequence** (MANDATORY):
+   a. Run `TaskList` to identify all active subagents.
+   b. For each active subagent, send `shutdown_request` via `TaskUpdate`.
+   c. Run `TaskList` again to verify all subagents have exited.
+   d. If any subagent is still running after shutdown_request, send a second shutdown_request, then proceed regardless.
 3. TL finishes
 
 ---
@@ -404,7 +428,7 @@ If the same issue bounces back and forth between dev and reviewer:
 
 ### Rebase Conflict
 
-1. If `git rebase origin/{{BASE_BRANCH}}` fails with conflicts → state Blocked
+1. If `git stash --include-untracked && git rebase origin/{{BASE_BRANCH}}` fails with conflicts → state Blocked
 2. Comment on issue explaining the conflict
 3. STOP — do not attempt manual conflict resolution across worktrees
 
@@ -456,7 +480,9 @@ Atomic commits — each commit should be a logical unit.
 | TL implements code while dev is active | Let dev do the implementation |
 | TL overrides reviewer without reading feedback | Read feedback, arbitrate only after 3 rounds |
 | Dev pushes without local tests | Build + tests locally BEFORE reporting ready |
-| Dev pushes without rebase | ALWAYS rebase on {{BASE_BRANCH}} before push |
+| Dev pushes without rebase | ALWAYS stash + rebase on {{BASE_BRANCH}} before push |
+| Respawning agents endlessly | Max 5 total spawns — then TL takes over or reports BLOCKED |
+| Checking out {{BASE_BRANCH}} in a worktree | NEVER checkout {{BASE_BRANCH}} — use `origin/{{BASE_BRANCH}}` as reference |
 | Dev creates the PR | TL creates the PR after APPROVE |
 | Spawning a coordinator / 4th agent | Diamond team is exactly 3 agents: planner, dev, reviewer |
 | Spawning all 3 agents at once before analysis is done | Spawn sequentially: planner first, then dev with plan, then reviewer after dev ready |
