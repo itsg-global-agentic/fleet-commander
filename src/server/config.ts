@@ -70,8 +70,8 @@ const config = Object.freeze({
   stuckCheckIntervalMs: safeParseInt(process.env['FLEET_STUCK_CHECK_MS'] || '60000', 'FLEET_STUCK_CHECK_MS'),
   usagePollIntervalMs: safeParseInt(process.env['FLEET_USAGE_POLL_MS'] || '900000', 'FLEET_USAGE_POLL_MS'),
 
-  idleThresholdMin: safeParseInt(process.env['FLEET_IDLE_THRESHOLD_MIN'] || '3', 'FLEET_IDLE_THRESHOLD_MIN'),
-  stuckThresholdMin: safeParseInt(process.env['FLEET_STUCK_THRESHOLD_MIN'] || '5', 'FLEET_STUCK_THRESHOLD_MIN'),
+  idleThresholdMin: safeParseInt(process.env['FLEET_IDLE_THRESHOLD_MIN'] || '5', 'FLEET_IDLE_THRESHOLD_MIN'),
+  stuckThresholdMin: safeParseInt(process.env['FLEET_STUCK_THRESHOLD_MIN'] || '10', 'FLEET_STUCK_THRESHOLD_MIN'),
   launchTimeoutMin: safeParseInt(process.env['FLEET_LAUNCH_TIMEOUT_MIN'] || '5', 'FLEET_LAUNCH_TIMEOUT_MIN'),
   maxUniqueCiFailures: safeParseInt(process.env['FLEET_MAX_CI_FAILURES'] || '3', 'FLEET_MAX_CI_FAILURES'),
 
