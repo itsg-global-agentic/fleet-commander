@@ -153,6 +153,40 @@ const projectsRoutes: FastifyPluginCallback = (
   );
 
   // -------------------------------------------------------------------------
+  // GET /api/projects/:id/repo-settings — lazy-load GitHub repo settings
+  // -------------------------------------------------------------------------
+  fastify.get(
+    '/api/projects/:id/repo-settings',
+    async (
+      request: FastifyRequest<{ Params: ProjectIdParams }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const projectId = parseInt(request.params.id, 10);
+        if (isNaN(projectId) || projectId < 1) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: 'Invalid project ID',
+          });
+        }
+
+        const service = getProjectService();
+        const settings = service.getRepoSettings(projectId);
+        return reply.code(200).send(settings ?? null);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        request.log.error(err, 'Failed to get repo settings');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // PUT /api/projects/:id — update project name/status
   // -------------------------------------------------------------------------
   fastify.put(
