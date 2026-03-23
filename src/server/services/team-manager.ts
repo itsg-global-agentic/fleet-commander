@@ -22,6 +22,7 @@ import { resolveClaudePath } from '../utils/resolve-claude-path.js';
 import type { Team, Project } from '../../shared/types.js';
 import { getUsageZone } from './usage-tracker.js';
 import { resolveMessage } from '../utils/resolve-message.js';
+import { CircularBuffer } from '../utils/circular-buffer.js';
 
 const execAsync = promisify(execCallback);
 
@@ -60,14 +61,6 @@ function summarizeEvent(event: StreamEvent): string {
 }
 
 // ---------------------------------------------------------------------------
-// Output buffer: circular array of last N lines per team
-// ---------------------------------------------------------------------------
-
-interface OutputBuffer {
-  lines: string[];
-}
-
-// ---------------------------------------------------------------------------
 // TeamManager
 // ---------------------------------------------------------------------------
 
@@ -80,7 +73,7 @@ interface TokenCounter {
 }
 
 export class TeamManager {
-  private outputBuffers: Map<number, OutputBuffer> = new Map();
+  private outputBuffers: Map<number, CircularBuffer<string>> = new Map();
   private childProcesses: Map<number, ChildProcess> = new Map();
   private stdinPipes: Map<number, Writable> = new Map();
   private parsedEvents: Map<number, StreamEvent[]> = new Map();
@@ -1051,11 +1044,11 @@ export class TeamManager {
       return [];
     }
 
-    if (lines && lines > 0 && lines < buffer.lines.length) {
-      return buffer.lines.slice(-lines);
+    if (lines && lines > 0 && lines < buffer.length) {
+      return buffer.last(lines);
     }
 
-    return [...buffer.lines];
+    return buffer.toArray();
   }
 
   // -------------------------------------------------------------------------
@@ -1822,7 +1815,7 @@ export class TeamManager {
   }
 
   private initOutputBuffer(teamId: number): void {
-    this.outputBuffers.set(teamId, { lines: [] });
+    this.outputBuffers.set(teamId, new CircularBuffer<string>(MAX_OUTPUT_LINES));
   }
 
   private captureOutput(teamId: number, child: ChildProcess): void {
@@ -1874,11 +1867,8 @@ export class TeamManager {
           const trimmed = line.trim();
           if (!trimmed) continue;
 
-          // Store raw line in output buffer
-          buffer.lines.push(line);
-          while (buffer.lines.length > MAX_OUTPUT_LINES) {
-            buffer.lines.shift();
-          }
+          // Store raw line in output buffer (O(1) circular overwrite)
+          buffer.push(line);
 
           // Try to parse as JSON (NDJSON from stream-json output)
           try {
@@ -1995,10 +1985,7 @@ export class TeamManager {
       child.stdout.on('end', () => {
         if (stdoutPartial.trim()) {
           const trimmed = stdoutPartial.trim();
-          buffer.lines.push(stdoutPartial);
-          while (buffer.lines.length > MAX_OUTPUT_LINES) {
-            buffer.lines.shift();
-          }
+          buffer.push(stdoutPartial);
           try {
             const event: StreamEvent = JSON.parse(trimmed);
             console.log(`[CC:${logPrefix}] ${event.type}: ${summarizeEvent(event)}`);
@@ -2053,10 +2040,7 @@ export class TeamManager {
         for (let idx = 0; idx < newLines.length; idx++) {
           const line = newLines[idx]!;
           if (line === '' && idx === newLines.length - 1) continue;
-          buffer.lines.push(line);
-          while (buffer.lines.length > MAX_OUTPUT_LINES) {
-            buffer.lines.shift();
-          }
+          buffer.push(line);
         }
       });
     }

@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vite
 import { EventEmitter } from 'events';
 import type { Writable } from 'stream';
 import type { Team } from '../../src/shared/types.js';
+import { CircularBuffer } from '../../src/server/utils/circular-buffer.js';
 
 // ---------------------------------------------------------------------------
 // Mocks — vi.hoisted ensures these are available when vi.mock factories run
@@ -333,7 +334,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
     const team = makeTeam({ id: 1, status: 'running' });
 
     (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, { lines: [] });
+    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
     (tm as any).parsedEvents.set(1, []);
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
@@ -363,7 +364,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
     const team = makeTeam({ id: 1, status: 'running' });
 
     (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, { lines: [] });
+    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
     (tm as any).parsedEvents.set(1, []);
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
@@ -393,7 +394,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
     const team = makeTeam({ id: 1, status: 'running' });
 
     (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, { lines: [] });
+    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
     (tm as any).parsedEvents.set(1, []);
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
@@ -418,7 +419,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
     const team = makeTeam({ id: 1, status: 'done' });
 
     (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, { lines: [] });
+    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
     (tm as any).parsedEvents.set(1, []);
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
@@ -436,7 +437,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
     const team = makeTeam({ id: 1, status: 'running' });
 
     (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, { lines: [] });
+    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
     (tm as any).parsedEvents.set(1, []);
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
@@ -457,7 +458,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
     const child = createMockChildProcess();
 
     (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, { lines: [] });
+    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
     (tm as any).parsedEvents.set(1, []);
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
@@ -486,7 +487,7 @@ describe('TeamManager.attachProcessHandlers (error)', () => {
     const team = makeTeam({ id: 1, status: 'running' });
 
     (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, { lines: [] });
+    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
     (tm as any).parsedEvents.set(1, []);
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
@@ -516,7 +517,7 @@ describe('TeamManager.attachProcessHandlers (error)', () => {
     const team = makeTeam({ id: 1, status: 'running' });
 
     (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, { lines: [] });
+    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
     (tm as any).parsedEvents.set(1, []);
     (tm as any).stdinPipes.set(1, createMockStdin());
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
