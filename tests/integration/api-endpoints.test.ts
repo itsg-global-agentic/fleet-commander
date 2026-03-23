@@ -101,8 +101,7 @@ beforeAll(async () => {
   await server.register(eventsRoutes);
   await server.register(systemRoutes);
 
-  // Register a simple health endpoint (mirrors the task spec)
-  server.get('/api/health', async () => ({ status: 'ok' }));
+  // /api/health is now registered via systemRoutes above
 
   // Register the GET /api/teams and GET /api/teams/:id endpoints manually
   // to avoid pulling in team-manager dependencies from the full teamsRoutes plugin.
@@ -167,11 +166,14 @@ beforeEach(() => {
 // =============================================================================
 
 describe('GET /api/health', () => {
-  it('returns { status: "ok" }', async () => {
+  it('returns { status: "ok", version: "..." }', async () => {
     const res = await server.inject({ method: 'GET', url: '/api/health' });
 
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ status: 'ok' });
+    const body = res.json();
+    expect(body.status).toBe('ok');
+    expect(typeof body.version).toBe('string');
+    expect(body.version).not.toBe('');
   });
 });
 

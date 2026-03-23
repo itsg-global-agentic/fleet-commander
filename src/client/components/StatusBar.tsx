@@ -4,6 +4,18 @@ import { useEffect, useState } from 'react';
 export function StatusBar() {
   const { connected, lastEvent } = useFleet();
   const [secondsAgo, setSecondsAgo] = useState<number | null>(null);
+  const [version, setVersion] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.version) setVersion(data.version);
+      })
+      .catch(() => {
+        // ignore — version display is non-critical
+      });
+  }, []);
 
   useEffect(() => {
     if (!lastEvent) {
@@ -32,6 +44,9 @@ export function StatusBar() {
         <span className="ml-4">
           Last update: {secondsAgo}s ago
         </span>
+      )}
+      {version && (
+        <span className="ml-auto">v{version}</span>
       )}
     </footer>
   );

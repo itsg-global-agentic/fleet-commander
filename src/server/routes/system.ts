@@ -26,6 +26,22 @@ import { resolveClaudePath } from '../utils/resolve-claude-path.js';
 const SERVER_START_TIME = Date.now();
 
 // ---------------------------------------------------------------------------
+// Read package version once at module load
+// ---------------------------------------------------------------------------
+
+function readPackageVersion(): string {
+  try {
+    const pkgPath = path.join(config.fleetCommanderRoot, 'package.json');
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+    return pkg.version ?? 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+const PACKAGE_VERSION = readPackageVersion();
+
+// ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
 
@@ -34,6 +50,16 @@ const systemRoutes: FastifyPluginCallback = (
   _opts: Record<string, unknown>,
   done: (err?: Error) => void,
 ) => {
+  // -------------------------------------------------------------------------
+  // GET /api/health — simple health check with version
+  // -------------------------------------------------------------------------
+  fastify.get(
+    '/api/health',
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      return reply.code(200).send({ status: 'ok', version: PACKAGE_VERSION });
+    },
+  );
+
   // -------------------------------------------------------------------------
   // GET /api/diagnostics/stuck — teams that are idle or stuck
   // -------------------------------------------------------------------------
