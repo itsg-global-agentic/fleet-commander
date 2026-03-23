@@ -34,27 +34,45 @@ if [ ! -t 0 ]; then
 fi
 
 # ── Identify worktree / team ─────────────────────────────────────
-# Hooks run with CWD inside the worktree. We derive the team name
-# from the directory path.
+# Priority:
+#   1. FLEET_TEAM_ID env var (set by team-manager.ts spawn env)
+#   2. CLAUDE_PROJECT_DIR env var (set by CC >= 1.0.58 for hooks)
+#   3. git rev-parse --show-toplevel (legacy fallback)
 #
 # Pattern: .claude/worktrees/kea-NNN  →  team = "kea-NNN"
-# Fallback: basename of git toplevel  →  team = "itsg-kea" (main repo)
-WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+# Fallback: basename of project dir   →  team = "itsg-kea" (main repo)
 
-# Try to extract team name from worktree path
 TEAM_NAME=""
-case "$WORKTREE_ROOT" in
-    */worktrees/*)
-        # Extract the last path component after "worktrees/"
-        TEAM_NAME=$(printf '%s' "$WORKTREE_ROOT" | sed 's|.*/worktrees/||' | sed 's|/.*||')
-        ;;
-    *)
-        TEAM_NAME=$(basename "$WORKTREE_ROOT")
-        ;;
-esac
 
-# Allow explicit override via environment variable
-TEAM_NAME="${FLEET_TEAM_ID:-${CLAUDE_WORKTREE_NAME:-$TEAM_NAME}}"
+# Try FLEET_TEAM_ID first (set by FC spawn environment)
+if [ -n "${FLEET_TEAM_ID:-}" ]; then
+    TEAM_NAME="$FLEET_TEAM_ID"
+fi
+
+# Try CLAUDE_PROJECT_DIR (CC sets this for hook commands since v1.0.58)
+if [ -z "$TEAM_NAME" ] && [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then
+    case "$CLAUDE_PROJECT_DIR" in
+        */worktrees/*)
+            TEAM_NAME=$(printf '%s' "$CLAUDE_PROJECT_DIR" | sed 's|.*/worktrees/||' | sed 's|/.*||')
+            ;;
+        *)
+            TEAM_NAME=$(basename "$CLAUDE_PROJECT_DIR")
+            ;;
+    esac
+fi
+
+# Fallback: git toplevel
+if [ -z "$TEAM_NAME" ]; then
+    WORKTREE_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+    case "$WORKTREE_ROOT" in
+        */worktrees/*)
+            TEAM_NAME=$(printf '%s' "$WORKTREE_ROOT" | sed 's|.*/worktrees/||' | sed 's|/.*||')
+            ;;
+        *)
+            TEAM_NAME=$(basename "$WORKTREE_ROOT")
+            ;;
+    esac
+fi
 
 # ── Build timestamp ───────────────────────────────────────────────
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown")
