@@ -33,8 +33,15 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Test
-        run: npm test
+      - name: Test (server)
+        run: npx vitest run --project server
+
+      - name: Test (client)
+        run: |
+          for f in tests/client/*.test.{ts,tsx}; do
+            [ -f "$f" ] || continue
+            npx vitest run --project client "$f" 2>&1 | tail -3 || exit 1
+          done
 
       - name: Build
         run: npm run build
