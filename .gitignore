@@ -8,3 +8,4 @@ fleet.db-shm
 fleet.db-wal
 *.png
 !docs/diagrams/*.png
+!docs/screenshots/*.png
