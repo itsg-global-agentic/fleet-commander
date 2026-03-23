@@ -21,9 +21,12 @@ Documentation for the Fleet Commander Model Context Protocol (MCP) server: tool 
   - [fleet_get_usage](#fleet_get_usage)
   - [fleet_get_team_timeline](#fleet_get_team_timeline)
   - [fleet_cleanup_preview](#fleet_cleanup_preview)
+- [Additional Implemented Tools](#additional-implemented-tools)
+  - [fleet_add_project](#fleet_add_project)
+  - [fleet_restart_team](#fleet_restart_team)
 - [Architecture Decision: Tool Selection](#architecture-decision-tool-selection)
   - [Why 12, Not 50](#why-12-not-50)
-  - [Deferred Tools (38)](#deferred-tools-38)
+  - [Deferred Tools (38 evaluated, 2 promoted)](#deferred-tools-38-evaluated-2-promoted)
   - [Promotion Path](#promotion-path)
 - [Adding New Tools -- Developer Guide](#adding-new-tools----developer-guide)
   - [File Structure](#file-structure)
@@ -44,7 +47,7 @@ Fleet Commander exposes an MCP server that lets Claude Code (or any MCP-compatib
 | Entry point | `node bin/fleet-commander-mcp.js` |
 | Protocol | [Model Context Protocol](https://modelcontextprotocol.io/) |
 | Tool prefix | `fleet_` |
-| Core tools | 12 |
+| Registered tools | 11 (9 core + 2 additional) |
 | Server name | `fleet-commander` |
 
 The MCP server is a **separate process** from the Fastify HTTP server. It initializes the SQLite database and starts all background services (SSE broker, issue fetcher, stuck detector, GitHub poller, usage tracker) but does **not** bind an HTTP port. All logging goes to stderr since stdout is reserved for MCP JSON-RPC.
@@ -58,7 +61,7 @@ Claude Code agent  --->  MCP server (stdio)  --->  Service layer  --->  SQLite
 Browser            --->  Fastify HTTP + SSE   --->  Service layer  --->  SQLite
 ```
 
-MCP tools are thin wrappers that call exactly one service method and return JSON. The REST API exposes the full 71-endpoint surface; the MCP server exposes only the 12 tools most useful for programmatic agent interaction.
+MCP tools are thin wrappers that call exactly one service method and return JSON. The REST API exposes the full 71-endpoint surface; the MCP server exposes 11 registered tools (9 of the 12 core design plus 2 additional promoted tools) covering the operations most useful for programmatic agent interaction.
 
 ---
 
@@ -562,6 +565,89 @@ Generates a cleanup dry-run preview for a project, showing worktrees and branche
 
 ---
 
+## Additional Implemented Tools
+
+Beyond the 12 core tools designed in the original MCP specification, the following tools were promoted from the deferred list based on practical need during development. They are fully registered in the MCP server and available for agent use.
+
+### fleet_add_project
+
+Registers a new git repository as a Fleet Commander project. Auto-detects the GitHub repo from the local git remote if not provided.
+
+| Property | Value |
+|----------|-------|
+| Parameters | `repoPath`, `name?`, `githubRepo?`, `maxActiveTeams?`, `model?` |
+| Service method | `ProjectService.createProject(data)` |
+| Source | Promoted from Project CRUD deferred category |
+
+**Input schema:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repoPath` | string | yes | Absolute path to the git repository |
+| `name` | string | no | Project display name (defaults to directory name) |
+| `githubRepo` | string | no | GitHub repo in owner/name format (auto-detected if omitted) |
+| `maxActiveTeams` | number | no | Maximum concurrent active teams (default 5) |
+| `model` | string | no | Claude model to use for this project |
+
+**Example response:**
+
+```json
+{
+  "id": 3,
+  "name": "my-new-project",
+  "repoPath": "/repos/my-new-project",
+  "githubRepo": "owner/my-new-project",
+  "maxActiveTeams": 5,
+  "model": null,
+  "createdAt": "2025-01-15T10:00:00Z"
+}
+```
+
+**Error cases:**
+
+- `VALIDATION` -- invalid or missing repoPath
+- `CONFLICT` -- a project already exists for this repository path
+
+**When to use:** Register a new repository with Fleet Commander so teams can be launched against its issues. Useful for onboarding new repos without going through the dashboard UI.
+
+---
+
+### fleet_restart_team
+
+Restarts a stopped or failed team by its numeric ID. Re-launches the Claude Code process for the team's issue.
+
+| Property | Value |
+|----------|-------|
+| Parameters | `teamId` |
+| Service method | `TeamService.restartTeam(teamId)` |
+| Source | Promoted from Team Lifecycle deferred category |
+
+**Input schema:**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `teamId` | number | yes | Numeric ID of the team to restart |
+
+**Example response:**
+
+```json
+{
+  "id": 1,
+  "issueNumber": 42,
+  "status": "queued",
+  "restartedAt": "2025-01-15T11:00:00Z"
+}
+```
+
+**Error cases:**
+
+- `NOT_FOUND` -- team does not exist
+- `VALIDATION` -- team is not in a restartable state (must be stopped or failed)
+
+**When to use:** Restart a team that previously stopped or failed. Commonly used after fixing the root cause of a failure or when a stopped team needs to continue work.
+
+---
+
 ## Architecture Decision: Tool Selection
 
 This section documents why Fleet Commander exposes 12 MCP tools rather than wrapping all 71 REST endpoints. The analysis is based on the research in issue [#330](https://github.com/hubertciebiada/fleet-commander/issues/330).
@@ -576,14 +662,15 @@ This section documents why Fleet Commander exposes 12 MCP tools rather than wrap
 
 **4. Composite tools over granular ones.** `fleet_get_team` returns a rich composite response (team status, PR detail, recent events, output tail) rather than requiring separate calls for each piece. This reduces round-trips and keeps agent workflows simple.
 
-### Deferred Tools (38)
+### Deferred Tools (38 evaluated, 2 promoted)
 
-The following 38 tools were evaluated and deferred. They remain available through the REST API and dashboard UI. Each category lists the deferred operations and the reason for deferral.
+The following tools were evaluated and initially deferred. Two have since been promoted to implemented status (`fleet_add_project` and `fleet_restart_team`); the rest remain available through the REST API and dashboard UI. Each category lists the deferred operations and the reason for deferral, with promoted tools clearly marked.
 
-#### Project CRUD (8 deferred)
+#### Project CRUD (8 deferred, 1 promoted)
 
 | Operation | Why deferred |
 |-----------|-------------|
+| Add project | (promoted -- implemented) Available as `fleet_add_project` in `src/server/mcp/tools/add-project.ts`. Accepts `repoPath` (string, required) plus optional `name`, `githubRepo`, `maxActiveTeams`, `model`. See [Additional Implemented Tools](#fleet_add_project). |
 | Get project detail | Low MCP frequency -- agents rarely need single-project metadata |
 | Update project | Configuration change -- better suited to dashboard UI |
 | Delete project | Destructive -- requires confirmation flow |
@@ -593,14 +680,14 @@ The following 38 tools were evaluated and deferred. They remain available throug
 | Save project prompt | Prompt editing is a UI workflow |
 | Execute cleanup | Destructive -- use `fleet_cleanup_preview` first, then confirm in UI |
 
-#### Team Lifecycle Details (7 deferred)
+#### Team Lifecycle Details (7 deferred, 1 promoted)
 
 | Operation | Why deferred |
 |-----------|-------------|
 | Stop all teams | Destructive batch operation -- dashboard confirmation preferred |
 | Force-launch team | Edge case -- bypasses queue ordering |
 | Resume team | Uncommon recovery operation |
-| Restart team | (promoted -- implemented) Available as `fleet_restart_team` in `src/server/mcp/tools/restart-team.ts`. Accepts `teamId` (number). See [registration in index.ts](../src/server/mcp/index.ts). |
+| Restart team | (promoted -- implemented) Available as `fleet_restart_team` in `src/server/mcp/tools/restart-team.ts`. Accepts `teamId` (number). See [Additional Implemented Tools](#fleet_restart_team). |
 | Set team phase | Internal state management -- agents set their own phase via hooks |
 | Acknowledge alert | Dashboard workflow with visual confirmation |
 | Get team roster | Niche debugging -- rarely needed programmatically |
