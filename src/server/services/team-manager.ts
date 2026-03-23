@@ -614,6 +614,58 @@ export class TeamManager {
   }
 
   // -------------------------------------------------------------------------
+  // killAll — immediately kill all child processes (server shutdown fast-path)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Immediately kill all tracked child processes without waiting for graceful
+   * shutdown. This is the fast-path used during server shutdown (Ctrl+C) to
+   * ensure the Node.js event loop can exit promptly.
+   *
+   * Unlike stopAll(), this method:
+   * - Does NOT wait for graceful stdin EOF / 5s timeout per team
+   * - Does NOT update the database or broadcast SSE events
+   * - DOES unref all stdio streams so they don't keep the event loop alive
+   */
+  killAll(): void {
+    // Clear any pending merge-shutdown timers
+    this.clearShutdownTimers();
+
+    for (const [teamId, child] of this.childProcesses) {
+      try {
+        // Destroy stdio streams so they stop holding the event loop
+        if (child.stdin && !child.stdin.destroyed) {
+          child.stdin.destroy();
+        }
+        if (child.stdout) {
+          child.stdout.destroy();
+        }
+        if (child.stderr) {
+          child.stderr.destroy();
+        }
+
+        // Kill the process tree
+        if (child.pid) {
+          this.killProcess(child.pid);
+        }
+
+        // Unref the child process itself so it doesn't block exit
+        child.unref();
+      } catch {
+        // Ignore errors during shutdown — best-effort cleanup
+      }
+    }
+
+    // Clear all tracking maps
+    this.childProcesses.clear();
+    this.stdinPipes.clear();
+    this.outputBuffers.clear();
+    this.parsedEvents.clear();
+    this.tokenCounters.clear();
+    this.agentMaps.clear();
+  }
+
+  // -------------------------------------------------------------------------
   // queueTeam — insert a team with 'queued' status without spawning
   // -------------------------------------------------------------------------
 

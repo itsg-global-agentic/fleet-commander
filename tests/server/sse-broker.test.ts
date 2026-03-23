@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 interface MockRaw {
   write: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
+  destroy: ReturnType<typeof vi.fn>;
 }
 
 interface MockReply {
@@ -30,6 +31,7 @@ function createMockReply(): MockReply {
     raw: {
       write: vi.fn().mockReturnValue(true),
       end: vi.fn(),
+      destroy: vi.fn(),
     },
   };
 }
@@ -258,7 +260,7 @@ describe('Heartbeat timer', () => {
     sseBroker.stop();
 
     expect(sseBroker.getClientCount()).toBe(0);
-    expect(reply.raw.end).toHaveBeenCalled();
+    expect(reply.raw.destroy).toHaveBeenCalled();
   });
 
   it('sends heartbeat events at interval', async () => {

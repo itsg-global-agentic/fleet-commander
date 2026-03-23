@@ -26,6 +26,7 @@ import { recoverOnStartup } from './services/startup-recovery.js';
 import { usagePoller } from './services/usage-tracker.js';
 import config from './config.js';
 import { resolveClaudePath } from './utils/resolve-claude-path.js';
+import { getTeamManager } from './services/team-manager.js';
 import { DEFAULT_MESSAGE_TEMPLATES } from '../shared/message-templates.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -34,6 +35,7 @@ const __dirname = path.dirname(__filename);
 async function main() {
   const server = Fastify({
     logger: { level: config.logLevel },
+    forceCloseConnections: true,
   });
 
   // Centralized error handler
@@ -154,10 +156,17 @@ async function main() {
     }, 5000);
     forceTimer.unref();
 
-    // Close SSE connections BEFORE server.close() so the HTTP server
-    // doesn't hang waiting for long-lived connections to end.
-    sseBroker.stop();
+    // Kill all child processes immediately so their stdio streams don't
+    // keep the event loop alive. This is the fast-path for server shutdown.
+    try {
+      getTeamManager().killAll();
+    } catch {
+      // Ignore errors — best-effort cleanup
+    }
 
+    // server.close() triggers the onClose hook which stops SSE broker,
+    // pollers, and closes the database. forceCloseConnections: true
+    // ensures open SSE sockets are destroyed immediately.
     try {
       await server.close();
     } catch {

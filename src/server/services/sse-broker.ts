@@ -101,10 +101,11 @@ class SSEBroker {
       this.heartbeatInterval = null;
     }
 
-    // Close all client connections
+    // Close all client connections — use destroy() for immediate socket
+    // teardown without waiting for a graceful FIN/ACK handshake.
     for (const [id, client] of this.clients) {
       try {
-        client.reply.raw.end();
+        client.reply.raw.destroy();
       } catch {
         // Client may already be disconnected — ignore
       }
