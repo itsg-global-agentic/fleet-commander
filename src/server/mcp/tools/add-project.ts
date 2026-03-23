@@ -35,7 +35,7 @@ export function registerAddProjectTool(server: McpServer): void {
     async ({ repoPath, name, githubRepo, maxActiveTeams, model }) => {
       try {
         const service = getProjectService();
-        const project = service.createProject({
+        const project = await service.createProject({
           name: name ?? path.basename(repoPath),
           repoPath,
           githubRepo,

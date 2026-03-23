@@ -5,10 +5,10 @@
 // All GitHub operations use the `gh` CLI (never Octokit) per project conventions.
 // =============================================================================
 
-import { execSync } from 'child_process';
 import { getDatabase } from '../db.js';
 import { sseBroker } from './sse-broker.js';
 import { githubPoller } from './github-poller.js';
+import { execGHResult } from '../utils/exec-gh.js';
 import { ServiceError, notFoundError, validationError, externalError } from './service-error.js';
 
 // ---------------------------------------------------------------------------
@@ -20,32 +20,6 @@ const GITHUB_REPO_RE = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
 
 function validateGithubRepo(repo: string): boolean {
   return GITHUB_REPO_RE.test(repo);
-}
-
-/** Execute a gh CLI command, returning { ok, stdout?, error? } */
-interface GHResult {
-  ok: boolean;
-  stdout?: string;
-  error?: string;
-}
-
-function execGH(command: string): GHResult {
-  try {
-    const stdout = execSync(command, {
-      encoding: 'utf-8',
-      timeout: 15_000,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return { ok: true, stdout };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    let stderr = message;
-    if (err && typeof err === 'object' && 'stderr' in err) {
-      const rawStderr = (err as { stderr: string | Buffer }).stderr;
-      stderr = typeof rawStderr === 'string' ? rawStderr : rawStderr.toString('utf-8');
-    }
-    return { ok: false, error: stderr.trim() || message };
-  }
 }
 
 /**
@@ -95,10 +69,10 @@ export class PRService {
    * @returns Success result with output from gh CLI
    * @throws ServiceError if PR/repo not found or gh CLI fails
    */
-  enableAutoMerge(prNumber: number): { ok: boolean; message: string; output: string } {
+  async enableAutoMerge(prNumber: number): Promise<{ ok: boolean; message: string; output: string }> {
     const { githubRepo, teamId } = resolveGithubRepoForPR(prNumber);
 
-    const result = execGH(
+    const result = await execGHResult(
       `gh pr merge ${prNumber} --auto --squash --repo ${githubRepo}`,
     );
 
@@ -143,10 +117,10 @@ export class PRService {
    * @returns Success result with output from gh CLI
    * @throws ServiceError if PR/repo not found or gh CLI fails
    */
-  disableAutoMerge(prNumber: number): { ok: boolean; message: string; output: string } {
+  async disableAutoMerge(prNumber: number): Promise<{ ok: boolean; message: string; output: string }> {
     const { githubRepo, teamId } = resolveGithubRepoForPR(prNumber);
 
-    const result = execGH(
+    const result = await execGHResult(
       `gh pr merge ${prNumber} --disable-auto --repo ${githubRepo}`,
     );
 
@@ -191,10 +165,10 @@ export class PRService {
    * @returns Success result with output from gh CLI
    * @throws ServiceError if PR/repo not found or gh CLI fails
    */
-  updateBranch(prNumber: number): { ok: boolean; message: string; output: string } {
+  async updateBranch(prNumber: number): Promise<{ ok: boolean; message: string; output: string }> {
     const { githubRepo, teamId } = resolveGithubRepoForPR(prNumber);
 
-    const result = execGH(
+    const result = await execGHResult(
       `gh api repos/${githubRepo}/pulls/${prNumber}/update-branch -X PUT`,
     );
 

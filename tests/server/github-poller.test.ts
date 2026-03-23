@@ -4,6 +4,9 @@
 // Tests for the GitHubPoller service: PR state transitions, CI status
 // derivation, CI failure counting, merge detection, poll lifecycle, and
 // dependency resolution tracking.
+//
+// After issue #385, all gh/git CLI calls are async (via exec-gh.ts).
+// Tests mock the shared async utilities instead of child_process.execSync.
 // =============================================================================
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -64,10 +67,12 @@ vi.mock('../../src/server/services/issue-fetcher.js', () => ({
   getIssueFetcher: () => mockFetcher,
 }));
 
-// Mock child_process for execGH and detectWorktreeBranch
-const mockExecSync = vi.fn().mockReturnValue(null);
-vi.mock('child_process', () => ({
-  execSync: (...args: unknown[]) => mockExecSync(...args),
+// Mock the shared async exec utilities (replaces the old child_process mock)
+const mockExecGHAsync = vi.fn().mockResolvedValue(null);
+const mockExecGitAsync = vi.fn().mockResolvedValue(null);
+vi.mock('../../src/server/utils/exec-gh.js', () => ({
+  execGHAsync: (...args: unknown[]) => mockExecGHAsync(...args),
+  execGitAsync: (...args: unknown[]) => mockExecGitAsync(...args),
 }));
 
 // Import after mocks
@@ -168,7 +173,7 @@ describe('PR state transitions', () => {
     });
     mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         state: 'CLOSED',
         mergedAt: '2025-01-01T00:00:00Z',
@@ -205,7 +210,7 @@ describe('PR state transitions', () => {
     mockDb.getActiveTeams.mockReturnValue([team]);
     mockDb.getPullRequest.mockReturnValue(undefined);
 
-    mockExecSync.mockReturnValue(makeGHPRViewResult());
+    mockExecGHAsync.mockResolvedValue(makeGHPRViewResult());
 
     await githubPoller.poll();
 
@@ -237,7 +242,7 @@ describe('PR state transitions', () => {
       ciFailCount: 0,
     });
 
-    mockExecSync.mockReturnValue(makeGHPRViewResult());
+    mockExecGHAsync.mockResolvedValue(makeGHPRViewResult());
 
     await githubPoller.poll();
 
@@ -265,7 +270,7 @@ describe('CI status derivation', () => {
       ciFailCount: 0,
     });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         statusCheckRollup: [
           { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED' },
@@ -296,7 +301,7 @@ describe('CI status derivation', () => {
       ciFailCount: 0,
     });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         statusCheckRollup: [
           { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED' },
@@ -327,7 +332,7 @@ describe('CI status derivation', () => {
       ciFailCount: 0,
     });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         statusCheckRollup: [
           { name: 'deploy', conclusion: 'CANCELLED', status: 'COMPLETED' },
@@ -357,7 +362,7 @@ describe('CI status derivation', () => {
       ciFailCount: 0,
     });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         statusCheckRollup: [
           { name: 'build', conclusion: null, status: 'IN_PROGRESS' },
@@ -387,7 +392,7 @@ describe('CI status derivation', () => {
       ciFailCount: 0,
     });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({ statusCheckRollup: [] }),
     );
 
@@ -413,7 +418,7 @@ describe('CI status derivation', () => {
       ciFailCount: 0,
     });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         statusCheckRollup: [
           { name: 'optional', conclusion: 'NEUTRAL' },
@@ -450,7 +455,7 @@ describe('CI failure counting', () => {
       ciFailCount: 1,
     });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         statusCheckRollup: [
           { name: 'build', conclusion: 'FAILURE' },
@@ -482,7 +487,7 @@ describe('CI failure counting', () => {
       ciFailCount: 2,
     });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         statusCheckRollup: [
           { name: 'build', conclusion: 'SUCCESS' },
@@ -514,7 +519,7 @@ describe('CI failure counting', () => {
     });
     mockDb.getTeam.mockReturnValue({ ...team, phase: 'implementing' });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         statusCheckRollup: [
           { name: 'build', conclusion: 'FAILURE' },
@@ -552,15 +557,10 @@ describe('PR detection by branch', () => {
     mockDb.getProjects.mockReturnValue([project]);
     mockDb.getActiveTeams.mockReturnValue([team]);
 
-    mockExecSync.mockImplementation((cmd: string) => {
-      if (typeof cmd === 'string' && cmd.includes('gh pr list')) {
-        return JSON.stringify([{ number: 55 }]);
-      }
-      if (typeof cmd === 'string' && cmd.includes('rev-parse')) {
-        return 'feat/10-test\n';
-      }
-      return null;
-    });
+    // detectWorktreeBranch uses execGitAsync
+    mockExecGitAsync.mockResolvedValue('feat/10-test');
+    // detectPR uses execGHAsync
+    mockExecGHAsync.mockResolvedValue(JSON.stringify([{ number: 55 }]));
 
     await githubPoller.poll();
 
@@ -573,15 +573,8 @@ describe('PR detection by branch', () => {
     mockDb.getProjects.mockReturnValue([project]);
     mockDb.getActiveTeams.mockReturnValue([team]);
 
-    mockExecSync.mockImplementation((cmd: string) => {
-      if (typeof cmd === 'string' && cmd.includes('gh pr list')) {
-        return JSON.stringify([]);
-      }
-      if (typeof cmd === 'string' && cmd.includes('rev-parse')) {
-        return 'feat/10-test\n';
-      }
-      return null;
-    });
+    mockExecGitAsync.mockResolvedValue('feat/10-test');
+    mockExecGHAsync.mockResolvedValue(JSON.stringify([]));
 
     await githubPoller.poll();
 
@@ -605,10 +598,10 @@ describe('Error handling', () => {
     mockDb.getActiveTeams.mockReturnValue([team1, team2]);
 
     let callCount = 0;
-    mockExecSync.mockImplementation(() => {
+    mockExecGHAsync.mockImplementation(async () => {
       callCount++;
       if (callCount === 1) {
-        throw new Error('gh CLI timeout');
+        return null; // simulate gh CLI failure (returns null)
       }
       return makeGHPRViewResult({ number: 43 });
     });
@@ -627,20 +620,18 @@ describe('Error handling', () => {
     mockDb.getProjects.mockReturnValue([project]);
     mockDb.getActiveTeams.mockReturnValue([team]);
 
-    mockExecSync.mockReturnValue('not valid json {{{');
+    mockExecGHAsync.mockResolvedValue('not valid json {{{');
 
     await expect(githubPoller.poll()).resolves.not.toThrow();
   });
 
-  it('handles gh CLI throwing error gracefully', async () => {
+  it('handles gh CLI returning null gracefully', async () => {
     const project = makeProject();
     const team = makeTeam({ prNumber: 42 });
     mockDb.getProjects.mockReturnValue([project]);
     mockDb.getActiveTeams.mockReturnValue([team]);
 
-    mockExecSync.mockImplementation(() => {
-      throw new Error('gh not found');
-    });
+    mockExecGHAsync.mockResolvedValue(null);
 
     await expect(githubPoller.poll()).resolves.not.toThrow();
   });
@@ -665,7 +656,7 @@ describe('Auto-merge detection', () => {
       ciFailCount: 0,
     });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         autoMergeRequest: { enabledAt: '2025-01-01T00:00:00Z' },
       }),
@@ -801,7 +792,7 @@ describe('Merge detection SSE', () => {
     });
     mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
 
-    mockExecSync.mockReturnValue(
+    mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         state: 'CLOSED',
         mergedAt: '2024-01-01T00:00:00Z',
@@ -819,5 +810,27 @@ describe('Merge detection SSE', () => {
       }),
       1,
     );
+  });
+});
+
+// =============================================================================
+// Branch detection (async)
+// =============================================================================
+
+describe('Branch detection', () => {
+  it('updates branch name when worktree branch differs from stored', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: null, branchName: 'old-branch', worktreeName: 'proj-10' });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+
+    // detectWorktreeBranch returns a different branch
+    mockExecGitAsync.mockResolvedValue('new-branch');
+    // detectPR returns empty
+    mockExecGHAsync.mockResolvedValue(JSON.stringify([]));
+
+    await githubPoller.poll();
+
+    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { branchName: 'new-branch' });
   });
 });

@@ -6,7 +6,6 @@
 // and CLI calls related to projects.
 // =============================================================================
 
-import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { getDatabase } from '../db.js';
@@ -15,6 +14,7 @@ import { getIssueFetcher } from './issue-fetcher.js';
 import { sseBroker } from './sse-broker.js';
 import { installHooks, uninstallHooks } from '../utils/hook-installer.js';
 import config from '../config.js';
+import { execGitAsync, execGHAsync, execGHResult } from '../utils/exec-gh.js';
 import type { ProjectStatus, InstallStatus, InstallFileStatus, RepoSettings } from '../../shared/types.js';
 import { ServiceError, validationError, notFoundError, conflictError } from './service-error.js';
 import { getPackageVersion } from '../utils/version.js';
@@ -33,35 +33,23 @@ function normalizePath(p: string): string {
 }
 
 /**
- * Check if a directory is a git repository.
+ * Check if a directory is a git repository (async to avoid blocking event loop).
  */
-function isGitRepo(dirPath: string): boolean {
-  try {
-    execSync('git rev-parse --is-inside-work-tree', {
-      cwd: dirPath,
-      encoding: 'utf-8',
-      stdio: 'pipe',
-    });
-    return true;
-  } catch {
-    return false;
-  }
+async function isGitRepo(dirPath: string): Promise<boolean> {
+  const result = await execGitAsync('git rev-parse --is-inside-work-tree', { cwd: dirPath });
+  return result !== null;
 }
 
 /**
  * Auto-detect the GitHub repo (owner/name) for a local git repo via gh CLI.
- * Returns null if detection fails (non-fatal).
+ * Returns null if detection fails (non-fatal). Async to avoid blocking event loop.
  */
-function detectGithubRepo(dirPath: string): string | null {
-  try {
-    const result = execSync(
-      'gh repo view --json nameWithOwner -q .nameWithOwner',
-      { cwd: dirPath, encoding: 'utf-8', stdio: 'pipe', timeout: 10000 },
-    ).trim();
-    return result || null;
-  } catch {
-    return null;
-  }
+async function detectGithubRepo(dirPath: string): Promise<string | null> {
+  const result = await execGHAsync(
+    'gh repo view --json nameWithOwner -q .nameWithOwner',
+    { cwd: dirPath, timeout: 10_000 },
+  );
+  return result?.trim() || null;
 }
 
 /**
@@ -82,20 +70,23 @@ function fileHasCrlf(filePath: string): boolean {
 /**
  * Check GitHub repository settings (auto-merge, branch protection) via `gh api`.
  * Returns undefined if githubRepo is not provided or the `gh` CLI call fails.
+ * Async to avoid blocking the event loop.
  *
  * @param githubRepo - GitHub repo slug (e.g. "owner/repo"), or null/undefined
  * @returns RepoSettings or undefined on failure
  */
-export function checkRepoSettings(githubRepo: string | null | undefined): RepoSettings | undefined {
+export async function checkRepoSettings(githubRepo: string | null | undefined): Promise<RepoSettings | undefined> {
   if (!githubRepo) return undefined;
 
   try {
-    const repoJson = execSync(
+    const repoJson = await execGHAsync(
       `gh api repos/${githubRepo} --jq "{allow_auto_merge, default_branch}"`,
-      { encoding: 'utf-8', stdio: 'pipe', timeout: 10000 },
-    ).trim();
+      { timeout: 10_000 },
+    );
 
-    const repoData = JSON.parse(repoJson) as {
+    if (!repoJson) return undefined;
+
+    const repoData = JSON.parse(repoJson.trim()) as {
       allow_auto_merge?: boolean;
       default_branch?: string;
     };
@@ -107,30 +98,34 @@ export function checkRepoSettings(githubRepo: string | null | undefined): RepoSe
     };
 
     // Branch protection may not be configured — 404 is expected
-    try {
-      const protectionJson = execSync(
-        `gh api repos/${githubRepo}/branches/${defaultBranch}/protection --jq "{required_status_checks}"`,
-        { encoding: 'utf-8', stdio: 'pipe', timeout: 10000 },
-      ).trim();
+    const protectionJson = await execGHAsync(
+      `gh api repos/${githubRepo}/branches/${defaultBranch}/protection --jq "{required_status_checks}"`,
+      { timeout: 10_000 },
+    );
 
-      const protectionData = JSON.parse(protectionJson) as {
-        required_status_checks?: {
-          contexts?: string[];
-        } | null;
-      };
+    if (protectionJson) {
+      try {
+        const protectionData = JSON.parse(protectionJson.trim()) as {
+          required_status_checks?: {
+            contexts?: string[];
+          } | null;
+        };
 
-      result.branchProtection = {
-        enabled: true,
-        requiredChecks: protectionData.required_status_checks?.contexts ?? [],
-      };
-    } catch {
+        result.branchProtection = {
+          enabled: true,
+          requiredChecks: protectionData.required_status_checks?.contexts ?? [],
+        };
+      } catch {
+        result.branchProtection = { enabled: false, requiredChecks: [] };
+      }
+    } else {
       // Branch protection not configured or not accessible — that's fine
       result.branchProtection = { enabled: false, requiredChecks: [] };
     }
 
     return result;
   } catch {
-    // gh CLI unavailable or repo not accessible
+    // JSON parse error or other unexpected failure
     return undefined;
   }
 }
@@ -388,13 +383,13 @@ export class ProjectService {
    * @throws ServiceError with code VALIDATION for invalid input
    * @throws ServiceError with code CONFLICT for duplicate repo path
    */
-  createProject(data: {
+  async createProject(data: {
     name: string;
     repoPath: string;
     githubRepo?: string;
     maxActiveTeams?: number;
     model?: string;
-  }): unknown {
+  }): Promise<unknown> {
     const { name, repoPath, githubRepo, maxActiveTeams, model } = data;
 
     // Validate name
@@ -413,7 +408,7 @@ export class ProjectService {
       throw validationError(`Path does not exist: ${normalizedPath}`);
     }
 
-    if (!isGitRepo(normalizedPath)) {
+    if (!(await isGitRepo(normalizedPath))) {
       throw validationError(`Path is not a git repository: ${normalizedPath}`);
     }
 
@@ -427,7 +422,7 @@ export class ProjectService {
     }
 
     // Auto-detect githubRepo if not provided
-    const resolvedGithubRepo = githubRepo || detectGithubRepo(normalizedPath);
+    const resolvedGithubRepo = githubRepo || await detectGithubRepo(normalizedPath);
 
     // Validate maxActiveTeams if provided
     if (maxActiveTeams !== undefined) {
@@ -541,7 +536,7 @@ export class ProjectService {
    * @returns RepoSettings or undefined if not available
    * @throws ServiceError with code NOT_FOUND if project doesn't exist
    */
-  getRepoSettings(projectId: number): RepoSettings | undefined {
+  async getRepoSettings(projectId: number): Promise<RepoSettings | undefined> {
     const db = getDatabase();
     const project = db.getProject(projectId);
     if (!project) {
