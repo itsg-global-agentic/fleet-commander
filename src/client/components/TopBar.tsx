@@ -83,6 +83,7 @@ export function TopBar() {
     <>
       <header className="h-12 min-h-[48px] bg-dark-surface border-b border-dark-border flex items-center px-4 justify-between shrink-0">
         <div className="flex items-center gap-3">
+          <img src="/logo.svg" alt="Fleet Commander logo" width={20} height={20} />
           <h1 className="text-sm font-semibold text-dark-text tracking-wide">
             Fleet Commander
           </h1>

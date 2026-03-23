@@ -45,6 +45,15 @@ describe('TopBar', () => {
     expect(screen.getByText('Fleet Commander')).toBeInTheDocument();
   });
 
+  it('renders the logo image with correct src and alt attributes', () => {
+    render(<TopBar />);
+    const logo = screen.getByAltText('Fleet Commander logo');
+    expect(logo).toBeInTheDocument();
+    expect(logo).toHaveAttribute('src', '/logo.svg');
+    expect(logo).toHaveAttribute('width', '20');
+    expect(logo).toHaveAttribute('height', '20');
+  });
+
   it('shows correct counts for running teams', () => {
     mockTeams = [
       makeTeam({ id: 1, status: 'running' }),

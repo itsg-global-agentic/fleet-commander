@@ -71,8 +71,8 @@ describe('StuckDetector', () => {
         status: 'running',
         phase: 'implementing',
       });
-      // Set lastEventAt to 4 minutes ago (> 3 min idle threshold)
-      db.updateTeam(team.id, { lastEventAt: minutesAgo(4) });
+      // Set lastEventAt to 6 minutes ago (> 5 min idle threshold)
+      db.updateTeam(team.id, { lastEventAt: minutesAgo(6) });
 
       stuckDetector.check();
 
@@ -88,7 +88,7 @@ describe('StuckDetector', () => {
         status: 'running',
         phase: 'implementing',
       });
-      // Set lastEventAt to 2 minutes ago (< 3 min idle threshold)
+      // Set lastEventAt to 2 minutes ago (< 5 min idle threshold)
       db.updateTeam(team.id, { lastEventAt: minutesAgo(2) });
 
       stuckDetector.check();
@@ -105,7 +105,7 @@ describe('StuckDetector', () => {
         status: 'running',
         phase: 'implementing',
       });
-      db.updateTeam(team.id, { lastEventAt: minutesAgo(4) });
+      db.updateTeam(team.id, { lastEventAt: minutesAgo(6) });
 
       stuckDetector.check();
 
@@ -130,8 +130,8 @@ describe('StuckDetector', () => {
         status: 'idle',
         phase: 'implementing',
       });
-      // Set lastEventAt to 6 minutes ago (> 5 min stuck threshold)
-      db.updateTeam(team.id, { lastEventAt: minutesAgo(6) });
+      // Set lastEventAt to 11 minutes ago (> 10 min stuck threshold)
+      db.updateTeam(team.id, { lastEventAt: minutesAgo(11) });
 
       stuckDetector.check();
 
@@ -147,8 +147,8 @@ describe('StuckDetector', () => {
         status: 'idle',
         phase: 'implementing',
       });
-      // Set lastEventAt to 4 minutes ago (between idle and stuck thresholds)
-      db.updateTeam(team.id, { lastEventAt: minutesAgo(4) });
+      // Set lastEventAt to 7 minutes ago (between 5 min idle and 10 min stuck thresholds)
+      db.updateTeam(team.id, { lastEventAt: minutesAgo(7) });
 
       stuckDetector.check();
 
@@ -164,7 +164,7 @@ describe('StuckDetector', () => {
         status: 'idle',
         phase: 'implementing',
       });
-      db.updateTeam(team.id, { lastEventAt: minutesAgo(7) });
+      db.updateTeam(team.id, { lastEventAt: minutesAgo(12) });
 
       stuckDetector.check();
 
@@ -174,7 +174,7 @@ describe('StuckDetector', () => {
           team_id: team.id,
           status: 'stuck',
           previous_status: 'idle',
-          idle_minutes: 7,
+          idle_minutes: 12,
         }),
         team.id,
       );
@@ -220,23 +220,23 @@ describe('StuckDetector', () => {
     it('handles multiple teams in a single check', () => {
       const db = getDatabase();
 
-      // Team 1: running, 4 min idle -> should go idle
+      // Team 1: running, 6 min idle -> should go idle (> 5 min threshold)
       const t1 = db.insertTeam({
         issueNumber: 501,
         worktreeName: 'kea-501',
         status: 'running',
         phase: 'implementing',
       });
-      db.updateTeam(t1.id, { lastEventAt: minutesAgo(4) });
+      db.updateTeam(t1.id, { lastEventAt: minutesAgo(6) });
 
-      // Team 2: idle, 7 min idle -> should go stuck
+      // Team 2: idle, 11 min idle -> should go stuck (> 10 min threshold)
       const t2 = db.insertTeam({
         issueNumber: 502,
         worktreeName: 'kea-502',
         status: 'idle',
         phase: 'implementing',
       });
-      db.updateTeam(t2.id, { lastEventAt: minutesAgo(7) });
+      db.updateTeam(t2.id, { lastEventAt: minutesAgo(11) });
 
       // Team 3: running, 2 min idle -> should stay running
       const t3 = db.insertTeam({
@@ -272,8 +272,8 @@ describe('StuckDetector', () => {
         projectId: project.id,
         prNumber: 700,
       });
-      // Set lastEventAt to 4 minutes ago — would normally trigger idle
-      db.updateTeam(team.id, { lastEventAt: minutesAgo(4) });
+      // Set lastEventAt to 6 minutes ago — would normally trigger idle
+      db.updateTeam(team.id, { lastEventAt: minutesAgo(6) });
 
       // Insert a PR with pending CI
       db.insertPullRequest({
@@ -310,8 +310,8 @@ describe('StuckDetector', () => {
         projectId: project.id,
         prNumber: 701,
       });
-      // Set lastEventAt to 7 minutes ago — would normally trigger stuck
-      db.updateTeam(team.id, { lastEventAt: minutesAgo(7) });
+      // Set lastEventAt to 11 minutes ago — would normally trigger stuck
+      db.updateTeam(team.id, { lastEventAt: minutesAgo(11) });
 
       // Insert a PR with pending CI
       db.insertPullRequest({
@@ -348,8 +348,8 @@ describe('StuckDetector', () => {
         projectId: project.id,
         prNumber: 702,
       });
-      // Set lastEventAt to 4 minutes ago — should trigger idle
-      db.updateTeam(team.id, { lastEventAt: minutesAgo(4) });
+      // Set lastEventAt to 6 minutes ago — should trigger idle
+      db.updateTeam(team.id, { lastEventAt: minutesAgo(6) });
 
       // Insert a PR with failing CI — should NOT skip the transition
       db.insertPullRequest({
@@ -386,8 +386,8 @@ describe('StuckDetector', () => {
         projectId: project.id,
         prNumber: 703,
       });
-      // Set lastEventAt to 4 minutes ago
-      db.updateTeam(team.id, { lastEventAt: minutesAgo(4) });
+      // Set lastEventAt to 6 minutes ago
+      db.updateTeam(team.id, { lastEventAt: minutesAgo(6) });
 
       // Insert a PR with passing CI — normal idle rules apply
       db.insertPullRequest({
