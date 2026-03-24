@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS pull_requests (
   merged_at       TEXT
 );
 
+CREATE INDEX IF NOT EXISTS idx_pull_requests_team ON pull_requests(team_id);
+
 -- ---------------------------------------------------------------------------
 -- EVENTS — hook events from Claude Code sessions
 -- ---------------------------------------------------------------------------
@@ -111,6 +113,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_team ON events(team_id);
 CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type);
 CREATE INDEX IF NOT EXISTS idx_events_created ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_events_team_created ON events(team_id, created_at DESC);
 
 -- ---------------------------------------------------------------------------
 -- COMMANDS — messages sent to running teams (PM -> agent)
@@ -124,6 +127,8 @@ CREATE TABLE IF NOT EXISTS commands (
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   delivered_at    TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_commands_team_status ON commands(team_id, status);
 
 -- ---------------------------------------------------------------------------
 -- VIEW: Dashboard overview (one row per team)
