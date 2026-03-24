@@ -35,6 +35,18 @@ const execAsync = promisify(exec);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ---------------------------------------------------------------------------
+// Global error handlers — registered before main() to catch startup errors
+// ---------------------------------------------------------------------------
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+process.on('uncaughtException', (err: Error) => {
+  console.error('Uncaught exception — shutting down:', err);
+  process.exit(1);
+});
+
 async function main() {
   const server = Fastify({
     logger: { level: config.logLevel },
