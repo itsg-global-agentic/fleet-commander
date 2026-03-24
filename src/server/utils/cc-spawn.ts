@@ -85,6 +85,10 @@ export function buildEnv(fleetContext?: FleetEnvContext): SpawnEnv {
     env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = undefined;
   }
 
+  // Absolute path to the shared hooks.log file. Hook scripts read this env
+  // var instead of computing a fragile relative path from their own location.
+  env['FLEET_HOOK_LOG'] = config.hookLogPath;
+
   // Windows: CC requires git-bash for hook execution. Auto-detect the path
   // so CC can find bash.exe even when Fleet Commander is started from a
   // non-Git-Bash terminal (e.g. cmd.exe or PowerShell).
