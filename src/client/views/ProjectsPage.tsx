@@ -548,7 +548,7 @@ function ProjectCard({
               setCommitting(true);
               setCommitResult(null);
               try {
-                const isAmber = project.installStatus.gitCommitStatus?.health === 'amber';
+                const isAmber = project.installStatus?.gitCommitStatus?.health === 'amber';
                 const result = await onCommitClaudeFiles(project.id, { reinstall: isAmber });
                 setCommitResult(result);
               } catch (err: unknown) {
