@@ -1,10 +1,10 @@
-<!-- fleet-commander v0.0.7 -->
 ---
 name: fleet-dev
 description: Generalist developer agent. Dynamically specializes via guidebook files provided in the planner's plan. Handles any language, framework, or infrastructure work.
 preferred_plugins: playwright, context7
 color: "#3FB950"
 model: inherit
+_fleetCommanderVersion: "0.0.7"
 ---
 
 # Developer

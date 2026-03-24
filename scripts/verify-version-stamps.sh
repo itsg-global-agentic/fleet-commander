@@ -29,6 +29,18 @@ check_md() {
   fi
 }
 
+# ── Check agent markdown files (.md) ────────────────────────────
+# Expected YAML frontmatter field: _fleetCommanderVersion: "X.Y.Z"
+check_agent_md() {
+  local file="$1"
+  local rel="${file#$ROOT/}"
+  local expected="_fleetCommanderVersion: \"${PKG_VERSION}\""
+  if ! grep -q "^${expected}$" "$file" 2>/dev/null; then
+    echo "::error file=${rel}::Version stamp mismatch: expected '${expected}' in YAML frontmatter"
+    ERRORS=$((ERRORS + 1))
+  fi
+}
+
 # ── Check shell files (.sh) ─────────────────────────────────────
 # Expected second line: # fleet-commander vX.Y.Z
 check_sh() {
@@ -44,9 +56,10 @@ check_sh() {
 }
 
 # ── Markdown files to check ─────────────────────────────────────
+# Agent files use YAML frontmatter field instead of line 1 HTML comment
 for f in "$ROOT"/templates/agents/*.md; do
   [ -f "$f" ] || continue
-  check_md "$f"
+  check_agent_md "$f"
 done
 
 for f in "$ROOT"/templates/guides/*.md; do

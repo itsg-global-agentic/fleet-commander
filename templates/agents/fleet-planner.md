@@ -1,8 +1,8 @@
-<!-- fleet-commander v0.0.7 -->
 ---
 name: fleet-planner
 model: inherit
 description: "Implementation planner. Reads the issue, explores the codebase and guidebooks, and produces a concrete step-by-step implementation plan with architectural decisions. Stays alive to answer questions from dev and reviewer."
+_fleetCommanderVersion: "0.0.7"
 ---
 
 # Fleet Planner
