@@ -278,6 +278,52 @@ describe('ProjectsPage', () => {
   });
 
   // -----------------------------------------------------------------------
+  // Update button removed (issue #463)
+  // -----------------------------------------------------------------------
+
+  it('does not render an Update button', async () => {
+    setupDefaultMocks([
+      makeProject({
+        id: 1,
+        name: 'outdated-proj',
+        installStatus: {
+          hooks: { installed: true, found: 10, total: 10, files: [{ name: 'on_session_start.sh', exists: true }] },
+          prompt: { installed: true, files: [{ name: 'workflow.md', exists: true }] },
+          agents: { installed: true, files: [{ name: 'agent.yml', exists: true }] },
+          settings: { exists: true },
+          outdatedCount: 3,
+          currentVersion: '0.0.9',
+        },
+      } as Partial<ProjectSummary>),
+    ]);
+    render(<ProjectsPage />);
+    await screen.findByText('outdated-proj');
+    // "Update" as a standalone button should not exist
+    expect(screen.queryByRole('button', { name: /^Update$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Updating\.\.\.$/i })).not.toBeInTheDocument();
+  });
+
+  it('shows outdated badge when outdatedCount > 0', async () => {
+    setupDefaultMocks([
+      makeProject({
+        id: 1,
+        name: 'badge-proj',
+        installStatus: {
+          hooks: { installed: true, found: 10, total: 10, files: [{ name: 'on_session_start.sh', exists: true }] },
+          prompt: { installed: true, files: [{ name: 'workflow.md', exists: true }] },
+          agents: { installed: true, files: [{ name: 'agent.yml', exists: true }] },
+          settings: { exists: true },
+          outdatedCount: 5,
+          currentVersion: '0.0.9',
+        },
+      } as Partial<ProjectSummary>),
+    ]);
+    render(<ProjectsPage />);
+    await screen.findByText('badge-proj');
+    expect(screen.getByText('5 outdated')).toBeInTheDocument();
+  });
+
+  // -----------------------------------------------------------------------
   // API calls
   // -----------------------------------------------------------------------
 

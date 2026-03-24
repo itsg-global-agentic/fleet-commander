@@ -472,16 +472,11 @@ function ProjectCard({
         {/* Spacer */}
         <span className="flex-1" />
 
-        {/* Update button — only shown when installed files are outdated */}
+        {/* Outdated badge — shown when installed files are outdated */}
         {(project.installStatus?.outdatedCount ?? 0) > 0 && (
-          <button
-            onClick={(e) => { e.stopPropagation(); onReinstall(project); }}
-            disabled={reinstalling === project.id}
-            className="px-3 py-1 text-xs rounded border border-[#D29922]/40 text-[#D29922] bg-[#D29922]/10 hover:bg-[#D29922]/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            title={`Update ${project.installStatus!.outdatedCount} outdated file${project.installStatus!.outdatedCount === 1 ? '' : 's'} to v${project.installStatus!.currentVersion}`}
-          >
-            {reinstalling === project.id ? 'Updating...' : 'Update'}
-          </button>
+          <span className="px-2 py-0.5 text-xs rounded-full bg-[#D29922]/15 text-[#D29922] font-medium shrink-0">
+            {project.installStatus!.outdatedCount} outdated
+          </span>
         )}
 
         {/* Reinstall button */}
@@ -489,7 +484,11 @@ function ProjectCard({
           onClick={(e) => { e.stopPropagation(); onReinstall(project); }}
           disabled={reinstalling === project.id}
           className="px-3 py-1 text-xs rounded border border-dark-accent/40 text-dark-accent bg-dark-accent/10 hover:bg-dark-accent/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-          title="(Re)install hooks, settings, and workflow prompt"
+          title={
+            (project.installStatus?.outdatedCount ?? 0) > 0
+              ? `Reinstall (${project.installStatus!.outdatedCount} file${project.installStatus!.outdatedCount === 1 ? '' : 's'} outdated)`
+              : '(Re)install hooks, settings, and workflow prompt'
+          }
         >
           {reinstalling === project.id ? 'Installing...' : 'Reinstall'}
         </button>
