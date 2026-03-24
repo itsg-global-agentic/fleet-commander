@@ -95,10 +95,10 @@ export function getUsageZone(): UsageZone {
 // OAuth token reader
 // ---------------------------------------------------------------------------
 
-function readOAuthToken(): string | null {
+async function readOAuthToken(): Promise<string | null> {
   try {
     const credPath = path.join(os.homedir(), '.claude', '.credentials.json');
-    const raw = fs.readFileSync(credPath, 'utf-8');
+    const raw = await fs.promises.readFile(credPath, 'utf-8');
     const creds = JSON.parse(raw);
     const token = creds?.claudeAiOauth?.accessToken;
     return typeof token === 'string' && token.length > 0 ? token : null;
@@ -183,33 +183,25 @@ class UsagePoller {
    * store as a usage snapshot, and broadcast via SSE.
    */
   poll(): void {
-    try {
-      const token = readOAuthToken();
-      if (!token) {
-        console.warn('[UsagePoller] No OAuth token found in ~/.claude/.credentials.json');
-        return;
-      }
-
-      // Use synchronous fetch via a self-invoking async to keep poll() sync-compatible
-      // with the setInterval pattern. Fire-and-forget.
-      this.fetchUsage(token).catch((err: unknown) => {
-        console.error(
-          '[UsagePoller] Failed to fetch usage:',
-          err instanceof Error ? err.message : err,
-        );
-      });
-    } catch (err: unknown) {
+    // Fire-and-forget — fetchUsage handles token reading and API call asynchronously
+    this.fetchUsage().catch((err: unknown) => {
       console.error(
         '[UsagePoller] Failed to poll usage:',
         err instanceof Error ? err.message : err,
       );
-    }
+    });
   }
 
   /**
    * Fetch usage data from the Anthropic OAuth endpoint and process it.
    */
-  private async fetchUsage(token: string): Promise<void> {
+  private async fetchUsage(): Promise<void> {
+    const token = await readOAuthToken();
+    if (!token) {
+      console.warn('[UsagePoller] No OAuth token found in ~/.claude/.credentials.json');
+      return;
+    }
+
     const resp = await fetch('https://api.anthropic.com/api/oauth/usage', {
       method: 'GET',
       headers: {

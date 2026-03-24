@@ -3,7 +3,8 @@ import cors from '@fastify/cors';
 import fastifyStatic from '@fastify/static';
 import path from 'path';
 import fs from 'fs';
-import { execSync } from 'child_process';
+import { exec } from 'child_process';
+import { promisify } from 'util';
 import { fileURLToPath } from 'url';
 import eventsRoutes from './routes/events.js';
 import streamRoutes from './routes/stream.js';
@@ -28,6 +29,8 @@ import config from './config.js';
 import { resolveClaudePath } from './utils/resolve-claude-path.js';
 import { getTeamManager } from './services/team-manager.js';
 import { DEFAULT_MESSAGE_TEMPLATES } from '../shared/message-templates.js';
+
+const execAsync = promisify(exec);
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -90,10 +93,11 @@ async function main() {
     server.log.info(`Agent Teams: ${config.enableAgentTeams ? 'enabled' : 'disabled'} (FLEET_ENABLE_AGENT_TEAMS)`);
 
     const claudePath = resolveClaudePath();
-    const versionOutput = execSync(`"${claudePath}" --version`, {
+    const { stdout } = await execAsync(`"${claudePath}" --version`, {
       encoding: 'utf-8',
       timeout: 10000,
-    }).trim();
+    });
+    const versionOutput = stdout.trim();
     // Parse version number from output (e.g. "claude 2.1.32" or just "2.1.32")
     const versionMatch = versionOutput.match(/(\d+\.\d+\.\d+)/);
     if (versionMatch) {
