@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS teams (
 CREATE INDEX IF NOT EXISTS idx_teams_status ON teams(status);
 CREATE INDEX IF NOT EXISTS idx_teams_issue ON teams(issue_number);
 CREATE INDEX IF NOT EXISTS idx_teams_project ON teams(project_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_project_issue ON teams(project_id, issue_number);
 
 -- ---------------------------------------------------------------------------
 -- PULL REQUESTS — associated with teams, tracked through CI lifecycle
@@ -269,5 +270,5 @@ CREATE TABLE IF NOT EXISTS stream_events (
 
 CREATE INDEX IF NOT EXISTS idx_stream_events_team ON stream_events(team_id);
 
--- Insert schema version 7 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (7);
+-- Insert schema version 8 (or upgrade from earlier versions)
+INSERT OR IGNORE INTO schema_version (version) VALUES (8);

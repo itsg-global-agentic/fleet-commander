@@ -324,6 +324,9 @@ export class FleetDatabase {
     // Add blocked_by_json column to teams if missing (v7 migration)
     this.addBlockedByJsonColumn();
 
+    // Add UNIQUE constraint on teams(project_id, issue_number) (v8 migration)
+    this.addTeamProjectIssueUniqueIndex();
+
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
 
@@ -664,6 +667,43 @@ export class FleetDatabase {
   }
 
   /**
+   * Add UNIQUE index on teams(project_id, issue_number) to prevent race conditions.
+   * Deduplicates any existing rows first by keeping only the most recent (highest id).
+   * v8 migration.
+   */
+  private addTeamProjectIssueUniqueIndex(): void {
+    try {
+      // Check if the index already exists
+      const indexes = this.db.prepare(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_teams_project_issue'"
+      ).all();
+      if (indexes.length > 0) return;
+
+      // Delete duplicate (project_id, issue_number) rows, keeping the one with the highest id.
+      // Only targets rows where project_id IS NOT NULL (SQLite treats NULLs as unique).
+      this.db.exec(`
+        DELETE FROM teams
+        WHERE project_id IS NOT NULL
+          AND id NOT IN (
+            SELECT MAX(id)
+            FROM teams
+            WHERE project_id IS NOT NULL
+            GROUP BY project_id, issue_number
+          )
+      `);
+
+      this.db.exec(
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_project_issue ON teams(project_id, issue_number)'
+      );
+
+      this.db.exec("INSERT OR IGNORE INTO schema_version (version) VALUES (8)");
+      console.log('[DB] v8 migration: added UNIQUE index on teams(project_id, issue_number)');
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
+  /**
    * Migrate any projects with status 'paused' to 'active'.
    * The paused status was removed in issue #228.
    */
@@ -901,26 +941,35 @@ export class FleetDatabase {
       VALUES (@issueNumber, @issueTitle, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @headless, @blockedByJson, @launchedAt, @createdAt, @updatedAt)
     `);
 
-    const info = stmt.run({
-      issueNumber: data.issueNumber,
-      issueTitle: data.issueTitle ?? null,
-      projectId: data.projectId ?? null,
-      worktreeName: data.worktreeName,
-      branchName: data.branchName ?? null,
-      status: data.status ?? 'queued',
-      phase: data.phase ?? 'init',
-      pid: data.pid ?? null,
-      sessionId: data.sessionId ?? null,
-      prNumber: data.prNumber ?? null,
-      customPrompt: data.customPrompt ?? null,
-      headless: data.headless === false ? 0 : 1,
-      blockedByJson: data.blockedByJson ?? null,
-      launchedAt: data.launchedAt ?? null,
-      createdAt: now,
-      updatedAt: now,
-    });
+    try {
+      const info = stmt.run({
+        issueNumber: data.issueNumber,
+        issueTitle: data.issueTitle ?? null,
+        projectId: data.projectId ?? null,
+        worktreeName: data.worktreeName,
+        branchName: data.branchName ?? null,
+        status: data.status ?? 'queued',
+        phase: data.phase ?? 'init',
+        pid: data.pid ?? null,
+        sessionId: data.sessionId ?? null,
+        prNumber: data.prNumber ?? null,
+        customPrompt: data.customPrompt ?? null,
+        headless: data.headless === false ? 0 : 1,
+        blockedByJson: data.blockedByJson ?? null,
+        launchedAt: data.launchedAt ?? null,
+        createdAt: now,
+        updatedAt: now,
+      });
 
-    return this.getTeam(Number(info.lastInsertRowid))!;
+      return this.getTeam(Number(info.lastInsertRowid))!;
+    } catch (err: unknown) {
+      if (err instanceof Error && err.message.includes('UNIQUE constraint failed')) {
+        throw new Error(
+          `Team already exists for project ${data.projectId} issue #${data.issueNumber}`
+        );
+      }
+      throw err;
+    }
   }
 
   getTeam(id: number): Team | undefined {
