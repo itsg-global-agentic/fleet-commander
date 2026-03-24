@@ -19,6 +19,7 @@ import { execSync } from 'child_process';
 import type { ProjectStatus, InstallStatus, InstallFileStatus, RepoSettings, GitCommitStatus, GitCommitFileStatus, GitCommitHealth } from '../../shared/types.js';
 import { ServiceError, validationError, notFoundError, conflictError } from './service-error.js';
 import { getPackageVersion } from '../utils/version.js';
+import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile } from '../utils/fc-manifest.js';
 import { getCleanupPreview as _getCleanupPreview, executeCleanup as _executeCleanup } from './cleanup.js';
 import type { CleanupPreview, CleanupResult } from '../../shared/types.js';
 
@@ -313,13 +314,12 @@ export function checkGitCommitStatus(repoPath: string): GitCommitStatus | undefi
 
     const committedSet = new Set(committedPaths);
 
-    // Define the expected key files we check
+    // Build expected files from the manifest (single source of truth)
+    const manifestAgents = getManifestAgentFiles();
     const expectedFiles: string[] = [
       '.claude/settings.json',
-      '.claude/prompts/fleet-workflow.md',
-      '.claude/agents/fleet-planner.md',
-      '.claude/agents/fleet-dev.md',
-      '.claude/agents/fleet-reviewer.md',
+      `.claude/prompts/${getWorkflowFile()}`,
+      ...manifestAgents.map((a) => `.claude/agents/${a}`),
       // Check a representative sample of hooks
       '.claude/hooks/fleet-commander/send_event.sh',
       '.claude/hooks/fleet-commander/on_session_start.sh',
@@ -366,14 +366,9 @@ export function checkGitCommitStatus(repoPath: string): GitCommitStatus | undefi
     // Also check if ALL hooks from the fleet-commander directory are committed
     const hookPrefix = '.claude/hooks/fleet-commander/';
     const committedHooks = committedPaths.filter((p) => p.startsWith(hookPrefix));
-    // We don't need to individually list all hooks — just check the count
-    const hookFiles = [
-      'send_event.sh', 'on_session_start.sh', 'on_session_end.sh',
-      'on_stop.sh', 'on_stop_failure.sh', 'on_subagent_start.sh',
-      'on_subagent_stop.sh', 'on_notification.sh', 'on_post_tool_use.sh',
-      'on_tool_error.sh', 'on_pre_compact.sh', 'on_teammate_idle.sh',
-    ];
-    const missingHooks = hookFiles.filter((h) => !committedSet.has(hookPrefix + h));
+    // Use manifest as single source of truth for hook filenames
+    const manifestHooks = getManifestHookFiles();
+    const missingHooks = manifestHooks.filter((h) => !committedSet.has(hookPrefix + h));
     if (missingHooks.length > 0) {
       allCommitted = false;
     }
@@ -419,20 +414,8 @@ export function checkGitCommitStatus(repoPath: string): GitCommitStatus | undefi
  * @returns InstallStatus with hooks, prompt, agents, guides, and settings info
  */
 export function checkInstallStatus(repoPath: string): InstallStatus {
-  const hookNames = [
-    'send_event.sh',
-    'on_session_start.sh',
-    'on_session_end.sh',
-    'on_stop.sh',
-    'on_stop_failure.sh',
-    'on_subagent_start.sh',
-    'on_subagent_stop.sh',
-    'on_notification.sh',
-    'on_post_tool_use.sh',
-    'on_tool_error.sh',
-    'on_pre_compact.sh',
-    'on_teammate_idle.sh',
-  ];
+  // Use manifest as single source of truth for file lists
+  const hookNames = getManifestHookFiles();
 
   const currentVersion = getPackageVersion();
 
@@ -452,22 +435,19 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
   const hookFoundCount = hookFiles.filter((f) => f.exists).length;
   const hookHasCrlf = hookFiles.some((f) => f.hasCrlf);
 
-  const workflowPath = path.join(repoPath, '.claude', 'prompts', 'fleet-workflow.md');
+  const workflowName = getWorkflowFile();
+  const workflowPath = path.join(repoPath, '.claude', 'prompts', workflowName);
   const workflowExists = fs.existsSync(workflowPath);
   const promptFiles: InstallFileStatus[] = [
     {
-      name: 'fleet-workflow.md',
+      name: workflowName,
       exists: workflowExists,
       installedVersion: workflowExists ? extractVersionStamp(workflowPath) : undefined,
       currentVersion,
     },
   ];
 
-  const agentNames = [
-    'fleet-planner.md',
-    'fleet-dev.md',
-    'fleet-reviewer.md',
-  ];
+  const agentNames = getManifestAgentFiles();
   const agentsDir = path.join(repoPath, '.claude', 'agents');
   const agentFiles: InstallFileStatus[] = agentNames.map((name) => {
     const filePath = path.join(agentsDir, name);
@@ -480,20 +460,18 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
     };
   });
 
+  const guideNames = getManifestGuideFiles();
   const guidesDir = path.join(repoPath, '.claude', 'guides');
-  const guideFiles: InstallFileStatus[] = fs.existsSync(guidesDir)
-    ? fs.readdirSync(guidesDir)
-        .filter((f) => f.endsWith('.md'))
-        .map((name) => {
-          const filePath = path.join(guidesDir, name);
-          return {
-            name,
-            exists: true,
-            installedVersion: extractVersionStamp(filePath),
-            currentVersion,
-          };
-        })
-    : [];
+  const guideFiles: InstallFileStatus[] = guideNames.map((name) => {
+    const filePath = path.join(guidesDir, name);
+    const exists = fs.existsSync(filePath);
+    return {
+      name,
+      exists,
+      installedVersion: exists ? extractVersionStamp(filePath) : undefined,
+      currentVersion,
+    };
+  });
 
   const settingsPath = path.join(repoPath, '.claude', 'settings.json');
   const settingsExists = fs.existsSync(settingsPath);
@@ -529,7 +507,7 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
       files: agentFiles,
     },
     guides: {
-      installed: guideFiles.length > 0,
+      installed: guideFiles.length > 0 && guideFiles.every((f) => f.exists),
       files: guideFiles,
     },
     settings: settingsFile,

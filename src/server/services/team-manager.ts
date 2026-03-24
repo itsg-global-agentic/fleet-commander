@@ -1,8 +1,9 @@
 // =============================================================================
 // Fleet Commander — Team Manager Service (Spawn / Stop / Resume)
 // =============================================================================
-// Manages Claude Code agent processes: creates git worktrees, copies hooks,
-// spawns child processes, captures output, and handles lifecycle transitions.
+// Manages Claude Code agent processes: creates git worktrees, copies FC files
+// (hooks, agents, guides, prompts, settings), spawns child processes, captures
+// output, and handles lifecycle transitions.
 //
 // Per-project: launch() accepts a projectId and resolves repo path, github
 // repo, and worktree naming from the project record in the database.
@@ -22,6 +23,7 @@ import type { Team, Project } from '../../shared/types.js';
 import { getUsageZone } from './usage-tracker.js';
 import { resolveMessage } from '../utils/resolve-message.js';
 import { CircularBuffer } from '../utils/circular-buffer.js';
+import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile } from '../utils/fc-manifest.js';
 
 const execAsync = promisify(execCallback);
 
@@ -330,7 +332,7 @@ export class TeamManager {
     this.broadcastSnapshot();
 
     // ── Step 3: Copy hook scripts and settings into worktree ──
-    this.copyHooksAndSettings(worktreeAbsPath);
+    this.copyFCFiles(worktreeAbsPath);
 
     // ── Step 4: Spawn Claude Code process ──
     const resolvedPrompt = prompt || this.resolvePromptFromFile(project, issueNumber);
@@ -1197,7 +1199,7 @@ export class TeamManager {
     this.broadcastSnapshot();
 
     // ── Step 2: Copy hooks and settings ──
-    this.copyHooksAndSettings(worktreeAbsPath);
+    this.copyFCFiles(worktreeAbsPath);
 
     // ── Step 3: Spawn Claude Code ──
     const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, team.issueNumber);
@@ -1793,20 +1795,24 @@ export class TeamManager {
   }
 
   /**
-   * Copy hook scripts and generate settings.json into a worktree directory.
+   * Copy all FC-managed files into a worktree directory:
+   * hooks, settings.json, agents, guides, and workflow prompt.
+   * Uses the fc-manifest module as single source of truth for file lists.
    */
-  private copyHooksAndSettings(worktreeAbsPath: string): void {
+  private copyFCFiles(worktreeAbsPath: string): void {
+    const claudeDir = path.join(worktreeAbsPath, '.claude');
+    fs.mkdirSync(claudeDir, { recursive: true });
+
+    // ── 1. Copy hook scripts ──
     const hookSrcDir = config.fcHooksDir;
     const hookDestDir = path.join(worktreeAbsPath, config.hookDir);
-
     fs.mkdirSync(hookDestDir, { recursive: true });
 
     if (fs.existsSync(hookSrcDir)) {
-      const hookFiles = fs.readdirSync(hookSrcDir).filter(
-        (f) => f.endsWith('.sh'),
-      );
+      const hookFiles = getManifestHookFiles();
       for (const file of hookFiles) {
         const src = path.join(hookSrcDir, file);
+        if (!fs.existsSync(src)) continue;
         const dest = path.join(hookDestDir, file);
         fs.copyFileSync(src, dest);
         if (process.platform !== 'win32') {
@@ -1815,18 +1821,51 @@ export class TeamManager {
       }
     }
 
-    console.log(`[TeamManager] Hooks copied to worktree`);
-
-    // Generate settings.json from example
+    // ── 2. Generate settings.json from example ──
     const settingsExamplePath = path.join(hookSrcDir, 'settings.json.example');
-    const settingsDestDir = path.join(worktreeAbsPath, '.claude');
-    const settingsDestPath = path.join(settingsDestDir, 'settings.json');
-
-    fs.mkdirSync(settingsDestDir, { recursive: true });
-
+    const settingsDestPath = path.join(claudeDir, 'settings.json');
     if (fs.existsSync(settingsExamplePath)) {
       fs.copyFileSync(settingsExamplePath, settingsDestPath);
     }
+
+    // ── 3. Copy agent templates ──
+    const agentsSrcDir = config.fcAgentsDir;
+    const agentsDestDir = path.join(claudeDir, 'agents');
+    if (fs.existsSync(agentsSrcDir)) {
+      fs.mkdirSync(agentsDestDir, { recursive: true });
+      const agentFiles = getManifestAgentFiles();
+      for (const file of agentFiles) {
+        const src = path.join(agentsSrcDir, file);
+        if (!fs.existsSync(src)) continue;
+        const dest = path.join(agentsDestDir, file);
+        fs.copyFileSync(src, dest);
+      }
+    }
+
+    // ── 4. Copy guide templates ──
+    const guidesSrcDir = config.fcGuidesDir;
+    const guidesDestDir = path.join(claudeDir, 'guides');
+    if (fs.existsSync(guidesSrcDir)) {
+      fs.mkdirSync(guidesDestDir, { recursive: true });
+      const guideFiles = getManifestGuideFiles();
+      for (const file of guideFiles) {
+        const src = path.join(guidesSrcDir, file);
+        if (!fs.existsSync(src)) continue;
+        const dest = path.join(guidesDestDir, file);
+        fs.copyFileSync(src, dest);
+      }
+    }
+
+    // ── 5. Copy workflow prompt ──
+    const workflowSrc = config.fcWorkflowTemplate;
+    const promptsDestDir = path.join(claudeDir, 'prompts');
+    if (fs.existsSync(workflowSrc)) {
+      fs.mkdirSync(promptsDestDir, { recursive: true });
+      const workflowDest = path.join(promptsDestDir, getWorkflowFile());
+      fs.copyFileSync(workflowSrc, workflowDest);
+    }
+
+    console.log(`[TeamManager] FC files copied to worktree (hooks, settings, agents, guides, prompt)`);
   }
 
   /**

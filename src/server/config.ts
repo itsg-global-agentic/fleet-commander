@@ -123,8 +123,12 @@ const config = Object.freeze({
   worktreeDir: '.claude/worktrees',
   hookDir: '.claude/hooks/fleet-commander',
 
-  // FC's own hooks/ directory (source for copying into project worktrees)
+  // FC's own source directories (for copying into project worktrees)
   fcHooksDir: path.join(fleetCommanderRoot, 'hooks'),
+  fcAgentsDir: path.join(fleetCommanderRoot, 'templates', 'agents'),
+  fcGuidesDir: path.join(fleetCommanderRoot, 'templates', 'guides'),
+  fcPromptsDir: path.join(fleetCommanderRoot, 'prompts'),
+  fcWorkflowTemplate: path.join(fleetCommanderRoot, 'templates', 'workflow.md'),
 
   mergeShutdownGraceMs: safeParseInt(process.env['FLEET_MERGE_SHUTDOWN_GRACE_MS'] || '120000', 'FLEET_MERGE_SHUTDOWN_GRACE_MS'),
 
