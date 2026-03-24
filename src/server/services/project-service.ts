@@ -132,24 +132,29 @@ export async function checkRepoSettings(githubRepo: string | null | undefined): 
 
 /**
  * Extract Fleet Commander version stamp from the first few lines of a file.
- * Supports shell scripts (`# fleet-commander vX.Y.Z`) and markdown
- * files (`<!-- fleet-commander vX.Y.Z -->`).
+ * Supports shell scripts (`# fleet-commander vX.Y.Z`), markdown
+ * files (`<!-- fleet-commander vX.Y.Z -->`), and YAML frontmatter
+ * fields (`_fleetCommanderVersion: "X.Y.Z"`).
  * For shell scripts the stamp is on line 2 (after the shebang); for
- * markdown files it is on line 1.
+ * markdown files it is on line 1 or inside YAML frontmatter.
  *
  * @param filePath - Absolute path to the installed file
  * @returns The version string (e.g. "0.0.6") or undefined if not found
  */
 function extractVersionStamp(filePath: string): string | undefined {
   try {
-    // Read first 512 bytes — the stamp is within the first 2 lines
+    // Read first 512 bytes — the stamp is within the first few lines
     const buf = Buffer.alloc(512);
     const fd = fs.openSync(filePath, 'r');
     const bytesRead = fs.readSync(fd, buf, 0, 512, 0);
     fs.closeSync(fd);
     const header = buf.subarray(0, bytesRead).toString('utf-8');
+    // Try HTML comment / shell comment format first
     const match = header.match(/fleet-commander v(\d+\.\d+\.\d+)/);
-    return match ? match[1] : undefined;
+    if (match) return match[1];
+    // Try YAML frontmatter field (used by agent .md files)
+    const yamlMatch = header.match(/_fleetCommanderVersion:\s*"(\d+\.\d+\.\d+)"/);
+    return yamlMatch ? yamlMatch[1] : undefined;
   } catch {
     return undefined;
   }

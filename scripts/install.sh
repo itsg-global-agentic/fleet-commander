@@ -203,8 +203,8 @@ if [ -d "$AGENTS_SRC" ]; then
   for AGENT_FILE in "$AGENTS_SRC"/*.md; do
     [ -f "$AGENT_FILE" ] || continue
     AGENT_NAME="$(basename "$AGENT_FILE")"
-    # Source files already carry a stamp on line 1; replace it with install-time version
-    sed -e "1s|^<!-- fleet-commander v.* -->|<!-- fleet-commander v${FC_VERSION} -->|" \
+    # Source files carry _fleetCommanderVersion inside YAML frontmatter; replace it with install-time version
+    sed -e "s|^_fleetCommanderVersion:.*|_fleetCommanderVersion: \"${FC_VERSION}\"|" \
         -e "s|{{PROJECT_NAME}}|$PROJECT_NAME|g" \
         -e "s|{{project_slug}}|$project_slug|g" \
         -e "s|{{BASE_BRANCH}}|$BASE_BRANCH|g" \
