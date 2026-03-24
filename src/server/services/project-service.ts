@@ -15,7 +15,8 @@ import { sseBroker } from './sse-broker.js';
 import { installHooks, uninstallHooks } from '../utils/hook-installer.js';
 import config from '../config.js';
 import { execGitAsync, execGHAsync, execGHResult } from '../utils/exec-gh.js';
-import type { ProjectStatus, InstallStatus, InstallFileStatus, RepoSettings } from '../../shared/types.js';
+import { execSync } from 'child_process';
+import type { ProjectStatus, InstallStatus, InstallFileStatus, RepoSettings, GitCommitStatus, GitCommitFileStatus, GitCommitHealth } from '../../shared/types.js';
 import { ServiceError, validationError, notFoundError, conflictError } from './service-error.js';
 import { getPackageVersion } from '../utils/version.js';
 import { getCleanupPreview as _getCleanupPreview, executeCleanup as _executeCleanup } from './cleanup.js';
@@ -178,6 +179,238 @@ function extractJsonVersionStamp(filePath: string): string | undefined {
 }
 
 /**
+ * Extract Fleet Commander version stamp from a string content (e.g. from `git show`).
+ * Supports shell comment (`# fleet-commander vX.Y.Z`), HTML comment
+ * (`<!-- fleet-commander vX.Y.Z -->`), YAML frontmatter (`_fleetCommanderVersion: "X.Y.Z"`),
+ * and JSON (`"_fleetCommanderVersion": "X.Y.Z"`).
+ *
+ * @param content - File content string (typically first 512 chars)
+ * @returns The version string (e.g. "0.0.6") or undefined if not found
+ */
+function extractVersionStampFromContent(content: string): string | undefined {
+  // Try HTML comment / shell comment format first
+  const match = content.match(/fleet-commander v(\d+\.\d+\.\d+)/);
+  if (match) return match[1];
+  // Try YAML frontmatter field (used by agent .md files)
+  const yamlMatch = content.match(/_fleetCommanderVersion:\s*"(\d+\.\d+\.\d+)"/);
+  if (yamlMatch) return yamlMatch[1];
+  // Try JSON field (used by settings.json)
+  const jsonMatch = content.match(/"_fleetCommanderVersion":\s*"(\d+\.\d+\.\d+)"/);
+  if (jsonMatch) return jsonMatch[1];
+  return undefined;
+}
+
+/**
+ * Detect the default branch for a git repository by checking `refs/remotes/origin/HEAD`.
+ * Falls back to `origin/main` then `origin/master` if symbolic-ref fails.
+ *
+ * @param repoPath - Absolute path to the git repository
+ * @returns The remote default branch ref (e.g. "origin/main") or undefined if not detectable
+ */
+function detectDefaultBranch(repoPath: string): string | undefined {
+  try {
+    const ref = execSync('git symbolic-ref refs/remotes/origin/HEAD --short', {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      timeout: 5_000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+    if (ref) return ref;
+  } catch {
+    // symbolic-ref failed — try common branch names
+  }
+
+  // Try origin/main
+  try {
+    execSync('git rev-parse --verify origin/main', {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      timeout: 5_000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return 'origin/main';
+  } catch {
+    // origin/main does not exist
+  }
+
+  // Try origin/master
+  try {
+    execSync('git rev-parse --verify origin/master', {
+      cwd: repoPath,
+      encoding: 'utf-8',
+      timeout: 5_000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return 'origin/master';
+  } catch {
+    // origin/master does not exist either
+  }
+
+  return undefined;
+}
+
+/**
+ * Check whether `.claude/` files are committed to the default branch of a git repository.
+ * Returns a GitCommitStatus describing:
+ * - whether .claude is gitignored
+ * - which expected files are committed
+ * - version stamps of committed files vs current FC version
+ * - overall health (green/amber/red)
+ *
+ * All git commands are wrapped in try/catch — if git fails (not a git repo,
+ * no remote), this returns `undefined` rather than crashing.
+ *
+ * @param repoPath - Absolute path to the target repository
+ * @returns GitCommitStatus or undefined if the check cannot be performed
+ */
+export function checkGitCommitStatus(repoPath: string): GitCommitStatus | undefined {
+  try {
+    // Detect default branch
+    const defaultBranch = detectDefaultBranch(repoPath);
+    if (!defaultBranch) return undefined;
+
+    const shortBranch = defaultBranch.replace(/^origin\//, '');
+    const currentVersion = getPackageVersion();
+
+    // Check if .claude/ is gitignored
+    let gitignored = false;
+    try {
+      execSync('git check-ignore .claude/', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        timeout: 5_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      // Exit code 0 means .claude/ IS ignored
+      gitignored = true;
+    } catch {
+      // Non-zero exit means .claude/ is NOT ignored (good)
+    }
+
+    if (gitignored) {
+      return {
+        health: 'red',
+        gitignored: true,
+        defaultBranch: shortBranch,
+        files: [],
+        message: `.claude/ in .gitignore — remove it and commit .claude/`,
+      };
+    }
+
+    // List committed .claude/ files on the default branch
+    let committedPaths: string[] = [];
+    try {
+      const output = execSync(`git ls-tree -r --name-only ${defaultBranch} -- .claude/`, {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        timeout: 5_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+      committedPaths = output ? output.split('\n').map((l) => l.trim()).filter(Boolean) : [];
+    } catch {
+      // ls-tree failed — the branch may not have any .claude/ files
+    }
+
+    const committedSet = new Set(committedPaths);
+
+    // Define the expected key files we check
+    const expectedFiles: string[] = [
+      '.claude/settings.json',
+      '.claude/prompts/fleet-workflow.md',
+      '.claude/agents/fleet-planner.md',
+      '.claude/agents/fleet-dev.md',
+      '.claude/agents/fleet-reviewer.md',
+      // Check a representative sample of hooks
+      '.claude/hooks/fleet-commander/send_event.sh',
+      '.claude/hooks/fleet-commander/on_session_start.sh',
+      '.claude/hooks/fleet-commander/on_session_end.sh',
+    ];
+
+    const fileStatuses: GitCommitFileStatus[] = [];
+    let allCommitted = true;
+    let anyOutdated = false;
+
+    for (const filePath of expectedFiles) {
+      const committed = committedSet.has(filePath);
+      const fileStatus: GitCommitFileStatus = {
+        path: filePath,
+        committed,
+        currentVersion,
+      };
+
+      if (committed) {
+        // Extract version stamp from committed copy
+        try {
+          const content = execSync(`git show ${defaultBranch}:${filePath}`, {
+            cwd: repoPath,
+            encoding: 'utf-8',
+            timeout: 5_000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          // Only check first 512 chars for version stamp
+          const header = content.slice(0, 512);
+          fileStatus.committedVersion = extractVersionStampFromContent(header);
+          if (fileStatus.committedVersion && fileStatus.committedVersion !== currentVersion) {
+            anyOutdated = true;
+          }
+        } catch {
+          // git show failed — skip version check
+        }
+      } else {
+        allCommitted = false;
+      }
+
+      fileStatuses.push(fileStatus);
+    }
+
+    // Also check if ALL hooks from the fleet-commander directory are committed
+    const hookPrefix = '.claude/hooks/fleet-commander/';
+    const committedHooks = committedPaths.filter((p) => p.startsWith(hookPrefix));
+    // We don't need to individually list all hooks — just check the count
+    const hookFiles = [
+      'send_event.sh', 'on_session_start.sh', 'on_session_end.sh',
+      'on_stop.sh', 'on_stop_failure.sh', 'on_subagent_start.sh',
+      'on_subagent_stop.sh', 'on_notification.sh', 'on_post_tool_use.sh',
+      'on_tool_error.sh', 'on_pre_compact.sh', 'on_teammate_idle.sh',
+    ];
+    const missingHooks = hookFiles.filter((h) => !committedSet.has(hookPrefix + h));
+    if (missingHooks.length > 0) {
+      allCommitted = false;
+    }
+
+    // Compute health
+    let health: GitCommitHealth;
+    let message: string;
+
+    if (!allCommitted) {
+      health = 'red';
+      const missingCount = fileStatuses.filter((f) => !f.committed).length + missingHooks.length;
+      message = `${missingCount} .claude/ file${missingCount === 1 ? '' : 's'} not committed to ${shortBranch}`;
+    } else if (anyOutdated) {
+      health = 'amber';
+      const outdatedCount = fileStatuses.filter(
+        (f) => f.committed && f.committedVersion && f.committedVersion !== currentVersion,
+      ).length;
+      message = `Committed to ${shortBranch} but ${outdatedCount} file${outdatedCount === 1 ? '' : 's'} outdated`;
+    } else {
+      health = 'green';
+      message = `All .claude/ files committed to ${shortBranch}`;
+    }
+
+    return {
+      health,
+      gitignored: false,
+      defaultBranch: shortBranch,
+      files: fileStatuses,
+      message,
+    };
+  } catch {
+    // Any unexpected failure — return undefined (unknown)
+    return undefined;
+  }
+}
+
+/**
  * Check the install status of artifacts deployed by install.sh:
  * hooks directory and workflow prompt.
  * Returns detailed file-level breakdown for tooltip display.
@@ -277,6 +510,9 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
     (f) => f.exists && f.installedVersion !== currentVersion,
   ).length;
 
+  // Check git commit status for .claude/ files on the default branch
+  const gitCommitStatus = checkGitCommitStatus(repoPath);
+
   return {
     hooks: {
       installed: hookFoundCount === hookNames.length && !hookHasCrlf,
@@ -299,6 +535,7 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
     settings: settingsFile,
     outdatedCount,
     currentVersion,
+    gitCommitStatus,
   };
 }
 
@@ -646,6 +883,79 @@ export class ProjectService {
       error: result.stderr.trim() || undefined,
       installStatus: status,
     };
+  }
+
+  /**
+   * Commit .claude/ files to the current branch of the project repository.
+   * If `.claude` is in `.gitignore`, removes it first.
+   * Runs: `git add .claude/` + `git commit -m "..."`.
+   *
+   * @param projectId - The project ID
+   * @returns { ok: true } on success, { ok: false, error: string } on failure
+   * @throws ServiceError with code NOT_FOUND if project doesn't exist
+   */
+  commitClaudeFiles(projectId: number): { ok: boolean; error?: string } {
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project) {
+      throw notFoundError(`Project ${projectId} not found`);
+    }
+
+    const repoPath = project.repoPath;
+
+    try {
+      // Check if .claude is in .gitignore — remove it if so
+      const gitignorePath = path.join(repoPath, '.gitignore');
+      if (fs.existsSync(gitignorePath)) {
+        const content = fs.readFileSync(gitignorePath, 'utf-8');
+        const lines = content.split('\n');
+        const filtered = lines.filter((line) => {
+          const trimmed = line.trim();
+          return trimmed !== '.claude' && trimmed !== '.claude/' && trimmed !== '.claude/**';
+        });
+        if (filtered.length !== lines.length) {
+          fs.writeFileSync(gitignorePath, filtered.join('\n'), 'utf-8');
+          // Stage the updated .gitignore
+          execSync('git add .gitignore', {
+            cwd: repoPath,
+            encoding: 'utf-8',
+            timeout: 5_000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+        }
+      }
+
+      // Stage .claude/ directory
+      execSync('git add .claude/', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        timeout: 10_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      // Commit
+      execSync('git commit -m "Add Fleet Commander hooks and agents"', {
+        cwd: repoPath,
+        encoding: 'utf-8',
+        timeout: 10_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      // Invalidate the install status cache so the next check picks up the change
+      invalidateInstallStatusCache(repoPath);
+
+      // Broadcast so UI refreshes badges
+      sseBroker.broadcast('project_updated', {
+        project_id: projectId,
+        name: project.name,
+        status: project.status,
+      });
+
+      return { ok: true };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
+    }
   }
 
   /**

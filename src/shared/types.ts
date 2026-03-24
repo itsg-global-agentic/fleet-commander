@@ -92,6 +92,35 @@ export interface RepoSettings {
   };
 }
 
+/** Health status for git commit check */
+export type GitCommitHealth = 'green' | 'amber' | 'red' | 'unknown';
+
+/** Per-file git commit status */
+export interface GitCommitFileStatus {
+  /** Relative path from repo root (e.g. ".claude/agents/fleet-planner.md") */
+  path: string;
+  /** Whether the file is committed to the default branch */
+  committed: boolean;
+  /** Version stamp found in the committed copy */
+  committedVersion?: string;
+  /** Current FC version for comparison */
+  currentVersion?: string;
+}
+
+/** Git commit status for .claude/ files on the default branch */
+export interface GitCommitStatus {
+  /** Overall health: red = not committed/gitignored, amber = outdated, green = all good */
+  health: GitCommitHealth;
+  /** Whether .claude is in .gitignore */
+  gitignored: boolean;
+  /** Default branch name used for the check */
+  defaultBranch: string;
+  /** Per-file commit status */
+  files: GitCommitFileStatus[];
+  /** Summary message for the UI */
+  message: string;
+}
+
 /** Detailed install status for the artifacts deployed by install.sh */
 export interface InstallStatus {
   hooks: InstallHooksStatus;
@@ -104,6 +133,8 @@ export interface InstallStatus {
   outdatedCount: number;
   /** Current Fleet Commander version */
   currentVersion: string;
+  /** Git commit status for .claude/ files on the default branch */
+  gitCommitStatus?: GitCommitStatus;
 }
 
 /** Project with team count for list view */

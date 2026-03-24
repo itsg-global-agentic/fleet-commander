@@ -289,6 +289,40 @@ const projectsRoutes: FastifyPluginCallback = (
   );
 
   // -------------------------------------------------------------------------
+  // POST /api/projects/:id/commit-claude-files — commit .claude/ to repo
+  // -------------------------------------------------------------------------
+  fastify.post(
+    '/api/projects/:id/commit-claude-files',
+    async (
+      request: FastifyRequest<{ Params: ProjectIdParams }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const projectId = parseInt(request.params.id, 10);
+        if (isNaN(projectId) || projectId < 1) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: 'Invalid project ID',
+          });
+        }
+
+        const service = getProjectService();
+        const result = service.commitClaudeFiles(projectId);
+        return reply.code(200).send(result);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        request.log.error(err, 'Failed to commit .claude/ files');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // GET /api/projects/:id/teams — teams for this project
   // -------------------------------------------------------------------------
   fastify.get(

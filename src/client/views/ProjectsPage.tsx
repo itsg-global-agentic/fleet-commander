@@ -35,6 +35,10 @@ function getInstallHealthColor(project: ProjectSummary): HealthColor {
   if (!project.installStatus) return '#8B949E';
   const s = project.installStatus;
 
+  // Git commit status takes priority when red
+  const gitHealth = s.gitCommitStatus?.health;
+  if (gitHealth === 'red') return '#F85149';
+
   const hooksOk = s.hooks?.installed ?? false;
   const hooksCrlf = s.hooks?.files?.some((f: { hasCrlf?: boolean }) => f.hasCrlf) ?? false;
   const promptOk = s.prompt?.installed ?? false;
@@ -43,9 +47,10 @@ function getInstallHealthColor(project: ProjectSummary): HealthColor {
 
   const allOk = hooksOk && !hooksCrlf && promptOk && agentsOk && settingsOk;
   if (allOk) {
-    // All files present — but check if any are outdated
+    // All files present — but check if any are outdated or git commit is amber
     const outdated = s.outdatedCount ?? 0;
-    return outdated > 0 ? '#D29922' : '#3FB950';
+    if (outdated > 0 || gitHealth === 'amber') return '#D29922';
+    return '#3FB950';
   }
 
   const anyInstalled = hooksOk || promptOk || agentsOk || settingsOk;
@@ -55,6 +60,16 @@ function getInstallHealthColor(project: ProjectSummary): HealthColor {
 }
 
 function getInstallHealthLabel(color: HealthColor, project?: ProjectSummary): string {
+  // Show git commit status message when it drives the color
+  if (project?.installStatus?.gitCommitStatus) {
+    const gcs = project.installStatus.gitCommitStatus;
+    if (gcs.health === 'red' && color === '#F85149') {
+      return gcs.message;
+    }
+    if (gcs.health === 'amber' && color === '#D29922') {
+      return gcs.message;
+    }
+  }
   if (color === '#D29922' && project?.installStatus) {
     const s = project.installStatus;
     const hooksOk = s.hooks?.installed ?? false;
@@ -241,6 +256,57 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
           </div>
         );
       })}
+      {/* Git commit status badge */}
+      {s.gitCommitStatus && (
+        <div className="relative group shrink-0">
+          <span
+            className="cursor-default"
+            style={{
+              color: s.gitCommitStatus.health === 'green' ? '#3FB950'
+                : s.gitCommitStatus.health === 'amber' ? '#D29922'
+                : s.gitCommitStatus.health === 'red' ? '#F85149'
+                : '#8B949E',
+            }}
+          >
+            {s.gitCommitStatus.health === 'green' ? '\u2713'
+              : s.gitCommitStatus.health === 'amber' ? '\u26A0'
+              : s.gitCommitStatus.health === 'red' ? '\u2717'
+              : '?'} committed
+          </span>
+          {/* Tooltip on hover */}
+          <div className="hidden group-hover:block absolute z-10 bottom-full right-0 mb-1 p-2 rounded bg-[#1C2128] border border-[#30363D] shadow-lg text-xs min-w-56 max-h-64 overflow-auto">
+            <div className="font-medium mb-1 text-[#C9D1D9]">
+              Git Commit Status ({s.gitCommitStatus.defaultBranch})
+            </div>
+            <div className="text-[#8B949E] mb-1">{s.gitCommitStatus.message}</div>
+            {s.gitCommitStatus.gitignored && (
+              <div className="flex items-center gap-1.5 py-0.5">
+                <span style={{ color: '#F85149' }}>{'\u2717'}</span>
+                <span className="text-[#8B949E]">.claude/ is in .gitignore</span>
+              </div>
+            )}
+            {s.gitCommitStatus.files.map((f) => {
+              const fileColor = f.committed
+                ? (f.committedVersion && f.committedVersion !== f.currentVersion ? '#D29922' : '#3FB950')
+                : '#F85149';
+              const fileIcon = f.committed
+                ? (f.committedVersion && f.committedVersion !== f.currentVersion ? '\u26A0' : '\u2713')
+                : '\u2717';
+              const versionSuffix = f.committed && f.committedVersion && f.committedVersion !== f.currentVersion
+                ? ` (v${f.committedVersion} \u2192 v${f.currentVersion})`
+                : '';
+              return (
+                <div key={f.path} className="flex items-center gap-1.5 py-0.5">
+                  <span style={{ color: fileColor }}>{fileIcon}</span>
+                  <span className="text-[#8B949E] font-mono text-[11px]">
+                    {f.path}{versionSuffix}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {/* GitHub repo settings badge */}
       {repoSettings && (
         <div className="relative group shrink-0">
@@ -307,6 +373,7 @@ function ProjectCard({
   onEditPrompt,
   onGroupChange,
   fetchRepoSettings,
+  onCommitClaudeFiles,
 }: {
   project: ProjectSummary;
   groups: ProjectGroupWithCount[];
@@ -320,9 +387,12 @@ function ProjectCard({
   onEditPrompt: (id: number) => void;
   onGroupChange: (projectId: number, groupId: number | null) => void;
   fetchRepoSettings: (projectId: number) => Promise<RepoSettings | null>;
+  onCommitClaudeFiles: (projectId: number) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [repoSettings, setRepoSettings] = useState<RepoSettings | null | undefined>(undefined);
+  const [committing, setCommitting] = useState(false);
+  const [commitResult, setCommitResult] = useState<{ ok: boolean; error?: string } | null>(null);
   const [repoSettingsLoaded, setRepoSettingsLoaded] = useState(false);
   const limitEdit = useInlineEdit<number>(project.maxActiveTeams);
   const modelEdit = useInlineEdit<string>(project.model ?? '');
@@ -452,6 +522,68 @@ function ProjectCard({
           {reinstallResult.ok
             ? 'Installation completed successfully'
             : `Installation failed: ${reinstallResult.error}`}
+        </div>
+      )}
+
+      {/* Git commit status banner */}
+      {project.installStatus?.gitCommitStatus &&
+        (project.installStatus.gitCommitStatus.health === 'red' ||
+          project.installStatus.gitCommitStatus.health === 'amber') && (
+        <div
+          className={`mx-4 mb-2 px-3 py-1.5 rounded text-xs flex items-center gap-2 ${
+            project.installStatus.gitCommitStatus.health === 'red'
+              ? 'border border-[#F85149]/30 bg-[#F85149]/10 text-[#F85149]'
+              : 'border border-[#D29922]/30 bg-[#D29922]/10 text-[#D29922]'
+          }`}
+        >
+          <span className="flex-1">
+            {project.installStatus.gitCommitStatus.message}
+            {project.installStatus.gitCommitStatus.health === 'red' &&
+              !project.installStatus.gitCommitStatus.gitignored &&
+              ' \u2014 hooks and agents won\'t work in worktrees'}
+          </span>
+          <button
+            onClick={async (e) => {
+              e.stopPropagation();
+              setCommitting(true);
+              setCommitResult(null);
+              try {
+                const result = await onCommitClaudeFiles(project.id);
+                setCommitResult(result);
+              } catch (err: unknown) {
+                setCommitResult({ ok: false, error: err instanceof Error ? err.message : String(err) });
+              } finally {
+                setCommitting(false);
+              }
+            }}
+            disabled={committing}
+            className={`shrink-0 px-2 py-0.5 rounded border text-xs font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+              project.installStatus.gitCommitStatus.health === 'red'
+                ? 'border-[#F85149]/40 text-[#F85149] bg-[#F85149]/10 hover:bg-[#F85149]/20'
+                : 'border-[#D29922]/40 text-[#D29922] bg-[#D29922]/10 hover:bg-[#D29922]/20'
+            }`}
+          >
+            {committing
+              ? 'Committing...'
+              : project.installStatus.gitCommitStatus.health === 'amber'
+                ? 'Update & Commit'
+                : 'Fix'}
+          </button>
+        </div>
+      )}
+
+      {/* Commit result banner */}
+      {commitResult && (
+        <div
+          className={`mx-4 mb-2 px-3 py-1.5 rounded text-xs ${
+            commitResult.ok
+              ? 'border border-[#3FB950]/30 bg-[#3FB950]/10 text-[#3FB950]'
+              : 'border border-[#F85149]/30 bg-[#F85149]/10 text-[#F85149]'
+          }`}
+        >
+          {commitResult.ok
+            ? '.claude/ files committed successfully'
+            : `Commit failed: ${commitResult.error}`}
         </div>
       )}
 
@@ -964,6 +1096,23 @@ export function ProjectsPage() {
     [api],
   );
 
+  const handleCommitClaudeFiles = useCallback(
+    async (projectId: number): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const result = await api.post<{ ok: boolean; error?: string }>(
+          `projects/${projectId}/commit-claude-files`,
+          {},
+        );
+        // Refresh projects to update install status (and git commit status)
+        await fetchProjects();
+        return result;
+      } catch (err: unknown) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+    [api, fetchProjects],
+  );
+
   const handleCleanup = useCallback((project: ProjectSummary) => {
     setCleanupProjectId(project.id);
   }, []);
@@ -1075,6 +1224,7 @@ export function ProjectsPage() {
     onEditPrompt: setEditingPromptId,
     onGroupChange: handleGroupChange,
     fetchRepoSettings,
+    onCommitClaudeFiles: handleCommitClaudeFiles,
   };
 
   // --- Render ---
