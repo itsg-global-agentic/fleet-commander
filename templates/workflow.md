@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.8 -->
+<!-- fleet-commander v0.0.9 -->
 <!-- Fleet Commander workflow template. Installed by Fleet Commander into your project. -->
 <!-- Placeholders {{PROJECT_NAME}}, {{project_slug}}, {{BASE_BRANCH}}, {{ISSUE_NUMBER}} are replaced during installation. -->
 

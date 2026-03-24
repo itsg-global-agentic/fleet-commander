@@ -4,7 +4,7 @@ description: Generalist developer agent. Dynamically specializes via guidebook f
 preferred_plugins: playwright, context7
 color: "#3FB950"
 model: inherit
-_fleetCommanderVersion: "0.0.8"
+_fleetCommanderVersion: "0.0.9"
 ---
 
 # Developer

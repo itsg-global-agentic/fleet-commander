@@ -3,7 +3,7 @@ name: fleet-reviewer
 description: Code reviewer with direct p2p dev communication. Two-pass review (code quality + acceptance criteria). READ-ONLY — never edits files.
 model: inherit
 color: "#D29922"
-_fleetCommanderVersion: "0.0.8"
+_fleetCommanderVersion: "0.0.9"
 ---
 
 # Fleet Reviewer
