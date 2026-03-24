@@ -5,6 +5,30 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 /**
+ * Return the platform-appropriate default directory for Fleet Commander data files.
+ *
+ * - Windows:  %APPDATA%\fleet-commander
+ * - macOS:    ~/Library/Application Support/fleet-commander
+ * - Linux:    $XDG_DATA_HOME/fleet-commander  (default ~/.local/share)
+ */
+function defaultDataDir(): string {
+  const APP_DIR = 'fleet-commander';
+
+  if (process.platform === 'win32') {
+    const appData = process.env['APPDATA'] || path.join(os.homedir(), 'AppData', 'Roaming');
+    return path.join(appData, APP_DIR);
+  }
+
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', APP_DIR);
+  }
+
+  // Linux / other
+  const dataHome = process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share');
+  return path.join(dataHome, APP_DIR);
+}
+
+/**
  * Return the platform-appropriate default path for the Fleet Commander database.
  *
  * - Windows:  %APPDATA%\fleet-commander\fleet.db
@@ -12,21 +36,19 @@ import { fileURLToPath } from 'url';
  * - Linux:    $XDG_DATA_HOME/fleet-commander/fleet.db  (default ~/.local/share)
  */
 export function defaultDbPath(): string {
-  const DB_NAME = 'fleet.db';
-  const APP_DIR = 'fleet-commander';
+  return path.join(defaultDataDir(), 'fleet.db');
+}
 
-  if (process.platform === 'win32') {
-    const appData = process.env['APPDATA'] || path.join(os.homedir(), 'AppData', 'Roaming');
-    return path.join(appData, APP_DIR, DB_NAME);
-  }
-
-  if (process.platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', APP_DIR, DB_NAME);
-  }
-
-  // Linux / other
-  const dataHome = process.env['XDG_DATA_HOME'] || path.join(os.homedir(), '.local', 'share');
-  return path.join(dataHome, APP_DIR, DB_NAME);
+/**
+ * Return the platform-appropriate default path for the hook execution log.
+ *
+ * Lives in the same directory as the database file:
+ * - Windows:  %APPDATA%\fleet-commander\hooks.log
+ * - macOS:    ~/Library/Application Support/fleet-commander/hooks.log
+ * - Linux:    $XDG_DATA_HOME/fleet-commander/hooks.log  (default ~/.local/share)
+ */
+export function defaultHookLogPath(): string {
+  return path.join(defaultDataDir(), 'hooks.log');
 }
 
 /**
@@ -117,6 +139,7 @@ const config = Object.freeze({
   enableAgentTeams: process.env['FLEET_ENABLE_AGENT_TEAMS'] !== 'false',
 
   dbPath: process.env['FLEET_DB_PATH'] || defaultDbPath(),
+  hookLogPath: process.env['FLEET_HOOK_LOG'] || defaultHookLogPath(),
 
   logLevel: process.env['LOG_LEVEL'] || 'info',
 

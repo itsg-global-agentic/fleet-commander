@@ -108,7 +108,7 @@ PAYLOAD="${PAYLOAD}}"
 # ── Fire and forget ───────────────────────────────────────────────
 # curl with 2-second timeout. Errors are silenced completely.
 # The hook MUST NOT block Claude Code or cause visible failures.
-_LOG="$(cd "$(dirname "$0")" && pwd)/../../../../hooks.log"
+_LOG="${FLEET_HOOK_LOG:-/tmp/fleet-hooks.log}"
 if command -v curl >/dev/null 2>&1; then
     curl -s -S --max-time 2 --connect-timeout 1 \
         -X POST \

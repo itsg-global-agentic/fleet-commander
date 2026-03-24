@@ -7,7 +7,7 @@
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 EVENT_TYPE="${1:-unknown}"
 SCRIPT="${2:-}"
-LOG="${HOOK_DIR}/../../../../hooks.log"
+LOG="${FLEET_HOOK_LOG:-/tmp/fleet-hooks.log}"
 
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | ENTER | $EVENT_TYPE | ${FLEET_TEAM_ID:-?} | pid=$$" >> "$LOG" 2>/dev/null || true
 
