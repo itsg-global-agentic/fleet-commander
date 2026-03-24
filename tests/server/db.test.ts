@@ -84,6 +84,17 @@ describe('Schema', () => {
   it('sets schema version to 7', () => {
     expect(db.getSchemaVersion()).toBe(7);
   });
+
+  it('creates indexes for hot query paths', () => {
+    const indexes = db.raw
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
+      .all() as { name: string }[];
+
+    const names = indexes.map((i) => i.name);
+    expect(names).toContain('idx_pull_requests_team');
+    expect(names).toContain('idx_commands_team_status');
+    expect(names).toContain('idx_events_team_created');
+  });
 });
 
 // =============================================================================
