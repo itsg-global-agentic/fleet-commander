@@ -130,6 +130,18 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
       summary: 'Agent Templates',
       outdatedInCategory: (s.agents?.files ?? []).filter((f) => f.exists && f.installedVersion !== currentVersion).length,
     },
+    {
+      key: 'guides',
+      label: 'guides',
+      installed: s.guides?.installed ?? false,
+      hasCrlf: false,
+      somePresent: (s.guides?.files?.length ?? 0) > 0,
+      files: s.guides?.files ?? [],
+      summary: `Guidebooks (${s.guides?.files?.length ?? 0})`,
+      outdatedInCategory: (s.guides?.files ?? []).filter(
+        (f) => f.exists && f.installedVersion !== currentVersion
+      ).length,
+    },
   ];
 
   const settingsOutdated = s.settings?.exists && s.settings.installedVersion !== currentVersion;

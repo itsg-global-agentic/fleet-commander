@@ -226,14 +226,33 @@ if [ -d "$GUIDES_SRC" ]; then
   for GUIDE_FILE in "$GUIDES_SRC"/*.md; do
     [ -f "$GUIDE_FILE" ] || continue
     GUIDE_NAME="$(basename "$GUIDE_FILE")"
-    if [ ! -f "$GUIDES_DIR/$GUIDE_NAME" ]; then
-      # Source files already carry a stamp on line 1; replace it with install-time version
-      sed "1s|^<!-- fleet-commander v.* -->|<!-- fleet-commander v${FC_VERSION} -->|" \
-          "$GUIDE_FILE" > "$GUIDES_DIR/$GUIDE_NAME"
+    GUIDE_VERSION_STAMP="<!-- fleet-commander v${FC_VERSION} -->"
+    # Strip source version stamp (line 1) and prepend install-time stamp
+    GUIDE_TEMPLATE_CONTENT=$(sed '1{/^<!-- fleet-commander v/d}' "$GUIDE_FILE")
+    NEW_GUIDE_CONTENT="${GUIDE_VERSION_STAMP}
+${GUIDE_TEMPLATE_CONTENT}"
+
+    if [ -f "$GUIDES_DIR/$GUIDE_NAME" ]; then
+      EXISTING_GUIDE_STRIPPED=$(sed '1{/^<!-- fleet-commander v/d}' "$GUIDES_DIR/$GUIDE_NAME")
+      if [ "$GUIDE_TEMPLATE_CONTENT" = "$EXISTING_GUIDE_STRIPPED" ]; then
+        # Content unchanged — update version stamp if needed
+        if [ "$(head -1 "$GUIDES_DIR/$GUIDE_NAME")" != "$GUIDE_VERSION_STAMP" ]; then
+          printf '%s\n' "$NEW_GUIDE_CONTENT" > "$GUIDES_DIR/$GUIDE_NAME"
+          echo "  Updated version stamp in guidebook $GUIDE_NAME"
+        fi
+      else
+        # Content changed — backup + replace
+        GUIDE_BACKUP="$GUIDES_DIR/$GUIDE_NAME.backup.$(date +%Y%m%d_%H%M%S)"
+        cp "$GUIDES_DIR/$GUIDE_NAME" "$GUIDE_BACKUP"
+        echo "  Backed up existing guidebook to $(basename "$GUIDE_BACKUP")"
+        printf '%s\n' "$NEW_GUIDE_CONTENT" > "$GUIDES_DIR/$GUIDE_NAME"
+      fi
+    else
+      printf '%s\n' "$NEW_GUIDE_CONTENT" > "$GUIDES_DIR/$GUIDE_NAME"
       GUIDE_COUNT=$((GUIDE_COUNT + 1))
     fi
   done
-  echo "  Installed $GUIDE_COUNT new guidebooks to $GUIDES_DIR (existing preserved)"
+  echo "  Installed/updated guidebooks in $GUIDES_DIR (v${FC_VERSION}, $GUIDE_COUNT new)"
 else
   echo "  No guidebooks found in $GUIDES_SRC (skipped)"
 fi
