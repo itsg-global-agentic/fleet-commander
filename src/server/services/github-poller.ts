@@ -124,7 +124,9 @@ class GitHubPoller {
   /** Trigger an immediate extra poll (e.g. after a PR is detected) */
   triggerPoll(): void {
     // Run poll in background, don't wait
-    this.poll().catch(() => {});
+    this.poll().catch((err) => {
+      console.error('[GitHubPoller] triggerPoll error:', err instanceof Error ? err.message : err);
+    });
   }
 
   /**

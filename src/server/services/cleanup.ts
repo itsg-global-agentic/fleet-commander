@@ -211,7 +211,8 @@ export function executeCleanup(
             `git -C "${project.repoPath}" worktree remove --force "${config.worktreeDir}/${item.name}"`,
             { encoding: 'utf-8', stdio: 'pipe', timeout: 15000 },
           );
-        } catch {
+        } catch (e) {
+          console.error(`[Cleanup] worktree remove failed for ${item.name}:`, e instanceof Error ? e.message : e);
           // Fallback: rm -rf the directory
           fs.rmSync(item.path, { recursive: true, force: true });
         }
@@ -221,8 +222,9 @@ export function executeCleanup(
             stdio: 'pipe',
             timeout: 5000,
           });
-        } catch {
-          // non-fatal
+        } catch (e) {
+          // non-fatal — log and continue
+          console.error(`[Cleanup] worktree prune failed:`, e instanceof Error ? e.message : e);
         }
         removed.push(item.name);
       } else if (item.type === 'signal_file') {

@@ -20,10 +20,43 @@ const execAsync = promisify(exec);
 // Types
 // ---------------------------------------------------------------------------
 
+/** Classification of CLI execution errors for caller-side recovery logic */
+export type ExecErrorType = 'auth' | 'network' | 'rate_limit' | 'not_found' | 'timeout' | 'unknown';
+
 export interface ExecResult {
   ok: boolean;
   stdout?: string;
   error?: string;
+  /** Error classification — only present when ok is false */
+  errorType?: ExecErrorType;
+}
+
+// ---------------------------------------------------------------------------
+// Error classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify a CLI error string into a typed error category.
+ * Inspects stderr / error message content for known patterns.
+ */
+function classifyError(errorText: string): ExecErrorType {
+  const lower = errorText.toLowerCase();
+  if (lower.includes('rate limit') || lower.includes('api rate limit')) {
+    return 'rate_limit';
+  }
+  if (lower.includes('http 401') || lower.includes('authentication') || lower.includes('auth token') || lower.includes('not logged in')) {
+    return 'auth';
+  }
+  if (lower.includes('http 404') || lower.includes('not found') || lower.includes('could not resolve to a repository')) {
+    return 'not_found';
+  }
+  if (lower.includes('could not resolve host') || lower.includes('network') || lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('etimedout')) {
+    return 'network';
+  }
+  if (lower.includes('timed out') || lower.includes('timeout') || lower.includes('timedout')) {
+    return 'timeout';
+  }
+  return 'unknown';
 }
 
 // ---------------------------------------------------------------------------
@@ -56,7 +89,8 @@ export async function execGHAsync(
     const message = err instanceof Error ? err.message : String(err);
     // Only log if it's not a benign "no PRs found" type error
     if (!message.includes('no pull requests match')) {
-      console.error(`[execGHAsync] CLI error: ${message.slice(0, 200)}`);
+      const errorType = classifyError(message);
+      console.error(`[execGHAsync] CLI error (${errorType}): ${message.slice(0, 200)}`);
     }
     return null;
   }
@@ -89,7 +123,8 @@ export async function execGHResult(
       const rawStderr = (err as { stderr: string | Buffer }).stderr;
       stderr = typeof rawStderr === 'string' ? rawStderr : rawStderr.toString('utf-8');
     }
-    return { ok: false, error: stderr.trim() || message };
+    const errorText = stderr.trim() || message;
+    return { ok: false, error: errorText, errorType: classifyError(errorText) };
   }
 }
 

@@ -2102,6 +2102,10 @@ export class TeamManager {
         }
       });
 
+      child.stdout.on('error', (err: Error) => {
+        console.error(`[TeamManager] stdout stream error for team ${teamId}:`, err.message);
+      });
+
       child.stdout.on('end', () => {
         if (stdoutPartial.trim()) {
           const trimmed = stdoutPartial.trim();
@@ -2162,6 +2166,10 @@ export class TeamManager {
           if (line === '' && idx === newLines.length - 1) continue;
           buffer.push(line);
         }
+      });
+
+      child.stderr.on('error', (err: Error) => {
+        console.error(`[TeamManager] stderr stream error for team ${teamId}:`, err.message);
       });
     }
   }
