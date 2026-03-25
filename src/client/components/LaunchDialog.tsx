@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
 import type { ProjectSummary, Team, TeamStatus } from '../../shared/types';
+import { TERMINAL_STATUSES } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Flattened issue item used in the issue picker
@@ -148,19 +149,23 @@ function LaunchLog({ teamId, issueNumber, onClose }: LaunchLogProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const outputEndRef = useRef<HTMLDivElement>(null);
   const autoCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const statusRef = useRef<TeamStatus>('queued');
 
-  // Poll team status, output, and stream events every 2 seconds
+  // Poll team status, output, and stream events with setTimeout chaining
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
 
     async function poll() {
       if (cancelled) return;
+      if (TERMINAL_STATUSES.has(statusRef.current)) return;
 
       try {
         // Fetch team status
         const team = await api.get<Team>(`teams/${teamId}`);
         if (cancelled) return;
         setTeamStatus(team.status);
+        statusRef.current = team.status;
 
         if (team.status === 'failed') {
           setErrorMessage(`Team failed${team.stoppedAt ? ` at ${new Date(team.stoppedAt).toLocaleTimeString()}` : ''}`);
@@ -178,19 +183,21 @@ function LaunchLog({ teamId, issueNumber, onClose }: LaunchLogProps) {
       } catch {
         // Ignore polling errors — will retry
       }
+
+      // Schedule next poll only if not cancelled and not terminal
+      if (!cancelled && !TERMINAL_STATUSES.has(statusRef.current)) {
+        timer = setTimeout(poll, 2000);
+      }
     }
 
     // Initial poll immediately
     poll();
 
-    // Then every 2 seconds
-    const interval = setInterval(poll, 2000);
-
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (timer !== null) clearTimeout(timer);
     };
-  }, [api, teamId]);
+  }, [api, teamId, teamStatus]);
 
   // Auto-scroll output to bottom
   useEffect(() => {

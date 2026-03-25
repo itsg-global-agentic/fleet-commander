@@ -14,18 +14,21 @@ import type { TimelineEntry, StreamTimelineEntry, HookTimelineEntry } from '../.
 Element.prototype.scrollIntoView = vi.fn();
 
 // ---------------------------------------------------------------------------
-// Mock useApi — return controlled timeline data
+// Mock useApi — return controlled timeline data (stable reference)
 // ---------------------------------------------------------------------------
 
 let mockEntries: TimelineEntry[] = [];
+const mockGet = vi.fn().mockImplementation(() => Promise.resolve(mockEntries));
+
+const mockApi = {
+  get: mockGet,
+  post: vi.fn(),
+  put: vi.fn(),
+  del: vi.fn(),
+};
 
 vi.mock('../../src/client/hooks/useApi', () => ({
-  useApi: () => ({
-    get: vi.fn().mockImplementation(() => Promise.resolve(mockEntries)),
-    post: vi.fn(),
-    put: vi.fn(),
-    del: vi.fn(),
-  }),
+  useApi: () => mockApi,
 }));
 
 // Import after mocks are set up
@@ -87,6 +90,7 @@ function getExpandedBadge() {
 describe('UnifiedTimeline — tool detail expand/collapse', () => {
   beforeEach(() => {
     mockEntries = [];
+    mockGet.mockImplementation(() => Promise.resolve(mockEntries));
   });
 
   afterEach(() => {
@@ -313,6 +317,7 @@ function makeErrorHookEntry(
 describe('UnifiedTimeline — error entry collapse/expand', () => {
   beforeEach(() => {
     mockEntries = [];
+    mockGet.mockImplementation(() => Promise.resolve(mockEntries));
   });
 
   afterEach(() => {
@@ -410,5 +415,103 @@ describe('UnifiedTimeline — error entry collapse/expand', () => {
     await waitFor(() => {
       expect(screen.getByText('Something broke')).toBeInTheDocument();
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Polling behavior tests — terminal state + exponential backoff
+// ---------------------------------------------------------------------------
+
+describe('UnifiedTimeline — polling behavior', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockEntries = [];
+    mockGet.mockReset();
+    mockGet.mockImplementation(() => Promise.resolve(mockEntries));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('does not set up polling interval when teamStatus is done', async () => {
+    render(<UnifiedTimeline teamId={1} teamStatus="done" />);
+
+    // Let the initial fetch resolve
+    await vi.advanceTimersByTimeAsync(0);
+
+    const initialCalls = mockGet.mock.calls.length;
+    expect(initialCalls).toBe(1); // Just the initial fetch
+
+    // Advance time well past any polling interval
+    await vi.advanceTimersByTimeAsync(10000);
+
+    // No additional calls should have been made
+    expect(mockGet.mock.calls.length).toBe(initialCalls);
+  });
+
+  it('does not set up polling interval when teamStatus is failed', async () => {
+    render(<UnifiedTimeline teamId={1} teamStatus="failed" />);
+
+    // Let the initial fetch resolve
+    await vi.advanceTimersByTimeAsync(0);
+
+    const initialCalls = mockGet.mock.calls.length;
+    expect(initialCalls).toBe(1); // Just the initial fetch
+
+    // Advance time well past any polling interval
+    await vi.advanceTimersByTimeAsync(10000);
+
+    // No additional calls should have been made
+    expect(mockGet.mock.calls.length).toBe(initialCalls);
+  });
+
+  it('polls with increasing delay (exponential backoff)', async () => {
+    render(<UnifiedTimeline teamId={1} teamStatus="running" />);
+
+    // Initial fetch fires immediately
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockGet.mock.calls.length).toBe(1);
+
+    // After 2s: first backoff poll
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(mockGet.mock.calls.length).toBe(2);
+
+    // After another 4s: second backoff poll (delay doubled to 4s)
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(mockGet.mock.calls.length).toBe(3);
+
+    // After another 8s: third backoff poll (delay doubled to 8s)
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(mockGet.mock.calls.length).toBe(4);
+  });
+
+  it('caps backoff delay at 30 seconds', async () => {
+    render(<UnifiedTimeline teamId={1} teamStatus="running" />);
+
+    // Initial fetch
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockGet.mock.calls.length).toBe(1);
+
+    // Run through backoff stages: 2s, 4s, 8s, 16s = 30s total, 4 polls
+    await vi.advanceTimersByTimeAsync(2000); // 2s delay
+    expect(mockGet.mock.calls.length).toBe(2);
+
+    await vi.advanceTimersByTimeAsync(4000); // 4s delay
+    expect(mockGet.mock.calls.length).toBe(3);
+
+    await vi.advanceTimersByTimeAsync(8000); // 8s delay
+    expect(mockGet.mock.calls.length).toBe(4);
+
+    await vi.advanceTimersByTimeAsync(16000); // 16s delay
+    expect(mockGet.mock.calls.length).toBe(5);
+
+    // Next should be capped at 30s (not 32s)
+    await vi.advanceTimersByTimeAsync(29999); // Just under 30s — should not fire
+    expect(mockGet.mock.calls.length).toBe(5);
+
+    await vi.advanceTimersByTimeAsync(1); // Completes 30s — should fire
+    expect(mockGet.mock.calls.length).toBe(6);
   });
 });

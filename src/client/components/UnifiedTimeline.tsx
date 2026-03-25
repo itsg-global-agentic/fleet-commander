@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useApi } from '../hooks/useApi';
-import type { TimelineEntry, StreamTimelineEntry, HookTimelineEntry, TeamMember } from '../../shared/types';
+import type { TimelineEntry, StreamTimelineEntry, HookTimelineEntry, TeamMember, TeamStatus } from '../../shared/types';
+import { TERMINAL_STATUSES } from '../../shared/types';
 import { agentColor } from '../utils/constants';
 import { AgentFilterBar } from './AgentFilterBar';
 import { SettingsIcon } from './Icons';
@@ -496,6 +497,7 @@ export function UnifiedTimeline({
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  const pollDelayRef = useRef(2000);
 
   // Detect if user has scrolled up — disable auto-scroll in that case
   const handleScroll = useCallback(() => {
@@ -506,9 +508,13 @@ export function UnifiedTimeline({
     stickToBottomRef.current = atBottom;
   }, []);
 
-  // Poll for timeline data every 2 seconds
+  // Poll for timeline data with exponential backoff (2s -> 4s -> 8s -> 16s -> 30s max)
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    // Reset backoff whenever the effect re-runs (e.g. teamStatus change)
+    pollDelayRef.current = 2000;
 
     async function poll() {
       if (cancelled) return;
@@ -520,20 +526,19 @@ export function UnifiedTimeline({
       } catch {
         // Ignore polling errors
       }
+      // Schedule next poll only if not cancelled and not terminal
+      if (!cancelled && !TERMINAL_STATUSES.has(teamStatus as TeamStatus)) {
+        timer = setTimeout(poll, pollDelayRef.current);
+        pollDelayRef.current = Math.min(pollDelayRef.current * 2, 30000);
+      }
     }
 
     // Initial fetch
     poll();
 
-    // Stop polling when team is in a terminal state
-    if (teamStatus === 'done' || teamStatus === 'failed') {
-      return () => { cancelled = true; };
-    }
-
-    const interval = setInterval(poll, 2000);
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      if (timer !== null) clearTimeout(timer);
     };
   }, [api, teamId, teamStatus]);
 
@@ -606,7 +611,7 @@ export function UnifiedTimeline({
   );
 
   if (entries.length === 0) {
-    const isTerminal = teamStatus === 'done' || teamStatus === 'failed';
+    const isTerminal = TERMINAL_STATUSES.has(teamStatus as TeamStatus);
     return (
       <div className="text-[11px] text-dark-muted italic py-2">
         {isTerminal
