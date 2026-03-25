@@ -181,13 +181,17 @@ const eventsRoutes: FastifyPluginCallback = (
         }
 
         const rawLimit = query.limit ? parseInt(query.limit, 10) : undefined;
+        if (rawLimit !== undefined && (isNaN(rawLimit) || rawLimit < 1)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'limit must be a positive integer' });
+        }
+        const limit = rawLimit !== undefined ? Math.min(rawLimit, 1000) : undefined;
 
         const service = getEventService();
         const result = service.queryEvents({
           teamId: query.team_id ? parseInt(query.team_id, 10) : undefined,
           eventType: query.type || undefined,
           since: query.since || undefined,
-          limit: rawLimit,
+          limit,
           offset: rawOffset,
         });
         return reply.code(200).send(result);
