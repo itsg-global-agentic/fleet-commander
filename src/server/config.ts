@@ -160,7 +160,7 @@ const config = Object.freeze({
 
   ccQueryModel: process.env['FLEET_CC_QUERY_MODEL'] || 'sonnet',
   ccQueryTimeoutMs: safeParseInt(process.env['FLEET_CC_QUERY_TIMEOUT_MS'] || '30000', 'FLEET_CC_QUERY_TIMEOUT_MS'),
-  ccQueryPrioritizeTimeoutMs: safeParseInt(process.env['FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS'] || '60000', 'FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS'),
+  ccQueryPrioritizeTimeoutMs: safeParseInt(process.env['FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS'] || '300000', 'FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS'),
   ccQueryMaxRetries: safeParseInt(process.env['FLEET_CC_QUERY_MAX_RETRIES'] || '2', 'FLEET_CC_QUERY_MAX_RETRIES'),
   ccQueryMaxTurns: safeParseInt(process.env['FLEET_CC_QUERY_MAX_TURNS'] || '4', 'FLEET_CC_QUERY_MAX_TURNS'),
 

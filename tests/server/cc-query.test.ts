@@ -21,7 +21,7 @@ vi.mock('../../src/server/config.js', () => ({
   default: {
     ccQueryModel: 'claude-sonnet-4-20250514',
     ccQueryTimeoutMs: 60000,
-    ccQueryPrioritizeTimeoutMs: 60000,
+    ccQueryPrioritizeTimeoutMs: 300000,
     ccQueryMaxRetries: 2,
     ccQueryMaxTurns: 4,
   },
