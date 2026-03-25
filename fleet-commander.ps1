@@ -2,6 +2,8 @@
 $ErrorActionPreference = "Stop"
 Set-Location $PSScriptRoot
 
+$port = if ($env:PORT) { $env:PORT } else { "4680" }
+
 Write-Host "Fleet Commander" -ForegroundColor Cyan
 Write-Host ""
 
@@ -15,11 +17,11 @@ if (-not (Test-Path "dist/server/index.js")) {
     npm run build
 }
 
-Write-Host "Starting on http://localhost:4680" -ForegroundColor Green
+Write-Host "Starting on http://localhost:$port" -ForegroundColor Green
 Write-Host ""
 
 # Open browser after delay
-Start-Job -ScriptBlock { Start-Sleep 2; Start-Process "http://localhost:4680" } | Out-Null
+Start-Job -ScriptBlock { param($p) Start-Sleep 2; Start-Process "http://localhost:$p" } -ArgumentList $port | Out-Null
 
 # Run server
 node dist/server/index.js
