@@ -1,7 +1,8 @@
 // =============================================================================
 // Fleet Commander — MCP get-usage Tool Tests
 // =============================================================================
-// Smoke tests for the fleet_get_usage MCP tool registration and handler.
+// Tests for the fleet_get_usage MCP tool registration, handler, and error
+// paths.
 // =============================================================================
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -20,9 +21,11 @@ const mockUsageData = {
   redThresholds: { daily: 80, weekly: 80, sonnet: 80, extra: 80 },
 };
 
+const mockGetLatest = vi.fn().mockReturnValue(mockUsageData);
+
 vi.mock('../../../src/server/services/usage-service.js', () => ({
   getUsageService: () => ({
-    getLatest: () => mockUsageData,
+    getLatest: mockGetLatest,
   }),
 }));
 
@@ -63,6 +66,7 @@ const { registerGetUsageTool } = await import(
 describe('fleet_get_usage MCP tool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetLatest.mockReturnValue(mockUsageData);
     registeredTools.length = 0;
   });
 
@@ -135,5 +139,54 @@ describe('fleet_get_usage MCP tool', () => {
     expect(text).toContain('  ');
     // Verify it matches JSON.stringify with indent=2
     expect(text).toBe(JSON.stringify(mockUsageData, null, 2));
+  });
+
+  it('handler returns null usage when no snapshots exist', async () => {
+    mockGetLatest.mockReturnValue(null);
+    registerGetUsageTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    const result = (await handler()) as {
+      content: Array<{ type: string; text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toBeNull();
+  });
+
+  it('handler propagates service errors (no try/catch in zero-arg tool)', async () => {
+    mockGetLatest.mockImplementationOnce(() => {
+      throw new Error('DB read failure');
+    });
+
+    registerGetUsageTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await expect(handler()).rejects.toThrow('DB read failure');
+  });
+
+  it('handler serializes all percentage fields in output', async () => {
+    const zeroUsage = {
+      dailyPercent: 0,
+      weeklyPercent: 0,
+      sonnetPercent: 0,
+      extraPercent: 0,
+      recordedAt: '2026-03-25T00:00:00Z',
+      zone: 'green',
+      redThresholds: { daily: 80, weekly: 80, sonnet: 80, extra: 80 },
+    };
+    mockGetLatest.mockReturnValue(zeroUsage);
+    registerGetUsageTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    const result = (await handler()) as {
+      content: Array<{ type: string; text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.dailyPercent).toBe(0);
+    expect(parsed.weeklyPercent).toBe(0);
+    expect(parsed.sonnetPercent).toBe(0);
+    expect(parsed.extraPercent).toBe(0);
   });
 });

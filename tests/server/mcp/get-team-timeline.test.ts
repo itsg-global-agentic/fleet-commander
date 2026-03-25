@@ -142,4 +142,26 @@ describe('fleet_get_team_timeline MCP tool', () => {
     const handler = registeredTools[0]!.handler;
     await expect(handler({ teamId: 1 })).rejects.toThrow('unexpected');
   });
+
+  it('handler returns empty array when team has no events', async () => {
+    mockGetTeamTimeline.mockReturnValueOnce([]);
+    registerGetTeamTimelineTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    const result = (await handler({ teamId: 1 })) as {
+      content: Array<{ type: string; text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toEqual([]);
+  });
+
+  it('handler passes default undefined limit when limit is omitted', async () => {
+    registerGetTeamTimelineTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await handler({ teamId: 5, limit: undefined });
+
+    expect(mockGetTeamTimeline).toHaveBeenCalledWith(5, undefined);
+  });
 });
