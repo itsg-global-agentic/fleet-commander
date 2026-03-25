@@ -49,7 +49,7 @@ User: claude --worktree {{project_slug}}-{N}
 |-------|---------------|------|------|-------|
 | **Planner** | `fleet-planner` | `planner` | Analyzes issue + codebase, produces structured plan with guidebook paths. Writes plan to `plan.md`. Stays alive for p2p questions from dev and reviewer. | Phase 0 (immediate) |
 | **Dev** | `fleet-dev` | `dev` | Receives planner's plan at spawn, implements code, writes tests, pushes commits. Communicates with reviewer directly during review. Can ask planner questions via p2p. | Phase 1 (after plan) |
-| **Reviewer** | `fleet-reviewer` | `reviewer` | Spawned after dev reports ready. Two-pass code review. Sends feedback directly to dev. Reports final verdict to TL. Can ask planner questions via p2p. | Phase 2 (after dev ready) |
+| **Reviewer** | `fleet-reviewer` | `reviewer` | Spawned after dev reports ready. Two-pass code review. Sends feedback directly to dev. Writes final verdict to `review.md`. Can ask planner questions via p2p. | Phase 2 (after dev ready) |
 
 There is NO coordinator agent. The TL orchestrates all three agents directly.
 
@@ -88,7 +88,7 @@ stateDiagram-v2
     Analyzing --> Blocked : BLOCKED in plan
     Implementing --> Reviewing : dev reports ready (TL spawns reviewer)
     Reviewing --> Implementing : REJECT (dev fixes, max 3 rounds)
-    Reviewing --> PR : APPROVE (TL creates PR)
+    Reviewing --> PR : APPROVE via review.md (TL creates PR)
     PR --> Done : CI GREEN + merge
     PR --> Implementing : CI RED (dev fixes, pushes)
     Implementing --> Blocked : escalation
@@ -254,7 +254,7 @@ For mixed-type issues (e.g., C# backend + TypeScript frontend):
 4. **TL steps back.** The dev-reviewer loop runs peer-to-peer:
    - Reviewer performs two-pass review (code quality + acceptance)
    - **REJECT** → reviewer sends actionable feedback directly to dev → dev fixes and re-requests review from reviewer directly
-   - **APPROVE** → reviewer notifies TL with the final verdict
+   - **APPROVE** → reviewer writes `review.md` and exits
 5. TL monitors but does NOT intervene unless:
    - **3 review rounds exhausted** → TL arbitrates (see Error Handling)
    - **Agent stuck** (5min idle) → TL sends a nudge
@@ -276,18 +276,28 @@ INSTRUCTIONS:
 3. Review the changes on the branch against the base branch
 4. Two-pass review: code quality + acceptance criteria from the issue
 5. Send rejection feedback DIRECTLY to dev via SendMessage
-6. Send final APPROVE or REJECT verdict to TL (me)
+6. Write final verdict to review.md in the worktree root (do NOT use SendMessage for the verdict)
 
 PEERS:
 - Dev agent name: dev
 - Send rejection feedback DIRECTLY to dev via SendMessage
-- Send final APPROVE or REJECT verdict to TL (me)
+- Write final verdict (APPROVE or CHANGES_NEEDED) to review.md — TL reads it
 
 If you reject, include a numbered list of specific, actionable fixes with file:line references.
 Dev will fix and message you directly when ready for re-review.
 Max 3 review rounds total (initial + 2 re-reviews).
-After 3rd rejection, report BLOCKED to TL.
+After 3rd round, write review.md with CHANGES_NEEDED and exit.
 ```
+
+### TL Reads review.md
+
+After the reviewer exits, the TL reads `review.md` from the worktree root and deletes it — following the same lifecycle as `plan.md` in Phase 1:
+
+1. **Read** `review.md` using the Read tool
+2. **Delete** it: `rm review.md`
+3. **Act on the verdict**:
+   - `Status: APPROVE` → proceed to Phase 4 (PR creation)
+   - `Status: CHANGES_NEEDED` → relay the issues to the dev via SendMessage, dev fixes, and TL re-spawns the reviewer (or arbitrates if rounds are exhausted)
 
 ### TL Non-Intervention Rules
 
@@ -308,7 +318,7 @@ TL MAY:
 
 ## Phase 4 — PR
 
-After reviewer sends APPROVE to TL:
+After TL reads `review.md` with `Status: APPROVE`:
 
 1. **Branch freshness check** (MANDATORY):
    ```bash
@@ -493,6 +503,7 @@ Atomic commits — each commit should be a logical unit.
 | TL monitors CI manually | FC handles CI monitoring and sends updates via stdin |
 | TL goes idle after spawning agents without monitoring | TL runs active monitoring loop between phases |
 | Planner uses SendMessage to deliver plan | Planner writes plan.md file — TL reads it directly |
+| Reviewer uses SendMessage to deliver verdict | Reviewer writes review.md file — TL reads it directly |
 
 ## Decision Summary
 
@@ -502,7 +513,7 @@ Phase 1: Planner analyzes → writes plan.md → TL reads plan.md → planner st
          TL validates plan → spawns dev WITH the plan context
 Phase 2: Dev implements immediately (has plan) → reports "ready for review" to TL
          TL spawns reviewer WITH branch context
-Phase 3: Reviewer reviews immediately (has branch) → dev + reviewer iterate p2p → reviewer reports verdict to TL
+Phase 3: Reviewer reviews immediately (has branch) → dev + reviewer iterate p2p → reviewer writes review.md → TL reads review.md
 Phase 4: TL → rebase → create PR → set auto-merge → FC monitors CI
 Phase 5: TL → close issue → shutdown agents → finish
 ```

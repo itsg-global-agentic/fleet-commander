@@ -67,6 +67,7 @@ You are spawned **after the planner's plan is ready**. The TL includes the plan 
    ```
    The `git stash --include-untracked` is required because the CC runtime may leave unstaged changes (e.g., `.claude/settings.json`) that block rebase.
 9. **Report to TL** — send "Ready for review. Branch: `{branch}`" to TL via `SendMessage`
+10. **Stay alive** — remain available for review feedback (see Post-Implementation Availability below)
 
 ## Branch Naming
 
@@ -119,6 +120,17 @@ REQUEST: Guidance on how to proceed.
 ```
 
 After escalating, wait for the TL's instructions before continuing.
+
+## Post-Implementation Availability
+
+After reporting "Ready for review" to the TL, you MUST remain alive and available for review feedback. Do NOT exit after pushing your branch.
+
+- **Wait for the reviewer** — the TL will spawn a reviewer who will contact you directly with feedback.
+- **On `CHANGES_NEEDED`** — fix the issues, push to the same branch, and reply to the reviewer directly.
+- **On `APPROVED`** — the reviewer will write `review.md` and exit. The TL handles PR creation from here. Wait for the TL to send you a `shutdown_request`.
+- **Only exit on `shutdown_request`** — respond with `shutdown_response` with `approve: true` when FC sends the shutdown signal. Do not exit early.
+
+Being idle while waiting for review feedback is normal. FC's idle/stuck detection distinguishes between waiting and genuinely stuck.
 
 ## Adapting to Any Stack
 

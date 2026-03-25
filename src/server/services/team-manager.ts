@@ -1865,16 +1865,19 @@ export class TeamManager {
       fs.copyFileSync(workflowSrc, workflowDest);
     }
 
-    // ── 6. Ensure plan.md is gitignored ──
+    // ── 6. Ensure plan.md and review.md are gitignored ──
     const gitignorePath = path.join(worktreeAbsPath, '.gitignore');
     let gitignoreContent = '';
     if (fs.existsSync(gitignorePath)) {
       gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8');
     }
     const lines = gitignoreContent.split('\n').map(l => l.trim());
-    if (!lines.includes('plan.md')) {
+    const toAdd: string[] = [];
+    if (!lines.includes('plan.md')) toAdd.push('plan.md');
+    if (!lines.includes('review.md')) toAdd.push('review.md');
+    if (toAdd.length > 0) {
       const suffix = gitignoreContent.length > 0 && !gitignoreContent.endsWith('\n') ? '\n' : '';
-      fs.writeFileSync(gitignorePath, gitignoreContent + suffix + 'plan.md\n', 'utf-8');
+      fs.writeFileSync(gitignorePath, gitignoreContent + suffix + toAdd.join('\n') + '\n', 'utf-8');
     }
 
     console.log(`[TeamManager] FC files copied to worktree (hooks, settings, agents, guides, prompt)`);
