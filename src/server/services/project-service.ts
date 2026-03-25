@@ -568,6 +568,81 @@ const _minimalLogger = {
 } as any;
 
 // ---------------------------------------------------------------------------
+// Readiness evaluation (pure function, no side effects)
+// ---------------------------------------------------------------------------
+
+/**
+ * Evaluate project readiness for launching teams from an InstallStatus.
+ * Pure function — no DB or filesystem access — suitable for unit testing.
+ */
+export function evaluateProjectReadiness(status: InstallStatus): ProjectReadiness {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  // Blocking: hooks not installed (distinguish CRLF issue from missing hooks)
+  if (!status.hooks.installed) {
+    const hasCrlf = status.hooks.files.some((f) => f.hasCrlf);
+    if (hasCrlf) {
+      errors.push('Hook scripts have CRLF line endings — reinstall to fix');
+    } else {
+      errors.push(
+        `Hooks not installed (${status.hooks.found}/${status.hooks.total} found)`,
+      );
+    }
+  }
+
+  // Blocking: prompt file not installed
+  if (!status.prompt.installed) {
+    errors.push('Prompt file not installed');
+  }
+
+  // Blocking: agent files not installed
+  if (!status.agents.installed) {
+    errors.push('Agent files not installed');
+  }
+
+  // Blocking: settings.json not installed
+  if (!status.settings.exists) {
+    errors.push('Settings file (settings.json) not installed');
+  }
+
+  // Blocking: .claude/ in .gitignore
+  if (status.gitCommitStatus?.gitignored) {
+    errors.push('.claude/ is in .gitignore — files will not be available on branches');
+  }
+
+  // Blocking: git commit health is red (files not committed)
+  if (
+    status.gitCommitStatus?.health === 'red' &&
+    !status.gitCommitStatus.gitignored // already covered above
+  ) {
+    errors.push(
+      `Git commit check failed: ${status.gitCommitStatus.message}`,
+    );
+  }
+
+  // Blocking: outdated files (version mismatch)
+  if (status.outdatedCount > 0) {
+    errors.push(
+      `${status.outdatedCount} installed file(s) are outdated — reinstall to update`,
+    );
+  }
+
+  // Blocking: git commit health is amber (outdated on branch)
+  if (status.gitCommitStatus?.health === 'amber') {
+    errors.push(
+      `Git commit check: ${status.gitCommitStatus.message}`,
+    );
+  }
+
+  return {
+    ready: errors.length === 0,
+    warnings,
+    errors,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
 
@@ -626,60 +701,7 @@ export class ProjectService {
     }
 
     const status = checkInstallStatus(project.repoPath);
-    const errors: string[] = [];
-    const warnings: string[] = [];
-
-    // Blocking: hooks not installed
-    if (!status.hooks.installed) {
-      errors.push(
-        `Hooks not installed (${status.hooks.found}/${status.hooks.total} found)`,
-      );
-    }
-
-    // Blocking: prompt file not installed
-    if (!status.prompt.installed) {
-      errors.push('Prompt file not installed');
-    }
-
-    // Blocking: agent files not installed
-    if (!status.agents.installed) {
-      errors.push('Agent files not installed');
-    }
-
-    // Blocking: .claude/ in .gitignore
-    if (status.gitCommitStatus?.gitignored) {
-      errors.push('.claude/ is in .gitignore — files will not be available on branches');
-    }
-
-    // Blocking: git commit health is red (files not committed)
-    if (
-      status.gitCommitStatus?.health === 'red' &&
-      !status.gitCommitStatus.gitignored // already covered above
-    ) {
-      errors.push(
-        `Git commit check failed: ${status.gitCommitStatus.message}`,
-      );
-    }
-
-    // Warning: outdated files
-    if (status.outdatedCount > 0) {
-      warnings.push(
-        `${status.outdatedCount} installed file(s) are outdated — consider reinstalling`,
-      );
-    }
-
-    // Warning: git commit health is amber (outdated on branch)
-    if (status.gitCommitStatus?.health === 'amber') {
-      warnings.push(
-        `Git commit check: ${status.gitCommitStatus.message}`,
-      );
-    }
-
-    return {
-      ready: errors.length === 0,
-      warnings,
-      errors,
-    };
+    return evaluateProjectReadiness(status);
   }
 
   /**

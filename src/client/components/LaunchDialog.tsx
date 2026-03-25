@@ -73,13 +73,21 @@ function computeProjectReadiness(status: InstallStatus | undefined): ClientProje
   const warnings: string[] = [];
 
   if (!status.hooks.installed) {
-    errors.push(`Hooks not installed (${status.hooks.found}/${status.hooks.total})`);
+    const hasCrlf = status.hooks.files.some((f) => f.hasCrlf);
+    if (hasCrlf) {
+      errors.push('Hook scripts have CRLF line endings — reinstall to fix');
+    } else {
+      errors.push(`Hooks not installed (${status.hooks.found}/${status.hooks.total})`);
+    }
   }
   if (!status.prompt.installed) {
     errors.push('Prompt file not installed');
   }
   if (!status.agents.installed) {
     errors.push('Agent files not installed');
+  }
+  if (!status.settings?.exists) {
+    errors.push('Settings file not installed');
   }
   if (status.gitCommitStatus?.gitignored) {
     errors.push('.claude/ is in .gitignore');
@@ -92,10 +100,10 @@ function computeProjectReadiness(status: InstallStatus | undefined): ClientProje
   }
 
   if (status.outdatedCount > 0) {
-    warnings.push(`${status.outdatedCount} file(s) outdated`);
+    errors.push(`${status.outdatedCount} file(s) outdated — reinstall to update`);
   }
   if (status.gitCommitStatus?.health === 'amber') {
-    warnings.push('Committed files are outdated');
+    errors.push('Committed files are outdated');
   }
 
   const health: ProjectHealth =
