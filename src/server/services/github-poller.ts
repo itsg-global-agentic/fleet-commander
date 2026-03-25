@@ -203,9 +203,8 @@ class GitHubPoller {
           }
 
           if (team.prNumber) {
-            await this.pollPR(team.prNumber, team.id, githubRepo);
+            const pr = await this.pollPR(team.prNumber, team.id, githubRepo);
             // Fast-poll when CI is pending
-            const pr = db.getPullRequest(team.prNumber);
             if (pr && (pr.ciStatus === 'pending' || pr.state === 'open')) {
               wantFast = true;
             }
@@ -236,20 +235,20 @@ class GitHubPoller {
   // Private: poll an existing PR
   // -------------------------------------------------------------------------
 
-  private async pollPR(prNumber: number, teamId: number, githubRepo: string): Promise<void> {
+  private async pollPR(prNumber: number, teamId: number, githubRepo: string): Promise<{ ciStatus: CIStatus; state: PRState } | null> {
     // Use gh pr view to get PR status, CI checks, merge state, and auto-merge
     const result = await execGHAsync(
       `gh pr view ${prNumber} --repo ${githubRepo} ` +
         `--json number,title,state,mergeStateStatus,statusCheckRollup,autoMergeRequest,headRefName,mergedAt`
     );
-    if (!result) return; // gh CLI failed — skip this cycle
+    if (!result) return null; // gh CLI failed — skip this cycle
 
     let data: GHPRViewResult;
     try {
       data = JSON.parse(result);
     } catch {
       console.error(`[GitHubPoller] Failed to parse gh output for PR #${prNumber}`);
-      return;
+      return null;
     }
 
     const db = getDatabase();
@@ -509,6 +508,8 @@ class GitHubPoller {
         }
       }
     }
+
+    return { ciStatus, state };
   }
 
   // -------------------------------------------------------------------------
