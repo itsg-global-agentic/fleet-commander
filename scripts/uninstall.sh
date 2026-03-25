@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Fleet Commander Uninstaller
 # Removes hook scripts, cleans settings.json, removes workflow prompt,
 # and removes Fleet Commander agent templates from a target repo's .claude directory.
@@ -11,6 +12,11 @@
 # Ensure standard Unix tools are on PATH — when Git Bash's usr/bin/bash.exe
 # is invoked directly (not via git-bash.exe), /usr/bin may be missing.
 export PATH="/usr/bin:/bin:$PATH"
+
+# ── Validate required dependencies ────────────────────────────────
+for cmd in git node; do
+  command -v "$cmd" >/dev/null 2>&1 || { echo "Error: $cmd not found. Please install $cmd and ensure it is on your PATH." >&2; exit 1; }
+done
 
 TARGET="${1:-$(git rev-parse --show-toplevel 2>/dev/null || echo "")}"
 if [ -z "$TARGET" ]; then

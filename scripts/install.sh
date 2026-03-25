@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 # Fleet Commander Installer
 # Installs hook scripts, merges settings.json, deploys workflow prompt,
 # and copies agent templates into a target repo's .claude directory.
@@ -9,6 +10,11 @@
 # Ensure standard Unix tools are on PATH — when Git Bash's usr/bin/bash.exe
 # is invoked directly (not via git-bash.exe), /usr/bin may be missing.
 export PATH="/usr/bin:/bin:$PATH"
+
+# ── Validate required dependencies ────────────────────────────────
+for cmd in git node sed; do
+  command -v "$cmd" >/dev/null 2>&1 || { echo "Error: $cmd not found. Please install $cmd and ensure it is on your PATH." >&2; exit 1; }
+done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FC_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
