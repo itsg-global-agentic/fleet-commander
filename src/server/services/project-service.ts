@@ -35,6 +35,45 @@ function normalizePath(p: string): string {
 }
 
 /**
+ * Validate a raw repo path for safety and existence.
+ *
+ * Checks:
+ * 1. Input must be a non-empty string.
+ * 2. Rejects path traversal sequences (`..` as a standalone path segment).
+ * 3. Resolved path must exist and be a directory.
+ *
+ * @param rawPath - The raw user-supplied repoPath string
+ * @returns The resolved, forward-slash-normalized absolute path
+ * @throws ServiceError (VALIDATION / 400) on any check failure
+ */
+export function validateRepoPath(rawPath: string): string {
+  if (!rawPath || typeof rawPath !== 'string' || rawPath.trim().length === 0) {
+    throw validationError('repoPath is required and must be a non-empty string');
+  }
+
+  // Reject path traversal: `..` as a standalone path segment
+  // Matches `..` at start, end, or between path separators (/ or \)
+  // Does NOT match `..` embedded in names like `my..project`
+  if (/(?:^|[\\/])\.\.(?:[\\/]|$)/.test(rawPath)) {
+    throw validationError('repoPath must not contain path traversal sequences (..)');
+  }
+
+  const resolved = normalizePath(rawPath);
+
+  try {
+    const stat = fs.statSync(resolved);
+    if (!stat.isDirectory()) {
+      throw validationError(`Path is not a directory: ${resolved}`);
+    }
+  } catch (err: unknown) {
+    if (err instanceof ServiceError) throw err;
+    throw validationError(`Path does not exist: ${resolved}`);
+  }
+
+  return resolved;
+}
+
+/**
  * Check if a directory is a git repository (async to avoid blocking event loop).
  */
 async function isGitRepo(dirPath: string): Promise<boolean> {
@@ -728,16 +767,8 @@ export class ProjectService {
       throw validationError('name is required and must be a non-empty string');
     }
 
-    // Validate repoPath
-    if (!repoPath || typeof repoPath !== 'string' || repoPath.trim().length === 0) {
-      throw validationError('repoPath is required and must be a non-empty string');
-    }
-
-    const normalizedPath = normalizePath(repoPath);
-
-    if (!fs.existsSync(normalizedPath)) {
-      throw validationError(`Path does not exist: ${normalizedPath}`);
-    }
+    // Validate repoPath (traversal, existence, directory check)
+    const normalizedPath = validateRepoPath(repoPath);
 
     if (!(await isGitRepo(normalizedPath))) {
       throw validationError(`Path is not a git repository: ${normalizedPath}`);
