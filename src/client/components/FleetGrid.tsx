@@ -1,5 +1,7 @@
+import { useCallback } from 'react';
 import type { TeamDashboardRow } from '../../shared/types';
 import { TeamRow } from './TeamRow';
+import { useThinking } from '../context/FleetContext';
 
 interface FleetGridProps {
   teams: TeamDashboardRow[];
@@ -10,6 +12,13 @@ interface FleetGridProps {
 const COLUMNS = ['Status', 'Project', 'Issue', 'Model', 'Duration', 'Activity', 'Tokens', 'PR', 'Actions'] as const;
 
 export function FleetGrid({ teams, selectedTeamId, onSelectTeam }: FleetGridProps) {
+  const { isThinking } = useThinking();
+
+  // Single stable callback reference — TeamRow calls onSelect(team.id) internally
+  const handleSelectTeam = useCallback((teamId: number) => {
+    onSelectTeam(teamId);
+  }, [onSelectTeam]);
+
   return (
     <div className="w-full overflow-x-auto">
       <table className="w-full table-auto">
@@ -31,7 +40,8 @@ export function FleetGrid({ teams, selectedTeamId, onSelectTeam }: FleetGridProp
               key={team.id}
               team={team}
               selected={selectedTeamId === team.id}
-              onClick={() => onSelectTeam(team.id)}
+              isThinking={isThinking(team.id)}
+              onSelect={handleSelectTeam}
             />
           ))}
         </tbody>

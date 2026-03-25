@@ -2,22 +2,44 @@ import { createContext, useContext, useState, useCallback, useEffect, useMemo, u
 import { useSSE } from '../hooks/useSSE';
 import type { TeamDashboardRow } from '../../shared/types';
 
-interface FleetContextValue {
+// =============================================================================
+// Context value interfaces — each context holds a narrow slice of state
+// =============================================================================
+
+interface TeamsContextValue {
   teams: TeamDashboardRow[];
+}
+
+interface SelectionContextValue {
   selectedTeamId: number | null;
   setSelectedTeamId: (id: number | null) => void;
+}
+
+interface ConnectionContextValue {
   connected: boolean;
   lastEvent: Date | null;
-  /** The team_id from the most recent SSE event, or null for non-team events */
   lastEventTeamId: number | null;
-  /** Check whether a team is currently in extended thinking */
+}
+
+interface ThinkingContextValue {
   isThinking: (teamId: number) => boolean;
 }
 
-const FleetContext = createContext<FleetContextValue | null>(null);
+// =============================================================================
+// Create the four independent contexts
+// =============================================================================
+
+const TeamsContext = createContext<TeamsContextValue | null>(null);
+const SelectionContext = createContext<SelectionContextValue | null>(null);
+const ConnectionContext = createContext<ConnectionContextValue | null>(null);
+const ThinkingContext = createContext<ThinkingContextValue | null>(null);
 
 /** Periodic fallback refresh interval (ms) — guards against missed SSE snapshots */
 const FALLBACK_REFRESH_MS = 45_000;
+
+// =============================================================================
+// Provider — single component that provides all four contexts
+// =============================================================================
 
 export function FleetProvider({ children }: { children: ReactNode }) {
   const [teams, setTeams] = useState<TeamDashboardRow[]>([]);
@@ -59,26 +81,73 @@ export function FleetProvider({ children }: { children: ReactNode }) {
       if (Array.isArray(payload.teams)) {
         setTeams(payload.teams);
       }
-    } else if (
-      type === 'team_status_changed' ||
-      type === 'team_launched' ||
-      type === 'team_stopped'
-    ) {
-      // Incremental team change — re-fetch team list so grid stays current
-      // even if the server's follow-up snapshot is missed (e.g., reconnect race)
+    } else if (type === 'team_status_changed') {
+      // C7: Incremental update — parse payload and update the single affected team locally
+      const payload = data as {
+        team_id?: number;
+        status?: string;
+        previous_status?: string;
+        phase?: string;
+        previous_phase?: string;
+        tokens?: { input?: number; output?: number; cache_creation?: number; cache_read?: number };
+        idle_minutes?: number;
+      };
+      if (typeof payload.team_id === 'number') {
+        setTeams(prev => prev.map(team => {
+          if (team.id !== payload.team_id) return team;
+          const updated = { ...team };
+          if (typeof payload.status === 'string') {
+            updated.status = payload.status as TeamDashboardRow['status'];
+          }
+          if (typeof payload.phase === 'string') {
+            updated.phase = payload.phase as TeamDashboardRow['phase'];
+          }
+          if (payload.tokens) {
+            if (typeof payload.tokens.input === 'number') updated.totalInputTokens = payload.tokens.input;
+            if (typeof payload.tokens.output === 'number') updated.totalOutputTokens = payload.tokens.output;
+            if (typeof payload.tokens.cache_creation === 'number') updated.totalCacheCreationTokens = payload.tokens.cache_creation;
+            if (typeof payload.tokens.cache_read === 'number') updated.totalCacheReadTokens = payload.tokens.cache_read;
+          }
+          if (typeof payload.idle_minutes === 'number') {
+            updated.idleMin = payload.idle_minutes;
+          }
+          updated.lastEventAt = new Date().toISOString();
+          return updated;
+        }));
+      }
+    } else if (type === 'team_launched') {
+      // Insufficient payload for local update — full refetch
+      debouncedFetchTeams();
+    } else if (type === 'team_stopped') {
+      // Insufficient payload for local update — full refetch
       debouncedFetchTeams();
 
       // Clear thinking state when a team stops (safety net)
-      if (type === 'team_stopped') {
-        const payload = data as { team_id?: number };
-        if (typeof payload.team_id === 'number' && thinkingTeamIdsRef.current.has(payload.team_id)) {
-          thinkingTeamIdsRef.current.delete(payload.team_id);
-          forceThinkingUpdate((n) => n + 1);
-        }
+      const payload = data as { team_id?: number };
+      if (typeof payload.team_id === 'number' && thinkingTeamIdsRef.current.has(payload.team_id)) {
+        thinkingTeamIdsRef.current.delete(payload.team_id);
+        forceThinkingUpdate((n) => n + 1);
       }
-    } else if (type === 'usage_updated' || type === 'pr_updated') {
-      // Usage or PR data changed — refresh teams to pick up any related state changes.
-      debouncedFetchTeams();
+    } else if (type === 'pr_updated') {
+      // C7: Incremental update — parse payload and update affected team locally
+      const payload = data as {
+        team_id?: number;
+        pr_number?: number;
+        pr_state?: string;
+        ci_status?: string;
+        merge_status?: string;
+      };
+      if (typeof payload.team_id === 'number') {
+        setTeams(prev => prev.map(team => {
+          if (team.id !== payload.team_id) return team;
+          const updated = { ...team };
+          if (typeof payload.pr_number === 'number') updated.prNumber = payload.pr_number;
+          if (typeof payload.pr_state === 'string') updated.prState = payload.pr_state as TeamDashboardRow['prState'];
+          if (typeof payload.ci_status === 'string') updated.ciStatus = payload.ci_status as TeamDashboardRow['ciStatus'];
+          if (typeof payload.merge_status === 'string') updated.mergeStatus = payload.merge_status as TeamDashboardRow['mergeStatus'];
+          return updated;
+        }));
+      }
     } else if (type === 'team_thinking_start') {
       const payload = data as { team_id?: number };
       if (typeof payload.team_id === 'number') {
@@ -92,6 +161,7 @@ export function FleetProvider({ children }: { children: ReactNode }) {
         forceThinkingUpdate((n) => n + 1);
       }
     }
+    // usage_updated: no longer triggers team list refetch (C7)
   }, [debouncedFetchTeams]);
 
   const { connected, lastEvent, lastEventTeamId } = useSSE({ onEvent: handleSSEEvent });
@@ -120,7 +190,93 @@ export function FleetProvider({ children }: { children: ReactNode }) {
     return thinkingTeamIdsRef.current.has(teamId);
   }, []);
 
-  const value = useMemo<FleetContextValue>(() => ({
+  // Memoize each context value independently so consumers only re-render
+  // when their specific slice changes.
+  const teamsValue = useMemo<TeamsContextValue>(() => ({
+    teams,
+  }), [teams]);
+
+  const selectionValue = useMemo<SelectionContextValue>(() => ({
+    selectedTeamId,
+    setSelectedTeamId,
+  }), [selectedTeamId]);
+
+  const connectionValue = useMemo<ConnectionContextValue>(() => ({
+    connected,
+    lastEvent,
+    lastEventTeamId,
+  }), [connected, lastEvent, lastEventTeamId]);
+
+  const thinkingValue = useMemo<ThinkingContextValue>(() => ({
+    isThinking,
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- thinkingVersion forces recompute so consumers re-render on thinking state changes
+  }), [isThinking, thinkingVersion]);
+
+  return (
+    <TeamsContext.Provider value={teamsValue}>
+      <SelectionContext.Provider value={selectionValue}>
+        <ConnectionContext.Provider value={connectionValue}>
+          <ThinkingContext.Provider value={thinkingValue}>
+            {children}
+          </ThinkingContext.Provider>
+        </ConnectionContext.Provider>
+      </SelectionContext.Provider>
+    </TeamsContext.Provider>
+  );
+}
+
+// =============================================================================
+// Targeted hooks — consumers subscribe only to the data they need
+// =============================================================================
+
+/** Access the teams list only */
+export function useTeams(): TeamsContextValue {
+  const ctx = useContext(TeamsContext);
+  if (!ctx) {
+    throw new Error('useTeams must be used within a FleetProvider');
+  }
+  return ctx;
+}
+
+/** Access selection state only */
+export function useSelection(): SelectionContextValue {
+  const ctx = useContext(SelectionContext);
+  if (!ctx) {
+    throw new Error('useSelection must be used within a FleetProvider');
+  }
+  return ctx;
+}
+
+/** Access SSE connection state only */
+export function useConnection(): ConnectionContextValue {
+  const ctx = useContext(ConnectionContext);
+  if (!ctx) {
+    throw new Error('useConnection must be used within a FleetProvider');
+  }
+  return ctx;
+}
+
+/** Access thinking state only */
+export function useThinking(): ThinkingContextValue {
+  const ctx = useContext(ThinkingContext);
+  if (!ctx) {
+    throw new Error('useThinking must be used within a FleetProvider');
+  }
+  return ctx;
+}
+
+// =============================================================================
+// Backwards-compatible facade — works for unmigrated consumers
+// =============================================================================
+
+/** @deprecated Use useTeams(), useSelection(), useConnection(), or useThinking() instead */
+export function useFleet() {
+  const { teams } = useTeams();
+  const { selectedTeamId, setSelectedTeamId } = useSelection();
+  const { connected, lastEvent, lastEventTeamId } = useConnection();
+  const { isThinking } = useThinking();
+
+  return {
     teams,
     selectedTeamId,
     setSelectedTeamId,
@@ -128,20 +284,5 @@ export function FleetProvider({ children }: { children: ReactNode }) {
     lastEvent,
     lastEventTeamId,
     isThinking,
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- thinkingVersion forces recompute so consumers re-render on thinking state changes
-  }), [teams, selectedTeamId, connected, lastEvent, lastEventTeamId, isThinking, thinkingVersion]);
-
-  return (
-    <FleetContext.Provider value={value}>
-      {children}
-    </FleetContext.Provider>
-  );
-}
-
-export function useFleet(): FleetContextValue {
-  const ctx = useContext(FleetContext);
-  if (!ctx) {
-    throw new Error('useFleet must be used within a FleetProvider');
-  }
-  return ctx;
+  };
 }

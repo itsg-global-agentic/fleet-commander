@@ -1,9 +1,8 @@
+import { memo, useState } from 'react';
 import type { TeamDashboardRow } from '../../shared/types';
 import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
 import { useApi } from '../hooks/useApi';
-import { useFleet } from '../context/FleetContext';
-import { useState } from 'react';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -32,21 +31,55 @@ function formatTokens(count: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Component
+// Props & equality comparator
 // ---------------------------------------------------------------------------
 
 interface TeamRowProps {
   team: TeamDashboardRow;
   selected: boolean;
-  onClick: () => void;
+  isThinking: boolean;
+  onSelect: (teamId: number) => void;
 }
 
-export function TeamRow({ team, selected, onClick }: TeamRowProps) {
+/** Custom shallow equality for React.memo — only re-render when visible data changes */
+function areTeamRowPropsEqual(prev: TeamRowProps, next: TeamRowProps): boolean {
+  if (prev.selected !== next.selected) return false;
+  if (prev.isThinking !== next.isThinking) return false;
+  if (prev.onSelect !== next.onSelect) return false;
+
+  const a = prev.team;
+  const b = next.team;
+
+  return (
+    a.id === b.id &&
+    a.status === b.status &&
+    a.phase === b.phase &&
+    a.lastEventAt === b.lastEventAt &&
+    a.prNumber === b.prNumber &&
+    a.ciStatus === b.ciStatus &&
+    a.prState === b.prState &&
+    a.mergeStatus === b.mergeStatus &&
+    a.totalInputTokens === b.totalInputTokens &&
+    a.totalOutputTokens === b.totalOutputTokens &&
+    a.totalCacheCreationTokens === b.totalCacheCreationTokens &&
+    a.totalCacheReadTokens === b.totalCacheReadTokens &&
+    a.durationMin === b.durationMin &&
+    a.model === b.model &&
+    a.issueTitle === b.issueTitle &&
+    a.projectName === b.projectName &&
+    a.issueNumber === b.issueNumber &&
+    a.githubRepo === b.githubRepo
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
+
+export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamIsThinking, onSelect }: TeamRowProps) {
   const api = useApi();
-  const { isThinking } = useFleet();
   const [stopping, setStopping] = useState(false);
   const [forceLaunching, setForceLaunching] = useState(false);
-  const teamIsThinking = isThinking(team.id);
 
   const handleStop = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -74,12 +107,16 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
     }
   };
 
+  const handleClick = () => {
+    onSelect(team.id);
+  };
+
   const isActive = team.status === 'running' || team.status === 'stuck' || team.status === 'idle' || team.status === 'launching';
   const title = team.issueTitle ? truncate(team.issueTitle, 40) : 'Untitled';
 
   // Last activity — minutes since last event (skip for terminal teams)
   const isTerminal = team.status === 'done' || team.status === 'failed';
-  let activityLabel = '—';
+  let activityLabel = '\u2014';
   let activityColor = 'text-dark-muted';
   if (team.lastEventAt && !isTerminal) {
     const agoMs = Date.now() - new Date(team.lastEventAt).getTime();
@@ -101,7 +138,7 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
 
   return (
     <tr
-      onClick={onClick}
+      onClick={handleClick}
       className={`h-16 border-b border-dark-border cursor-pointer transition-colors group ${
         selected
           ? 'bg-dark-accent/10'
@@ -202,4 +239,4 @@ export function TeamRow({ team, selected, onClick }: TeamRowProps) {
       </td>
     </tr>
   );
-}
+}, areTeamRowPropsEqual);

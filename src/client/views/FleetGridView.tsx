@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useFleet } from '../context/FleetContext';
+import { useTeams, useSelection } from '../context/FleetContext';
 import { FleetGrid } from '../components/FleetGrid';
 import { TeamTimeline } from '../components/TeamTimeline';
 import type { TeamDashboardRow, TeamStatus } from '../../shared/types';
@@ -35,7 +35,8 @@ function sortTeams(teams: TeamDashboardRow[]): TeamDashboardRow[] {
 }
 
 export function FleetGridView() {
-  const { teams, selectedTeamId, setSelectedTeamId } = useFleet();
+  const { teams } = useTeams();
+  const { selectedTeamId, setSelectedTeamId } = useSelection();
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
 
   const sortedTeams = useMemo(() => sortTeams(teams), [teams]);

@@ -15,8 +15,10 @@ let mockSelectedTeamId: number | null = null;
 const mockSetSelectedTeamId = vi.fn();
 
 vi.mock('../../src/client/context/FleetContext', () => ({
-  useFleet: () => ({
+  useTeams: () => ({
     teams: mockTeams,
+  }),
+  useSelection: () => ({
     selectedTeamId: mockSelectedTeamId,
     setSelectedTeamId: mockSetSelectedTeamId,
   }),
