@@ -79,6 +79,8 @@ export class IssueService {
     groups: Array<{
       projectId: number;
       projectName: string;
+      groupId: number | null;
+      groupName: string | null;
       tree: IssueNode[];
       cachedAt: string | null;
       count: number;
@@ -93,9 +95,13 @@ export class IssueService {
     const groups = await Promise.all(projectCaches.map(async (entry) => {
       const project = db.getProject(entry.projectId);
       const enriched = fetcher.enrichWithTeamInfo(entry.tree, entry.projectId);
+      const groupId = project?.groupId ?? null;
+      const group = groupId != null ? db.getProjectGroup(groupId) : undefined;
       return {
         projectId: entry.projectId,
         projectName: project?.name ?? `Project #${entry.projectId}`,
+        groupId,
+        groupName: group?.name ?? null,
         tree: enriched,
         cachedAt: entry.cachedAt,
         count: countIssues(enriched),
