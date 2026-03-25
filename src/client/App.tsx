@@ -11,6 +11,7 @@ import { UsageViewPage } from './views/UsageViewPage';
 import { ProjectsPage } from './views/ProjectsPage';
 import { SettingsPage } from './views/SettingsPage';
 import { StateMachinePage } from './views/StateMachinePage';
+import { FetchErrorBanner } from './components/FetchErrorBanner';
 
 export function App() {
   return (
@@ -28,6 +29,7 @@ export function App() {
 
               {/* Main content area — fills remaining space */}
               <main className="flex-1 min-w-0 overflow-auto">
+                <FetchErrorBanner />
                 <Routes>
                   <Route path="/" element={<FleetGridView />} />
                   <Route path="/issues" element={<IssueTreeView />} />

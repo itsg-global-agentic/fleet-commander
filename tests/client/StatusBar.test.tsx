@@ -12,11 +12,16 @@ import '@testing-library/jest-dom';
 
 let mockConnected = true;
 let mockLastEvent: Date | null = null;
+let mockFetchError: string | null = null;
 
 vi.mock('../../src/client/context/FleetContext', () => ({
   useConnection: () => ({
     connected: mockConnected,
     lastEvent: mockLastEvent,
+  }),
+  useTeams: () => ({
+    teams: [],
+    fetchError: mockFetchError,
   }),
 }));
 
@@ -31,6 +36,7 @@ describe('StatusBar', () => {
   beforeEach(() => {
     mockConnected = true;
     mockLastEvent = null;
+    mockFetchError = null;
   });
 
   afterEach(() => {
@@ -71,5 +77,16 @@ describe('StatusBar', () => {
     mockLastEvent = new Date('2026-03-21T10:00:00Z');
     render(<StatusBar />);
     expect(screen.getByText('Last update: 10s ago')).toBeInTheDocument();
+  });
+
+  it('does not show "Stale" when fetchError is null', () => {
+    render(<StatusBar />);
+    expect(screen.queryByText('Stale')).not.toBeInTheDocument();
+  });
+
+  it('shows "Stale" when fetchError is set', () => {
+    mockFetchError = 'Server error: 500 Internal Server Error';
+    render(<StatusBar />);
+    expect(screen.getByText('Stale')).toBeInTheDocument();
   });
 });

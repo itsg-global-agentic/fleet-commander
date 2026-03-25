@@ -8,6 +8,7 @@ import type { TeamDashboardRow } from '../../shared/types';
 
 interface TeamsContextValue {
   teams: TeamDashboardRow[];
+  fetchError: string | null;
 }
 
 interface SelectionContextValue {
@@ -43,8 +44,10 @@ const FALLBACK_REFRESH_MS = 45_000;
 
 export function FleetProvider({ children }: { children: ReactNode }) {
   const [teams, setTeams] = useState<TeamDashboardRow[]>([]);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
   const fetchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fetchFailCountRef = useRef(0);
   const thinkingTeamIdsRef = useRef<Set<number>>(new Set());
   const [thinkingVersion, forceThinkingUpdate] = useState(0);
 
@@ -54,14 +57,24 @@ export function FleetProvider({ children }: { children: ReactNode }) {
   const fetchTeams = useCallback(async () => {
     try {
       const res = await fetch('/api/teams');
-      if (res.ok) {
-        const json = await res.json();
-        // Handle paginated response envelope { data, total, limit, offset }
-        const rows = (Array.isArray(json) ? json : json.data) as TeamDashboardRow[];
-        setTeams(rows);
+      if (!res.ok) {
+        fetchFailCountRef.current += 1;
+        if (fetchFailCountRef.current >= 2) {
+          setFetchError(`Server error: ${res.status} ${res.statusText}`);
+        }
+        return;
       }
-    } catch {
-      // Network error — will be retried on next event or periodic refresh
+      const json = await res.json();
+      // Handle paginated response envelope { data, total, limit, offset }
+      const rows = (Array.isArray(json) ? json : json.data) as TeamDashboardRow[];
+      setTeams(rows);
+      fetchFailCountRef.current = 0;
+      setFetchError(null);
+    } catch (err: unknown) {
+      fetchFailCountRef.current += 1;
+      if (fetchFailCountRef.current >= 2) {
+        setFetchError(err instanceof Error ? err.message : 'Network error');
+      }
     }
   }, []);
 
@@ -82,6 +95,8 @@ export function FleetProvider({ children }: { children: ReactNode }) {
       const payload = data as { teams?: TeamDashboardRow[] };
       if (Array.isArray(payload.teams)) {
         setTeams(payload.teams);
+        fetchFailCountRef.current = 0;
+        setFetchError(null);
       }
     } else if (type === 'team_status_changed') {
       // C7: Incremental update — parse payload and update the single affected team locally
@@ -196,7 +211,8 @@ export function FleetProvider({ children }: { children: ReactNode }) {
   // when their specific slice changes.
   const teamsValue = useMemo<TeamsContextValue>(() => ({
     teams,
-  }), [teams]);
+    fetchError,
+  }), [teams, fetchError]);
 
   const selectionValue = useMemo<SelectionContextValue>(() => ({
     selectedTeamId,

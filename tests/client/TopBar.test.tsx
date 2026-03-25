@@ -17,6 +17,7 @@ let mockTeams: TeamDashboardRow[] = [];
 vi.mock('../../src/client/context/FleetContext', () => ({
   useTeams: () => ({
     teams: mockTeams,
+    fetchError: null,
   }),
 }));
 

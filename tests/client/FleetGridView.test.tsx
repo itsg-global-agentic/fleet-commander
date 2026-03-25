@@ -17,6 +17,7 @@ const mockSetSelectedTeamId = vi.fn();
 vi.mock('../../src/client/context/FleetContext', () => ({
   useTeams: () => ({
     teams: mockTeams,
+    fetchError: null,
   }),
   useSelection: () => ({
     selectedTeamId: mockSelectedTeamId,

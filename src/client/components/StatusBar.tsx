@@ -1,8 +1,9 @@
-import { useConnection } from '../context/FleetContext';
+import { useConnection, useTeams } from '../context/FleetContext';
 import { useEffect, useState } from 'react';
 
 export function StatusBar() {
   const { connected, lastEvent } = useConnection();
+  const { fetchError } = useTeams();
   const [secondsAgo, setSecondsAgo] = useState<number | null>(null);
   const [version, setVersion] = useState<string | null>(null);
 
@@ -40,6 +41,11 @@ export function StatusBar() {
         }`}
       />
       <span>{connected ? 'Connected' : 'Disconnected'}</span>
+      {fetchError && (
+        <span className="ml-3" style={{ color: '#F0C674' }}>
+          Stale
+        </span>
+      )}
       {secondsAgo !== null && (
         <span className="ml-4">
           Last update: {secondsAgo}s ago
