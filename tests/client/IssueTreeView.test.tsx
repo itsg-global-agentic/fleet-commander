@@ -534,4 +534,257 @@ describe('IssueTreeView', () => {
       });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Project group collapsible sections (Issue #441)
+  // -------------------------------------------------------------------------
+
+  it('renders project group headers when projects have groupId', async () => {
+    const issueA = { number: 10, title: 'Issue A', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueB = { number: 20, title: 'Issue B', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueC = { number: 30, title: 'Issue C', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issueA, issueB, issueC],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'frontend-app',
+              groupId: 100,
+              groupName: 'Frontend',
+              tree: [issueA],
+              cachedAt: null,
+              count: 1,
+            },
+            {
+              projectId: 2,
+              projectName: 'backend-api',
+              groupId: 200,
+              groupName: 'Backend',
+              tree: [issueB],
+              cachedAt: null,
+              count: 1,
+            },
+            {
+              projectId: 3,
+              projectName: 'misc-scripts',
+              groupId: null,
+              groupName: null,
+              tree: [issueC],
+              cachedAt: null,
+              count: 1,
+            },
+          ],
+          cachedAt: '2026-03-25T10:00:00Z',
+          count: 3,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      // Group headers should be rendered
+      expect(screen.getByText('Frontend')).toBeInTheDocument();
+      expect(screen.getByText('Backend')).toBeInTheDocument();
+      expect(screen.getByText('Ungrouped')).toBeInTheDocument();
+    });
+
+    // Project names should still be visible under their groups
+    expect(screen.getByText('frontend-app')).toBeInTheDocument();
+    expect(screen.getByText('backend-api')).toBeInTheDocument();
+    expect(screen.getByText('misc-scripts')).toBeInTheDocument();
+  });
+
+  it('does not render group headers when no projects have groupId', async () => {
+    const issueA = { number: 10, title: 'Issue A', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueB = { number: 20, title: 'Issue B', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issueA, issueB],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'project-alpha',
+              groupId: null,
+              groupName: null,
+              tree: [issueA],
+              cachedAt: null,
+              count: 1,
+            },
+            {
+              projectId: 2,
+              projectName: 'project-beta',
+              groupId: null,
+              groupName: null,
+              tree: [issueB],
+              cachedAt: null,
+              count: 1,
+            },
+          ],
+          cachedAt: '2026-03-25T10:00:00Z',
+          count: 2,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      // No "Ungrouped" header since no project has a groupId
+      expect(screen.queryByText('Ungrouped')).not.toBeInTheDocument();
+      // Projects should still be directly visible as project-level groups
+      expect(screen.getByText('project-alpha')).toBeInTheDocument();
+      expect(screen.getByText('project-beta')).toBeInTheDocument();
+    });
+  });
+
+  it('collapsing a project group hides its projects', async () => {
+    // Set up collapse state so group-100 is collapsed
+    const collapsedSet = new Set(['group-100']);
+    vi.mocked(mockToggleCollapse);
+
+    // Override useCollapseState to have group-100 collapsed
+    const useCollapseStateMod = await import('../../src/client/hooks/useCollapseState');
+    vi.spyOn(useCollapseStateMod, 'useCollapseState').mockReturnValue({
+      collapsedNodes: collapsedSet,
+      toggleCollapse: mockToggleCollapse,
+      expandAll: mockExpandAll,
+      collapseAll: mockCollapseAll,
+      isCollapsed: (id: string) => collapsedSet.has(id),
+    });
+
+    const issueA = { number: 10, title: 'Issue A', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueB = { number: 20, title: 'Issue B', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issueA, issueB],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'hidden-project',
+              groupId: 100,
+              groupName: 'Collapsed Group',
+              tree: [issueA],
+              cachedAt: null,
+              count: 1,
+            },
+            {
+              projectId: 2,
+              projectName: 'visible-project',
+              groupId: 200,
+              groupName: 'Open Group',
+              tree: [issueB],
+              cachedAt: null,
+              count: 1,
+            },
+          ],
+          cachedAt: '2026-03-25T10:00:00Z',
+          count: 2,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      // Both group headers should be visible
+      expect(screen.getByText('Collapsed Group')).toBeInTheDocument();
+      expect(screen.getByText('Open Group')).toBeInTheDocument();
+    });
+
+    // The collapsed group's project should NOT be visible
+    expect(screen.queryByText('hidden-project')).not.toBeInTheDocument();
+    // The open group's project SHOULD be visible
+    expect(screen.getByText('visible-project')).toBeInTheDocument();
+  });
+
+  it('collapseAll includes group bucket IDs when project groups are present', async () => {
+    const issueA = { number: 10, title: 'Issue A', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueB = { number: 20, title: 'Issue B', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issueA, issueB],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'frontend',
+              groupId: 100,
+              groupName: 'Frontend',
+              tree: [issueA],
+              cachedAt: null,
+              count: 1,
+            },
+            {
+              projectId: 2,
+              projectName: 'backend',
+              groupId: null,
+              groupName: null,
+              tree: [issueB],
+              cachedAt: null,
+              count: 1,
+            },
+          ],
+          cachedAt: '2026-03-25T10:00:00Z',
+          count: 2,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Collapse All')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Collapse All'));
+
+    // collapseAll should include group bucket IDs (group-100, group-ungrouped),
+    // project IDs (project-1, project-2), and issue IDs (10, 20)
+    expect(mockCollapseAll).toHaveBeenCalledWith(
+      expect.arrayContaining(['group-100', 'group-ungrouped', 'project-1', 'project-2', '10', '20']),
+    );
+  });
+
+  it('clicking a group header toggles the group collapse state', async () => {
+    const issueA = { number: 10, title: 'Issue A', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issueA],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'test-project',
+              groupId: 100,
+              groupName: 'My Group',
+              tree: [issueA],
+              cachedAt: null,
+              count: 1,
+            },
+          ],
+          cachedAt: '2026-03-25T10:00:00Z',
+          count: 1,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('My Group')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('My Group'));
+    expect(mockToggleCollapse).toHaveBeenCalledWith('group-100');
+  });
 });

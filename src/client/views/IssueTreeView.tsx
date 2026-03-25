@@ -29,9 +29,21 @@ const STATUS_FILTERS = [
 interface ProjectIssueGroup {
   projectId: number;
   projectName: string;
+  groupId: number | null;
+  groupName: string | null;
   tree: IssueNode[];
   cachedAt: string | null;
   count: number;
+}
+
+/** A top-level group of projects (for the project group collapsible level) */
+interface ProjectGroupBucket {
+  /** Unique key for collapse state — `group-{id}` or `group-ungrouped` */
+  key: string;
+  /** Display name for the group header */
+  name: string;
+  /** Projects within this group */
+  projects: ProjectIssueGroup[];
 }
 
 interface IssueTreeResponse {
@@ -380,14 +392,53 @@ export function IssueTreeView() {
       .filter((g) => g.tree.length > 0);
   }, [groups, search, statusFilter]);
 
+  // Group filtered project groups into top-level buckets by groupId
+  // Only creates buckets when there are multiple distinct groups (at least one project has a groupId)
+  const groupedBuckets = useMemo((): ProjectGroupBucket[] => {
+    if (filteredGroups.length === 0) return [];
+
+    // Check if any project has a groupId — if not, skip the grouping level entirely
+    const hasAnyGroupId = filteredGroups.some((g) => g.groupId != null);
+    if (!hasAnyGroupId) return [];
+
+    const bucketMap = new Map<string, ProjectGroupBucket>();
+    for (const pg of filteredGroups) {
+      const key = pg.groupId != null ? `group-${pg.groupId}` : 'group-ungrouped';
+      const name = pg.groupName ?? 'Ungrouped';
+      let bucket = bucketMap.get(key);
+      if (!bucket) {
+        bucket = { key, name, projects: [] };
+        bucketMap.set(key, bucket);
+      }
+      bucket.projects.push(pg);
+    }
+
+    // Sort alphabetically, with "Ungrouped" last
+    const buckets = [...bucketMap.values()].sort((a, b) => {
+      if (a.key === 'group-ungrouped') return 1;
+      if (b.key === 'group-ungrouped') return -1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return buckets;
+  }, [filteredGroups]);
+
   // Collect all node IDs from the full (unfiltered) tree for Collapse All
-  // Includes project group IDs (project-{id}) so Collapse All covers project groups too
+  // Includes group bucket IDs (group-{id}), project group IDs (project-{id}),
+  // and individual issue node IDs
   const allNodeIds = useMemo(() => {
     if (groups.length > 0) {
-      return groups.flatMap((g) => [
-        `project-${g.projectId}`,
-        ...collectAllNodeIds(g.tree),
-      ]);
+      const hasAnyGroupId = groups.some((g) => g.groupId != null);
+      const groupKeys = hasAnyGroupId
+        ? [...new Set(groups.map((g) => g.groupId != null ? `group-${g.groupId}` : 'group-ungrouped'))]
+        : [];
+      return [
+        ...groupKeys,
+        ...groups.flatMap((g) => [
+          `project-${g.projectId}`,
+          ...collectAllNodeIds(g.tree),
+        ]),
+      ];
     }
     return collectAllNodeIds(tree);
   }, [tree, groups]);
@@ -573,8 +624,25 @@ export function IssueTreeView() {
               Clear filters
             </button>
           </div>
+        ) : groupedBuckets.length > 0 ? (
+          /* Grouped view with project groups — group bucket > project > issues */
+          <div className="space-y-2">
+            {groupedBuckets.map((bucket) => (
+              <ProjectGroupSection
+                key={bucket.key}
+                bucket={bucket}
+                onLaunch={handleLaunch}
+                launchingIssues={launchingIssues}
+                launchErrors={launchErrors}
+                forceExpand={!!search || statusFilter !== 'all'}
+                fetchTree={fetchTree}
+                collapsedNodes={collapseState.collapsedNodes}
+                onToggleCollapse={collapseState.toggleCollapse}
+              />
+            ))}
+          </div>
         ) : filteredGroups.length > 0 ? (
-          /* Grouped view — each ProjectGroup has its own prioritization */
+          /* Multi-project view without group assignments — flat project groups */
           <div className="space-y-1">
             {filteredGroups.map((group) => (
               <ProjectGroup
@@ -927,6 +995,78 @@ function PrioritizationActionBar({ prioritization, projectId, api, fetchTree }: 
         <span className="text-xs text-dark-muted ml-auto">
           ${prioritization.costUsd.toFixed(4)} &middot; {((prioritization.durationMs ?? 0) / 1000).toFixed(1)}s
         </span>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ProjectGroupSection — top-level collapsible group of projects
+// ---------------------------------------------------------------------------
+
+interface ProjectGroupSectionProps {
+  bucket: ProjectGroupBucket;
+  onLaunch: (issueNumber: number, title: string, projectId?: number) => Promise<void>;
+  launchingIssues: Set<number>;
+  launchErrors: Map<number, string>;
+  forceExpand: boolean;
+  fetchTree: () => Promise<void>;
+  collapsedNodes: Set<string>;
+  onToggleCollapse: (nodeId: string) => void;
+}
+
+function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: ProjectGroupSectionProps) {
+  const expanded = !collapsedNodes.has(bucket.key);
+  const totalIssueCount = bucket.projects.reduce((sum, p) => sum + countNodes(p.tree), 0);
+
+  return (
+    <div>
+      {/* Group section header */}
+      <div className="flex items-center gap-2 py-2 px-2 rounded hover:bg-dark-surface/60 transition-colors">
+        <button
+          onClick={() => onToggleCollapse(bucket.key)}
+          className="flex items-center gap-2 flex-1 text-left min-w-0"
+        >
+          {/* Expand/collapse arrow */}
+          <span className={`w-4 h-4 flex items-center justify-center text-dark-muted shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}>
+            <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+          </span>
+          {/* Folder icon for group */}
+          <svg className="w-4 h-4 text-dark-accent/70 shrink-0" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z" />
+          </svg>
+          <span className="text-sm font-semibold text-dark-text truncate">
+            {bucket.name}
+          </span>
+          <span className="text-xs text-dark-muted shrink-0">
+            {bucket.projects.length} project{bucket.projects.length !== 1 ? 's' : ''}
+            {' \u00B7 '}
+            {totalIssueCount} issue{totalIssueCount !== 1 ? 's' : ''}
+          </span>
+        </button>
+      </div>
+
+      {/* Nested project groups */}
+      {expanded && (
+        <div className="ml-2 border-l border-dark-accent/20 pl-1">
+          <div className="space-y-1">
+            {bucket.projects.map((group) => (
+              <ProjectGroup
+                key={group.projectId}
+                group={group}
+                onLaunch={onLaunch}
+                launchingIssues={launchingIssues}
+                launchErrors={launchErrors}
+                forceExpand={forceExpand}
+                fetchTree={fetchTree}
+                collapsedNodes={collapsedNodes}
+                onToggleCollapse={onToggleCollapse}
+              />
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
