@@ -8,19 +8,12 @@
 import { getDatabase } from '../db.js';
 import { sseBroker } from './sse-broker.js';
 import { githubPoller } from './github-poller.js';
-import { execGHResult } from '../utils/exec-gh.js';
+import { execGHResult, isValidGithubRepo } from '../utils/exec-gh.js';
 import { ServiceError, notFoundError, validationError, externalError } from './service-error.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Validate a GitHub repo slug (owner/repo) to prevent injection */
-const GITHUB_REPO_RE = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
-
-function validateGithubRepo(repo: string): boolean {
-  return GITHUB_REPO_RE.test(repo);
-}
 
 /**
  * Resolve the github_repo for a PR by looking up the team's project.
@@ -49,7 +42,7 @@ function resolveGithubRepoForPR(prNumber: number): { githubRepo: string; teamId:
     );
   }
 
-  if (!validateGithubRepo(project.githubRepo)) {
+  if (!isValidGithubRepo(project.githubRepo)) {
     throw validationError(`Invalid GitHub repo slug: ${project.githubRepo}`);
   }
 
@@ -73,7 +66,7 @@ export class PRService {
     const { githubRepo, teamId } = resolveGithubRepoForPR(prNumber);
 
     const result = await execGHResult(
-      `gh pr merge ${prNumber} --auto --squash --repo ${githubRepo}`,
+      `gh pr merge ${prNumber} --auto --squash --repo "${githubRepo}"`,
     );
 
     if (!result.ok) {
@@ -121,7 +114,7 @@ export class PRService {
     const { githubRepo, teamId } = resolveGithubRepoForPR(prNumber);
 
     const result = await execGHResult(
-      `gh pr merge ${prNumber} --disable-auto --repo ${githubRepo}`,
+      `gh pr merge ${prNumber} --disable-auto --repo "${githubRepo}"`,
     );
 
     if (!result.ok) {
@@ -169,7 +162,7 @@ export class PRService {
     const { githubRepo, teamId } = resolveGithubRepoForPR(prNumber);
 
     const result = await execGHResult(
-      `gh api repos/${githubRepo}/pulls/${prNumber}/update-branch -X PUT`,
+      `gh api "repos/${githubRepo}/pulls/${prNumber}/update-branch" -X PUT`,
     );
 
     if (!result.ok) {

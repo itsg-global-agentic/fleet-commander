@@ -14,7 +14,7 @@ import { getIssueFetcher } from './issue-fetcher.js';
 import { sseBroker } from './sse-broker.js';
 import { installHooks, uninstallHooks } from '../utils/hook-installer.js';
 import config from '../config.js';
-import { execGitAsync, execGHAsync, execGHResult } from '../utils/exec-gh.js';
+import { execGitAsync, execGHAsync, execGHResult, isValidGithubRepo } from '../utils/exec-gh.js';
 import { execSync } from 'child_process';
 import type { ProjectStatus, InstallStatus, InstallFileStatus, RepoSettings, GitCommitStatus, GitCommitFileStatus, GitCommitHealth, ProjectReadiness } from '../../shared/types.js';
 import { ServiceError, validationError, notFoundError, conflictError } from './service-error.js';
@@ -118,10 +118,11 @@ function fileHasCrlf(filePath: string): boolean {
  */
 export async function checkRepoSettings(githubRepo: string | null | undefined): Promise<RepoSettings | undefined> {
   if (!githubRepo) return undefined;
+  if (!isValidGithubRepo(githubRepo)) return undefined;
 
   try {
     const repoJson = await execGHAsync(
-      `gh api repos/${githubRepo} --jq "{allow_auto_merge, default_branch}"`,
+      `gh api "repos/${githubRepo}" --jq "{allow_auto_merge, default_branch}"`,
       { timeout: 10_000 },
     );
 
@@ -140,7 +141,7 @@ export async function checkRepoSettings(githubRepo: string | null | undefined): 
 
     // Branch protection may not be configured — 404 is expected
     const protectionJson = await execGHAsync(
-      `gh api repos/${githubRepo}/branches/${defaultBranch}/protection --jq "{required_status_checks}"`,
+      `gh api "repos/${githubRepo}/branches/${defaultBranch}/protection" --jq "{required_status_checks}"`,
       { timeout: 10_000 },
     );
 

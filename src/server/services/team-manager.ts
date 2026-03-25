@@ -26,6 +26,7 @@ import { CircularBuffer } from '../utils/circular-buffer.js';
 import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile } from '../utils/fc-manifest.js';
 import { classifyAgentRole, shouldAdvancePhase } from './event-collector.js';
 import type { TeamPhase } from '../../shared/types.js';
+import { isValidGithubRepo } from '../utils/exec-gh.js';
 
 const execAsync = promisify(execCallback);
 
@@ -221,10 +222,10 @@ export class TeamManager {
     }
 
     // If no title provided, fetch from GitHub
-    if (!issueTitle && project.githubRepo) {
+    if (!issueTitle && project.githubRepo && isValidGithubRepo(project.githubRepo)) {
       try {
         const { stdout } = await execAsync(
-          `gh issue view ${issueNumber} --repo ${project.githubRepo} --json title --jq .title`,
+          `gh issue view ${issueNumber} --repo "${project.githubRepo}" --json title --jq .title`,
           { timeout: 10000 },
         );
         const result = stdout.trim();
@@ -717,10 +718,10 @@ export class TeamManager {
     prompt?: string,
   ): Promise<Team> {
     // Fetch title from GitHub if needed
-    if (!issueTitle && project.githubRepo) {
+    if (!issueTitle && project.githubRepo && isValidGithubRepo(project.githubRepo)) {
       try {
         const { stdout } = await execAsync(
-          `gh issue view ${issueNumber} --repo ${project.githubRepo} --json title --jq .title`,
+          `gh issue view ${issueNumber} --repo "${project.githubRepo}" --json title --jq .title`,
           { timeout: 10000 },
         );
         const result = stdout.trim();
@@ -826,10 +827,10 @@ export class TeamManager {
     }
 
     // Fetch title from GitHub if needed
-    if (!issueTitle && project.githubRepo) {
+    if (!issueTitle && project.githubRepo && isValidGithubRepo(project.githubRepo)) {
       try {
         const { stdout } = await execAsync(
-          `gh issue view ${issueNumber} --repo ${project.githubRepo} --json title --jq .title`,
+          `gh issue view ${issueNumber} --repo "${project.githubRepo}" --json title --jq .title`,
           { timeout: 10000 },
         );
         const result = stdout.trim();

@@ -18,7 +18,7 @@ import { getDatabase } from '../db.js';
 import config from '../config.js';
 import { sseBroker } from './sse-broker.js';
 import { resolveMessage } from '../utils/resolve-message.js';
-import { execGHAsync, execGitAsync } from '../utils/exec-gh.js';
+import { execGHAsync, execGitAsync, isValidGithubRepo, isValidBranchName } from '../utils/exec-gh.js';
 import type { PRState, CIStatus, MergeStatus } from '../../shared/types.js';
 
 // ---------------------------------------------------------------------------
@@ -236,9 +236,14 @@ class GitHubPoller {
   // -------------------------------------------------------------------------
 
   private async pollPR(prNumber: number, teamId: number, githubRepo: string): Promise<{ ciStatus: CIStatus; state: PRState } | null> {
+    if (!isValidGithubRepo(githubRepo)) {
+      console.warn(`[GitHubPoller] Skipping pollPR for team ${teamId} — invalid githubRepo: ${githubRepo}`);
+      return null;
+    }
+
     // Use gh pr view to get PR status, CI checks, merge state, and auto-merge
     const result = await execGHAsync(
-      `gh pr view ${prNumber} --repo ${githubRepo} ` +
+      `gh pr view ${prNumber} --repo "${githubRepo}" ` +
         `--json number,title,state,mergeStateStatus,statusCheckRollup,autoMergeRequest,headRefName,mergedAt`
     );
     if (!result) return null; // gh CLI failed — skip this cycle
@@ -708,8 +713,17 @@ class GitHubPoller {
   // -------------------------------------------------------------------------
 
   private async detectPR(branchName: string, teamId: number, githubRepo: string): Promise<void> {
+    if (!isValidBranchName(branchName)) {
+      console.warn(`[GitHubPoller] Skipping detectPR for team ${teamId} — invalid branchName: ${branchName}`);
+      return;
+    }
+    if (!isValidGithubRepo(githubRepo)) {
+      console.warn(`[GitHubPoller] Skipping detectPR for team ${teamId} — invalid githubRepo: ${githubRepo}`);
+      return;
+    }
+
     const result = await execGHAsync(
-      `gh pr list --head ${branchName} --repo ${githubRepo} --state all --json number --limit 1`
+      `gh pr list --head "${branchName}" --repo "${githubRepo}" --state all --json number --limit 1`
     );
     if (!result) return; // gh CLI failed — skip
 

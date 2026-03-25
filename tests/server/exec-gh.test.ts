@@ -28,7 +28,7 @@ vi.mock('util', async (importOriginal) => {
 });
 
 // Import after mocks
-const { execGHAsync, execGHResult, execGitAsync } = await import(
+const { execGHAsync, execGHResult, execGitAsync, isValidGithubRepo, isValidBranchName } = await import(
   '../../src/server/utils/exec-gh.js'
 );
 
@@ -194,5 +194,63 @@ describe('execGitAsync', () => {
       encoding: 'utf-8',
       timeout: 30_000,
     });
+  });
+});
+
+// =============================================================================
+// isValidGithubRepo
+// =============================================================================
+
+describe('isValidGithubRepo', () => {
+  it('accepts valid repo slugs', () => {
+    expect(isValidGithubRepo('owner/repo')).toBe(true);
+    expect(isValidGithubRepo('my-org/my-repo.ts')).toBe(true);
+    expect(isValidGithubRepo('org123/repo_name')).toBe(true);
+    expect(isValidGithubRepo('Owner/Repo-Name')).toBe(true);
+    expect(isValidGithubRepo('a.b/c.d')).toBe(true);
+  });
+
+  it('rejects slugs with shell injection payloads', () => {
+    expect(isValidGithubRepo('owner/repo; rm -rf /')).toBe(false);
+    expect(isValidGithubRepo('$(whoami)/repo')).toBe(false);
+    expect(isValidGithubRepo('`id`/repo')).toBe(false);
+    expect(isValidGithubRepo('owner/repo && echo pwned')).toBe(false);
+  });
+
+  it('rejects empty string, no slash, and double slash', () => {
+    expect(isValidGithubRepo('')).toBe(false);
+    expect(isValidGithubRepo('ownerrepo')).toBe(false);
+    expect(isValidGithubRepo('owner//repo')).toBe(false);
+    expect(isValidGithubRepo('/repo')).toBe(false);
+    expect(isValidGithubRepo('owner/')).toBe(false);
+  });
+});
+
+// =============================================================================
+// isValidBranchName
+// =============================================================================
+
+describe('isValidBranchName', () => {
+  it('accepts valid branch names', () => {
+    expect(isValidBranchName('main')).toBe(true);
+    expect(isValidBranchName('feat/my-feature')).toBe(true);
+    expect(isValidBranchName('fix/123-bug')).toBe(true);
+    expect(isValidBranchName('release-1.0')).toBe(true);
+    expect(isValidBranchName('user/feature/sub-task')).toBe(true);
+  });
+
+  it('rejects names with shell injection payloads', () => {
+    expect(isValidBranchName(';rm -rf /')).toBe(false);
+    expect(isValidBranchName('$(pwd)')).toBe(false);
+    expect(isValidBranchName('`id`')).toBe(false);
+    expect(isValidBranchName('branch && echo pwned')).toBe(false);
+  });
+
+  it('rejects names with spaces', () => {
+    expect(isValidBranchName('branch name with spaces')).toBe(false);
+  });
+
+  it('rejects empty string', () => {
+    expect(isValidBranchName('')).toBe(false);
   });
 });

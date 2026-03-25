@@ -17,6 +17,40 @@ import type { ExecOptions } from 'child_process';
 const execAsync = promisify(exec);
 
 // ---------------------------------------------------------------------------
+// Input validation — defence-in-depth guards against shell injection
+// ---------------------------------------------------------------------------
+
+/**
+ * Allowed characters in a GitHub repo slug: alphanumeric, `.`, `_`, `-`, plus
+ * exactly one `/` separating owner and repo.
+ */
+const GITHUB_REPO_RE = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
+
+/**
+ * Validate a GitHub repo slug (e.g. "owner/repo").
+ * Rejects strings containing shell metacharacters (`$`, backticks, `;`, spaces, etc.).
+ */
+export function isValidGithubRepo(repo: string): boolean {
+  return GITHUB_REPO_RE.test(repo);
+}
+
+/**
+ * Allowed characters in a git branch name: alphanumeric, `.`, `_`, `-`, `/`.
+ * This covers the vast majority of real-world branch names (e.g. `feat/my-feature`,
+ * `release-1.0`, `fix/123-bug`) while rejecting shell metacharacters (`$`, backticks,
+ * `;`, spaces, parentheses, etc.).
+ */
+const BRANCH_NAME_RE = /^[a-zA-Z0-9._/\-]+$/;
+
+/**
+ * Validate a git branch name.
+ * Rejects strings containing shell metacharacters that could enable command injection.
+ */
+export function isValidBranchName(branch: string): boolean {
+  return BRANCH_NAME_RE.test(branch);
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 

@@ -72,9 +72,17 @@ vi.mock('../../src/server/services/issue-fetcher.js', () => ({
 // Mock the shared async exec utilities (replaces the old child_process mock)
 const mockExecGHAsync = vi.fn().mockResolvedValue(null);
 const mockExecGitAsync = vi.fn().mockResolvedValue(null);
+
+// Import the real validators — they are pure functions with no side effects
+const { isValidGithubRepo, isValidBranchName } = await import(
+  '../../src/server/utils/exec-gh.js'
+);
+
 vi.mock('../../src/server/utils/exec-gh.js', () => ({
   execGHAsync: (...args: unknown[]) => mockExecGHAsync(...args),
   execGitAsync: (...args: unknown[]) => mockExecGitAsync(...args),
+  isValidGithubRepo: (repo: string) => /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(repo),
+  isValidBranchName: (branch: string) => /^[a-zA-Z0-9._/\-]+$/.test(branch),
 }));
 
 // Import after mocks
@@ -1029,5 +1037,66 @@ describe('Branch behind notifications', () => {
 
     // No change detected (behind -> behind), so no message should be sent
     expect(mockManager.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// Input validation guards (injection prevention)
+// =============================================================================
+
+describe('Input validation guards', () => {
+  it('pollPR skips gh CLI call when githubRepo is invalid', async () => {
+    const project = makeProject({ githubRepo: 'owner/repo; rm -rf /' });
+    const team = makeTeam({ prNumber: 42, projectId: 1 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+
+    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await githubPoller.poll();
+
+    // gh CLI should never be called for an invalid repo slug
+    expect(mockExecGHAsync).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('detectPR skips gh CLI call when branchName contains injection payload', async () => {
+    const project = makeProject();
+    const team = makeTeam({
+      prNumber: null,
+      branchName: "'; rm -rf /",
+      worktreeName: 'proj-10',
+    });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+
+    // detectWorktreeBranch returns the same malicious branch name
+    mockExecGitAsync.mockResolvedValue("'; rm -rf /");
+
+    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await githubPoller.poll();
+
+    // execGHAsync should not be called for the detectPR step
+    expect(mockExecGHAsync).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('detectPR skips gh CLI call when githubRepo is invalid', async () => {
+    const project = makeProject({ githubRepo: '$(whoami)/repo' });
+    const team = makeTeam({
+      prNumber: null,
+      branchName: 'feat/10-test',
+      worktreeName: 'proj-10',
+    });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+
+    mockExecGitAsync.mockResolvedValue('feat/10-test');
+
+    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await githubPoller.poll();
+
+    // gh CLI should never be called for an invalid repo slug
+    expect(mockExecGHAsync).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 });
