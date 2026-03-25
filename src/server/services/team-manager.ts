@@ -443,16 +443,10 @@ export class TeamManager {
       this.killProcess(freshTeam.pid);
     }
 
-    // Clean up child process reference
-    this.clearThinking(teamId);
+    // Flush counters/events before purging (they read from maps)
     this.flushTokenCounters(teamId);
     this.persistParsedEvents(teamId);
-    this.childProcesses.delete(teamId);
-    this.outputBuffers.delete(teamId);
-    this.parsedEvents.delete(teamId);
-    this.agentMaps.delete(teamId);
-    this.tokenCounters.delete(teamId);
-    this.lastStreamAt.delete(teamId);
+    this.purgeTeamMaps(teamId);
 
     // Re-read to get the latest status (process exit handler may have already updated it)
     const stopTeam = db.getTeam(teamId);
@@ -702,6 +696,9 @@ export class TeamManager {
     this.tokenCounters.clear();
     this.agentMaps.clear();
     this.lastStreamAt.clear();
+    this.thinkingTeams.clear();
+    this.thinkingStartTimes.clear();
+    this.thinkingBlockIndex.clear();
   }
 
   // -------------------------------------------------------------------------
@@ -1456,13 +1453,10 @@ export class TeamManager {
         }
 
         // Clean up maps — the exit handler may also fire, but
-        // childProcesses.delete is idempotent
+        // purgeTeamMaps is idempotent
         this.flushTokenCounters(teamId);
         this.persistParsedEvents(teamId);
-        this.childProcesses.delete(teamId);
-        this.outputBuffers.delete(teamId);
-        this.parsedEvents.delete(teamId);
-        this.tokenCounters.delete(teamId);
+        this.purgeTeamMaps(teamId);
 
         // Set stoppedAt and broadcast
         if (team && !team.stoppedAt) {
@@ -1637,14 +1631,9 @@ export class TeamManager {
 
     child.on('exit', (code, signal) => {
       console.log(`[TeamManager] Process exited for team ${teamId} (code=${code}, signal=${signal})`);
-      this.clearThinking(teamId);
       this.flushTokenCounters(teamId);
       this.persistParsedEvents(teamId);
-      this.childProcesses.delete(teamId);
-      this.stdinPipes.delete(teamId);
-      this.outputBuffers.delete(teamId);
-      this.parsedEvents.delete(teamId);
-      this.tokenCounters.delete(teamId);
+      this.purgeTeamMaps(teamId);
 
       const currentTeam = db.getTeam(teamId);
       if (!currentTeam) return;
@@ -1679,14 +1668,9 @@ export class TeamManager {
 
     child.on('error', (err) => {
       console.error(`[TeamManager] ERROR: process error for team ${teamId}:`, err.message);
-      this.clearThinking(teamId);
       this.flushTokenCounters(teamId);
       this.persistParsedEvents(teamId);
-      this.childProcesses.delete(teamId);
-      this.stdinPipes.delete(teamId);
-      this.outputBuffers.delete(teamId);
-      this.parsedEvents.delete(teamId);
-      this.tokenCounters.delete(teamId);
+      this.purgeTeamMaps(teamId);
 
       const currentTeam = db.getTeam(teamId);
       if (!currentTeam) return;
@@ -2349,6 +2333,109 @@ export class TeamManager {
         sseBroker.broadcast('team_thinking_stop', { team_id: teamId, duration_ms: durationMs }, teamId);
         console.log(`[TeamManager] Team ${teamId} thinking stopped (${durationMs}ms)`);
       }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // purgeTeamMaps — centralized cleanup of ALL per-team tracking maps
+  // -------------------------------------------------------------------------
+  // When adding a new per-team Map or Set to TeamManager, you MUST add a
+  // corresponding .delete() call here. The maps cleaned are:
+  //   outputBuffers, childProcesses, stdinPipes, parsedEvents, tokenCounters,
+  //   agentMaps, lastStreamAt, shutdownTimers, thinkingTeams,
+  //   thinkingStartTimes, thinkingBlockIndex
+  // -------------------------------------------------------------------------
+
+  /**
+   * Delete all per-team map/set entries for the given teamId.
+   * Clears the shutdown timer (if any) before deleting it, and
+   * broadcasts a thinking-stop SSE event if the team was thinking.
+   * Safe to call multiple times (all operations are idempotent).
+   */
+  private purgeTeamMaps(teamId: number): void {
+    // Clear shutdown timer before deleting to prevent dangling callback
+    const timer = this.shutdownTimers.get(teamId);
+    if (timer) {
+      clearTimeout(timer);
+      this.shutdownTimers.delete(teamId);
+    }
+
+    // Clear thinking state (broadcasts SSE event if active)
+    this.clearThinking(teamId);
+
+    this.outputBuffers.delete(teamId);
+    this.childProcesses.delete(teamId);
+    this.stdinPipes.delete(teamId);
+    this.parsedEvents.delete(teamId);
+    this.tokenCounters.delete(teamId);
+    this.agentMaps.delete(teamId);
+    this.lastStreamAt.delete(teamId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Periodic cleanup — sweep orphaned map entries as a safety net
+  // -------------------------------------------------------------------------
+
+  private cleanupInterval: NodeJS.Timeout | null = null;
+
+  /**
+   * Start a periodic timer that sweeps map entries for teams that are in a
+   * terminal state (done/failed) or no longer exist in the database, AND have
+   * no active child process. Uses `.unref()` so the timer does not prevent
+   * Node.js from exiting.
+   */
+  startPeriodicCleanup(): void {
+    if (this.cleanupInterval) return;
+    this.cleanupInterval = setInterval(() => {
+      this.sweepOrphanedMaps();
+    }, config.mapCleanupIntervalMs);
+    this.cleanupInterval.unref();
+  }
+
+  /** Stop the periodic cleanup timer. */
+  stopPeriodicCleanup(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
+  }
+
+  /**
+   * Scan all per-team maps for team IDs that are in a terminal DB state
+   * (done/failed) or missing from the database, AND have no active child
+   * process. Purge those entries to prevent unbounded memory growth.
+   */
+  private sweepOrphanedMaps(): void {
+    const db = getDatabase();
+
+    // Collect all unique team IDs across every per-team map/set
+    const allTeamIds = new Set<number>();
+    for (const id of this.outputBuffers.keys()) allTeamIds.add(id);
+    for (const id of this.childProcesses.keys()) allTeamIds.add(id);
+    for (const id of this.stdinPipes.keys()) allTeamIds.add(id);
+    for (const id of this.parsedEvents.keys()) allTeamIds.add(id);
+    for (const id of this.tokenCounters.keys()) allTeamIds.add(id);
+    for (const id of this.agentMaps.keys()) allTeamIds.add(id);
+    for (const id of this.lastStreamAt.keys()) allTeamIds.add(id);
+    for (const id of this.shutdownTimers.keys()) allTeamIds.add(id);
+    for (const id of this.thinkingTeams) allTeamIds.add(id);
+    for (const id of this.thinkingStartTimes.keys()) allTeamIds.add(id);
+    for (const id of this.thinkingBlockIndex.keys()) allTeamIds.add(id);
+
+    let purged = 0;
+    for (const teamId of allTeamIds) {
+      // Never purge maps for a team that still has an active child process
+      if (this.childProcesses.has(teamId)) continue;
+
+      const team = db.getTeam(teamId);
+      if (!team || team.status === 'done' || team.status === 'failed') {
+        this.purgeTeamMaps(teamId);
+        purged++;
+      }
+    }
+
+    if (purged > 0) {
+      console.log(`[TeamManager] Periodic cleanup: purged maps for ${purged} orphaned team(s)`);
     }
   }
 

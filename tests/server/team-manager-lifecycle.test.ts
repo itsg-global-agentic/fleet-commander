@@ -40,6 +40,7 @@ vi.mock('../../src/server/config.js', () => ({
     terminal: 'auto',
     mergeShutdownGraceMs: 120000,
     fleetCommanderRoot: '/tmp/fleet',
+    mapCleanupIntervalMs: 3600000,
   },
 }));
 
@@ -571,5 +572,194 @@ describe('TeamManager.gracefulShutdown', () => {
     tm.gracefulShutdown(1, 43, 60000);
 
     expect((tm as any).shutdownTimers.size).toBe(1);
+  });
+});
+
+// =============================================================================
+// purgeTeamMaps
+// =============================================================================
+
+describe('TeamManager.purgeTeamMaps', () => {
+  let tm: TeamManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    tm = new TeamManager();
+  });
+
+  it('should delete entries from all per-team maps', () => {
+    const teamId = 1;
+
+    // Populate all maps
+    (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
+    (tm as any).childProcesses.set(teamId, createMockChildProcess());
+    (tm as any).stdinPipes.set(teamId, createMockStdin());
+    (tm as any).parsedEvents.set(teamId, []);
+    (tm as any).tokenCounters.set(teamId, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
+    (tm as any).agentMaps.set(teamId, new Map());
+    (tm as any).lastStreamAt.set(teamId, Date.now());
+    (tm as any).thinkingTeams.add(teamId);
+    (tm as any).thinkingStartTimes.set(teamId, Date.now());
+    (tm as any).thinkingBlockIndex.set(teamId, 0);
+
+    (tm as any).purgeTeamMaps(teamId);
+
+    expect((tm as any).outputBuffers.has(teamId)).toBe(false);
+    expect((tm as any).childProcesses.has(teamId)).toBe(false);
+    expect((tm as any).stdinPipes.has(teamId)).toBe(false);
+    expect((tm as any).parsedEvents.has(teamId)).toBe(false);
+    expect((tm as any).tokenCounters.has(teamId)).toBe(false);
+    expect((tm as any).agentMaps.has(teamId)).toBe(false);
+    expect((tm as any).lastStreamAt.has(teamId)).toBe(false);
+    expect((tm as any).thinkingTeams.has(teamId)).toBe(false);
+    expect((tm as any).thinkingStartTimes.has(teamId)).toBe(false);
+    expect((tm as any).thinkingBlockIndex.has(teamId)).toBe(false);
+  });
+
+  it('should clear shutdown timer before deleting it', () => {
+    const teamId = 1;
+    const timer = setTimeout(() => {}, 100000);
+    (tm as any).shutdownTimers.set(teamId, timer);
+
+    (tm as any).purgeTeamMaps(teamId);
+
+    expect((tm as any).shutdownTimers.has(teamId)).toBe(false);
+  });
+
+  it('should be idempotent — calling twice does not throw', () => {
+    const teamId = 1;
+    (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
+
+    (tm as any).purgeTeamMaps(teamId);
+    expect(() => (tm as any).purgeTeamMaps(teamId)).not.toThrow();
+  });
+});
+
+// =============================================================================
+// sweepOrphanedMaps
+// =============================================================================
+
+describe('TeamManager.sweepOrphanedMaps', () => {
+  let tm: TeamManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    tm = new TeamManager();
+  });
+
+  it('should purge maps for teams in terminal state (done)', () => {
+    const teamId = 5;
+    (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
+    (tm as any).parsedEvents.set(teamId, []);
+    (tm as any).agentMaps.set(teamId, new Map());
+    (tm as any).lastStreamAt.set(teamId, Date.now());
+
+    mockDb.getTeam.mockReturnValue(makeTeam({ id: teamId, status: 'done' }));
+
+    (tm as any).sweepOrphanedMaps();
+
+    expect((tm as any).outputBuffers.has(teamId)).toBe(false);
+    expect((tm as any).parsedEvents.has(teamId)).toBe(false);
+    expect((tm as any).agentMaps.has(teamId)).toBe(false);
+    expect((tm as any).lastStreamAt.has(teamId)).toBe(false);
+  });
+
+  it('should purge maps for teams in terminal state (failed)', () => {
+    const teamId = 6;
+    (tm as any).tokenCounters.set(teamId, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
+
+    mockDb.getTeam.mockReturnValue(makeTeam({ id: teamId, status: 'failed' }));
+
+    (tm as any).sweepOrphanedMaps();
+
+    expect((tm as any).tokenCounters.has(teamId)).toBe(false);
+  });
+
+  it('should NOT purge maps for teams with active child processes', () => {
+    const teamId = 7;
+    const child = createMockChildProcess();
+    (tm as any).childProcesses.set(teamId, child);
+    (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
+    (tm as any).parsedEvents.set(teamId, []);
+
+    mockDb.getTeam.mockReturnValue(makeTeam({ id: teamId, status: 'failed' }));
+
+    (tm as any).sweepOrphanedMaps();
+
+    // Maps should still exist because the child process is active
+    expect((tm as any).childProcesses.has(teamId)).toBe(true);
+    expect((tm as any).outputBuffers.has(teamId)).toBe(true);
+    expect((tm as any).parsedEvents.has(teamId)).toBe(true);
+  });
+
+  it('should NOT purge maps for running teams', () => {
+    const teamId = 8;
+    (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
+    (tm as any).agentMaps.set(teamId, new Map());
+
+    mockDb.getTeam.mockReturnValue(makeTeam({ id: teamId, status: 'running' }));
+
+    (tm as any).sweepOrphanedMaps();
+
+    expect((tm as any).outputBuffers.has(teamId)).toBe(true);
+    expect((tm as any).agentMaps.has(teamId)).toBe(true);
+  });
+
+  it('should NOT purge maps for idle or stuck teams', () => {
+    const teamIdIdle = 9;
+    const teamIdStuck = 10;
+    (tm as any).outputBuffers.set(teamIdIdle, new CircularBuffer<string>(10));
+    (tm as any).outputBuffers.set(teamIdStuck, new CircularBuffer<string>(10));
+
+    mockDb.getTeam
+      .mockReturnValueOnce(makeTeam({ id: teamIdIdle, status: 'idle' }))
+      .mockReturnValueOnce(makeTeam({ id: teamIdStuck, status: 'stuck' }));
+
+    (tm as any).sweepOrphanedMaps();
+
+    expect((tm as any).outputBuffers.has(teamIdIdle)).toBe(true);
+    expect((tm as any).outputBuffers.has(teamIdStuck)).toBe(true);
+  });
+
+  it('should purge maps for teams that no longer exist in DB', () => {
+    const teamId = 11;
+    (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
+    (tm as any).parsedEvents.set(teamId, []);
+    (tm as any).lastStreamAt.set(teamId, Date.now());
+
+    mockDb.getTeam.mockReturnValue(undefined);
+
+    (tm as any).sweepOrphanedMaps();
+
+    expect((tm as any).outputBuffers.has(teamId)).toBe(false);
+    expect((tm as any).parsedEvents.has(teamId)).toBe(false);
+    expect((tm as any).lastStreamAt.has(teamId)).toBe(false);
+  });
+
+  it('should not log when zero teams are purged', () => {
+    const consoleSpy = vi.spyOn(console, 'log');
+
+    // No maps populated — nothing to sweep
+    (tm as any).sweepOrphanedMaps();
+
+    expect(consoleSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('Periodic cleanup'),
+    );
+    consoleSpy.mockRestore();
+  });
+
+  it('should log when teams are purged', () => {
+    const consoleSpy = vi.spyOn(console, 'log');
+    const teamId = 12;
+    (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
+
+    mockDb.getTeam.mockReturnValue(undefined);
+
+    (tm as any).sweepOrphanedMaps();
+
+    expect(consoleSpy).toHaveBeenCalledWith(
+      expect.stringContaining('purged maps for 1 orphaned team(s)'),
+    );
+    consoleSpy.mockRestore();
   });
 });

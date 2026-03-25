@@ -151,10 +151,12 @@ async function main() {
   githubPoller.start();
   usagePoller.start();
   dataRetention.start();
-  server.log.info('All services started (SSE, issues, stuck detector, GitHub poller, usage poller, data retention)');
+  getTeamManager().startPeriodicCleanup();
+  server.log.info('All services started (SSE, issues, stuck detector, GitHub poller, usage poller, data retention, map cleanup)');
 
   // Graceful shutdown
   server.addHook('onClose', async () => {
+    getTeamManager().stopPeriodicCleanup();
     dataRetention.stop();
     usagePoller.stop();
     githubPoller.stop();

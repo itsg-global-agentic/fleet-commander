@@ -117,6 +117,7 @@ const config = Object.freeze({
   issuePollIntervalMs: safeParseInt(process.env['FLEET_ISSUE_POLL_MS'] || '60000', 'FLEET_ISSUE_POLL_MS'),
   stuckCheckIntervalMs: safeParseInt(process.env['FLEET_STUCK_CHECK_MS'] || '60000', 'FLEET_STUCK_CHECK_MS'),
   usagePollIntervalMs: safeParseInt(process.env['FLEET_USAGE_POLL_MS'] || '900000', 'FLEET_USAGE_POLL_MS'),
+  mapCleanupIntervalMs: safeParseInt(process.env['FLEET_MAP_CLEANUP_MS'] || '3600000', 'FLEET_MAP_CLEANUP_MS'),
 
   idleThresholdMin: safeParseInt(process.env['FLEET_IDLE_THRESHOLD_MIN'] || '5', 'FLEET_IDLE_THRESHOLD_MIN'),
   stuckThresholdMin: safeParseInt(process.env['FLEET_STUCK_THRESHOLD_MIN'] || '10', 'FLEET_STUCK_THRESHOLD_MIN'),
@@ -190,6 +191,7 @@ export function validateConfig(): void {
     ['issuePollIntervalMs', config.issuePollIntervalMs],
     ['stuckCheckIntervalMs', config.stuckCheckIntervalMs],
     ['usagePollIntervalMs', config.usagePollIntervalMs],
+    ['mapCleanupIntervalMs', config.mapCleanupIntervalMs],
     ['launchTimeoutMin', config.launchTimeoutMin],
     ['maxUniqueCiFailures', config.maxUniqueCiFailures],
     ['mergeShutdownGraceMs', config.mergeShutdownGraceMs],
