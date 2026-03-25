@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useApi } from '../hooks/useApi';
 
 // ---------------------------------------------------------------------------
@@ -42,6 +42,14 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedSuggestion, setSelectedSuggestion] = useState(-1);
   const [parentPath, setParentPath] = useState('');
+
+  // Derive filtered suggestions by matching the partial name typed after the last separator
+  const filteredSuggestions = useMemo(() => {
+    if (!parentPath || !repoPath) return suggestions;
+    const partial = repoPath.substring(parentPath.length).toLowerCase();
+    if (!partial) return suggestions;
+    return suggestions.filter((d) => d.name.toLowerCase().startsWith(partial));
+  }, [suggestions, repoPath, parentPath]);
 
   const nameRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -153,6 +161,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
   const handlePathChange = useCallback(
     (value: string) => {
       setRepoPath(value);
+      setSelectedSuggestion(-1);
 
       if (debounceRef.current) {
         clearTimeout(debounceRef.current);
@@ -250,29 +259,29 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
   // Keyboard navigation for suggestions + Enter to submit
   const handlePathKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (showSuggestions && suggestions.length > 0) {
+      if (showSuggestions && filteredSuggestions.length > 0) {
         if (e.key === 'ArrowDown') {
           e.preventDefault();
           setSelectedSuggestion((prev) =>
-            prev < suggestions.length - 1 ? prev + 1 : 0,
+            prev < filteredSuggestions.length - 1 ? prev + 1 : 0,
           );
           return;
         }
         if (e.key === 'ArrowUp') {
           e.preventDefault();
           setSelectedSuggestion((prev) =>
-            prev > 0 ? prev - 1 : suggestions.length - 1,
+            prev > 0 ? prev - 1 : filteredSuggestions.length - 1,
           );
           return;
         }
         if (e.key === 'Enter' && selectedSuggestion >= 0) {
           e.preventDefault();
-          selectSuggestion(suggestions[selectedSuggestion]);
+          selectSuggestion(filteredSuggestions[selectedSuggestion]);
           return;
         }
         if (e.key === 'Tab' && selectedSuggestion >= 0) {
           e.preventDefault();
-          selectSuggestion(suggestions[selectedSuggestion]);
+          selectSuggestion(filteredSuggestions[selectedSuggestion]);
           return;
         }
       }
@@ -280,7 +289,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
         handleSubmit();
       }
     },
-    [showSuggestions, suggestions, selectedSuggestion, selectSuggestion, loading, handleSubmit],
+    [showSuggestions, filteredSuggestions, selectedSuggestion, selectSuggestion, loading, handleSubmit],
   );
 
   // Enter key submits for other fields
@@ -357,7 +366,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
                 onChange={(e) => handlePathChange(e.target.value)}
                 onKeyDown={handlePathKeyDown}
                 onFocus={() => {
-                  if (suggestions.length > 0) setShowSuggestions(true);
+                  if (filteredSuggestions.length > 0) setShowSuggestions(true);
                 }}
                 placeholder="C:/Git/my-repo"
                 className={`w-full px-3 py-2 text-sm rounded border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:ring-1 ${
@@ -382,11 +391,11 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
               )}
             </div>
             <p className="mt-1 text-xs text-dark-muted/60">
-              Type a path and subdirectories will appear. End with / to browse.
+              Type a path to browse. Suggestions filter as you type.
             </p>
 
             {/* Suggestions dropdown */}
-            {showSuggestions && suggestions.length > 0 && (
+            {showSuggestions && filteredSuggestions.length > 0 && (
               <div
                 ref={suggestionsRef}
                 className="absolute z-10 left-0 right-0 mt-1 max-h-48 overflow-y-auto rounded border border-dark-border bg-dark-base shadow-lg"
@@ -409,7 +418,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
                     <span className="ml-auto text-xs text-dark-muted/50 truncate">{parentPath}</span>
                   </button>
                 )}
-                {suggestions.map((dir, i) => (
+                {filteredSuggestions.map((dir, i) => (
                   <button
                     key={dir.path}
                     type="button"
