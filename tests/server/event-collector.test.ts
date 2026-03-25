@@ -8,6 +8,9 @@ import {
   resetThrottleState,
   resetSubagentTrackers,
   normalizeAgentName,
+  classifyAgentRole,
+  shouldAdvancePhase,
+  PHASE_ORDER,
   EventCollectorError,
   type EventPayload,
   type EventCollectorDb,
@@ -2130,5 +2133,267 @@ describe('Agent messages in transaction', () => {
     expect(db.processEventTransaction).toHaveBeenCalledTimes(1);
     const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(ops.agentMessages).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Phase transitions (Issue #494)
+// =============================================================================
+
+describe('Phase transitions (Issue #494)', () => {
+  it('should advance init -> analyzing on SubagentStart with planner agent', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'init' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-planner' }),
+      db,
+      sse,
+    );
+
+    // statusUpdate should include phase: 'analyzing'
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(ops.statusUpdate).toBeDefined();
+    expect(ops.statusUpdate.fields.phase).toBe('analyzing');
+
+    // SSE should broadcast phase change
+    expect(sse.broadcast).toHaveBeenCalledWith(
+      'team_status_changed',
+      expect.objectContaining({
+        team_id: 1,
+        phase: 'analyzing',
+        previous_phase: 'init',
+      }),
+      1,
+    );
+  });
+
+  it('should advance analyzing -> implementing on SubagentStop with planner agent', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'analyzing' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-planner' }),
+      db,
+      sse,
+    );
+
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(ops.statusUpdate).toBeDefined();
+    expect(ops.statusUpdate.fields.phase).toBe('implementing');
+  });
+
+  it('should advance implementing -> reviewing on SubagentStop with dev agent', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-dev' }),
+      db,
+      sse,
+    );
+
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(ops.statusUpdate).toBeDefined();
+    expect(ops.statusUpdate.fields.phase).toBe('reviewing');
+  });
+
+  it('should advance reviewing -> pr on SubagentStop with reviewer agent', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'reviewing' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_stop', teammate_name: 'fleet-reviewer' }),
+      db,
+      sse,
+    );
+
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(ops.statusUpdate).toBeDefined();
+    expect(ops.statusUpdate.fields.phase).toBe('pr');
+  });
+
+  it('should NOT regress phase (implementing -> analyzing on planner SubagentStart)', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-planner' }),
+      db,
+      sse,
+    );
+
+    // No statusUpdate for phase should be created (no status transition either)
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(ops.statusUpdate).toBeUndefined();
+
+    // SSE should NOT broadcast a phase change
+    const statusBroadcasts = (sse.broadcast as ReturnType<typeof vi.fn>).mock.calls
+      .filter((call: unknown[]) => call[0] === 'team_status_changed');
+    expect(statusBroadcasts.length).toBe(0);
+  });
+
+  it('should NOT update phase on terminal team (done)', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'done', phase: 'done' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-planner' }),
+      db,
+      sse,
+    );
+
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(ops.statusUpdate).toBeUndefined();
+  });
+
+  it('should handle variant agent names (csharp-dev maps to dev role)', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'analyzing' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'csharp-dev' }),
+      db,
+      sse,
+    );
+
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(ops.statusUpdate).toBeDefined();
+    expect(ops.statusUpdate.fields.phase).toBe('implementing');
+  });
+
+  it('should handle variant agent names (weryfikator maps to reviewer role)', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'weryfikator' }),
+      db,
+      sse,
+    );
+
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(ops.statusUpdate).toBeDefined();
+    expect(ops.statusUpdate.fields.phase).toBe('reviewing');
+  });
+
+  it('should handle unknown agent name (no phase change)', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'init' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'pr-watcher' }),
+      db,
+      sse,
+    );
+
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // No statusUpdate should exist (no status or phase change)
+    expect(ops.statusUpdate).toBeUndefined();
+  });
+
+  it('should combine status transition and phase transition in single broadcast', () => {
+    // Team is idle, SubagentStart from planner arrives => idle->running + init->analyzing
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'init' }),
+    });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-planner' }),
+      db,
+      sse,
+    );
+
+    // Both status and phase should be in the same statusUpdate
+    const ops = (db.processEventTransaction as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(ops.statusUpdate).toBeDefined();
+    expect(ops.statusUpdate.fields.status).toBe('running');
+    expect(ops.statusUpdate.fields.phase).toBe('analyzing');
+
+    // Should emit exactly ONE team_status_changed broadcast with both fields
+    const statusBroadcasts = (sse.broadcast as ReturnType<typeof vi.fn>).mock.calls
+      .filter((call: unknown[]) => call[0] === 'team_status_changed');
+    expect(statusBroadcasts.length).toBe(1);
+    expect(statusBroadcasts[0][1]).toEqual(expect.objectContaining({
+      team_id: 1,
+      status: 'running',
+      previous_status: 'idle',
+      phase: 'analyzing',
+      previous_phase: 'init',
+    }));
+  });
+
+  describe('classifyAgentRole', () => {
+    it('should return planner for planner variants', () => {
+      expect(classifyAgentRole('planner')).toBe('planner');
+      expect(classifyAgentRole('analyst')).toBe('planner');
+      expect(classifyAgentRole('analityk')).toBe('planner');
+    });
+
+    it('should return dev for dev variants', () => {
+      expect(classifyAgentRole('dev')).toBe('dev');
+      expect(classifyAgentRole('csharp-dev')).toBe('dev');
+      expect(classifyAgentRole('fsharp-dev')).toBe('dev');
+      expect(classifyAgentRole('developer')).toBe('dev');
+      expect(classifyAgentRole('implementer')).toBe('dev');
+    });
+
+    it('should return reviewer for reviewer variants', () => {
+      expect(classifyAgentRole('reviewer')).toBe('reviewer');
+      expect(classifyAgentRole('weryfikator')).toBe('reviewer');
+      expect(classifyAgentRole('code-review')).toBe('reviewer');
+    });
+
+    it('should return null for unknown agents', () => {
+      expect(classifyAgentRole('team-lead')).toBeNull();
+      expect(classifyAgentRole('pr-watcher')).toBeNull();
+      expect(classifyAgentRole('coordinator')).toBeNull();
+    });
+  });
+
+  describe('shouldAdvancePhase', () => {
+    it('should return true for forward transitions', () => {
+      expect(shouldAdvancePhase('init', 'analyzing')).toBe(true);
+      expect(shouldAdvancePhase('analyzing', 'implementing')).toBe(true);
+      expect(shouldAdvancePhase('implementing', 'reviewing')).toBe(true);
+      expect(shouldAdvancePhase('reviewing', 'pr')).toBe(true);
+      expect(shouldAdvancePhase('pr', 'done')).toBe(true);
+    });
+
+    it('should return false for backward transitions', () => {
+      expect(shouldAdvancePhase('implementing', 'analyzing')).toBe(false);
+      expect(shouldAdvancePhase('reviewing', 'implementing')).toBe(false);
+      expect(shouldAdvancePhase('pr', 'reviewing')).toBe(false);
+    });
+
+    it('should return false when current phase is done', () => {
+      expect(shouldAdvancePhase('done', 'analyzing')).toBe(false);
+      expect(shouldAdvancePhase('done', 'implementing')).toBe(false);
+    });
+
+    it('should allow forward progression from blocked', () => {
+      expect(shouldAdvancePhase('blocked', 'analyzing')).toBe(true);
+      expect(shouldAdvancePhase('blocked', 'implementing')).toBe(true);
+      expect(shouldAdvancePhase('blocked', 'pr')).toBe(true);
+    });
   });
 });

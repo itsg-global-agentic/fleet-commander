@@ -24,6 +24,8 @@ import { getUsageZone } from './usage-tracker.js';
 import { resolveMessage } from '../utils/resolve-message.js';
 import { CircularBuffer } from '../utils/circular-buffer.js';
 import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile } from '../utils/fc-manifest.js';
+import { classifyAgentRole, shouldAdvancePhase } from './event-collector.js';
+import type { TeamPhase } from '../../shared/types.js';
 
 const execAsync = promisify(execCallback);
 
@@ -2108,6 +2110,41 @@ export class TeamManager {
                 }
               } catch (err) {
                 console.error(`[TeamManager] Stdout fallback transition failed for team ${teamId}:`, err);
+              }
+
+              // Phase fallback: advance phase from task_notification/task_progress
+              // when the resolved agent is not team-lead. This supplements hook-based
+              // phase tracking for cases where hooks don't fire.
+              if (event.type === 'system' && resolvedAgentName !== 'team-lead') {
+                try {
+                  const role = classifyAgentRole(resolvedAgentName);
+                  if (role) {
+                    const db = getDatabase();
+                    const currentTeam = db.getTeam(teamId);
+                    if (currentTeam) {
+                      let targetPhase: TeamPhase | undefined;
+                      if (role === 'planner') targetPhase = 'analyzing';
+                      else if (role === 'dev') targetPhase = 'implementing';
+                      else if (role === 'reviewer') targetPhase = 'reviewing';
+
+                      if (targetPhase && shouldAdvancePhase(currentTeam.phase, targetPhase)) {
+                        const prevPhase = currentTeam.phase;
+                        db.updateTeam(teamId, { phase: targetPhase });
+                        sseBroker.broadcast('team_status_changed', {
+                          team_id: teamId,
+                          status: currentTeam.status,
+                          previous_status: currentTeam.status,
+                          phase: targetPhase,
+                          previous_phase: prevPhase,
+                        }, teamId);
+                        console.log(`[TeamManager] Team ${teamId} phase ${prevPhase}→${targetPhase} via stdout fallback (agent: ${resolvedAgentName})`);
+                      }
+                    }
+                  }
+                } catch (err) {
+                  // Non-fatal — phase fallback is best-effort
+                  console.error(`[TeamManager] Phase fallback failed for team ${teamId}:`, err);
+                }
               }
             }
           } catch {
