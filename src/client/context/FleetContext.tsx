@@ -89,7 +89,7 @@ export function FleetProvider({ children }: { children: ReactNode }) {
         previous_status?: string;
         phase?: string;
         previous_phase?: string;
-        tokens?: { input?: number; output?: number; cache_creation?: number; cache_read?: number };
+        tokens?: { input?: number; output?: number; cacheCreation?: number; cacheRead?: number };
         idle_minutes?: number;
       };
       if (typeof payload.team_id === 'number') {
@@ -105,8 +105,8 @@ export function FleetProvider({ children }: { children: ReactNode }) {
           if (payload.tokens) {
             if (typeof payload.tokens.input === 'number') updated.totalInputTokens = payload.tokens.input;
             if (typeof payload.tokens.output === 'number') updated.totalOutputTokens = payload.tokens.output;
-            if (typeof payload.tokens.cache_creation === 'number') updated.totalCacheCreationTokens = payload.tokens.cache_creation;
-            if (typeof payload.tokens.cache_read === 'number') updated.totalCacheReadTokens = payload.tokens.cache_read;
+            if (typeof payload.tokens.cacheCreation === 'number') updated.totalCacheCreationTokens = payload.tokens.cacheCreation;
+            if (typeof payload.tokens.cacheRead === 'number') updated.totalCacheReadTokens = payload.tokens.cacheRead;
           }
           if (typeof payload.idle_minutes === 'number') {
             updated.idleMin = payload.idle_minutes;
@@ -133,7 +133,7 @@ export function FleetProvider({ children }: { children: ReactNode }) {
       const payload = data as {
         team_id?: number;
         pr_number?: number;
-        pr_state?: string;
+        state?: string;
         ci_status?: string;
         merge_status?: string;
       };
@@ -142,7 +142,7 @@ export function FleetProvider({ children }: { children: ReactNode }) {
           if (team.id !== payload.team_id) return team;
           const updated = { ...team };
           if (typeof payload.pr_number === 'number') updated.prNumber = payload.pr_number;
-          if (typeof payload.pr_state === 'string') updated.prState = payload.pr_state as TeamDashboardRow['prState'];
+          if (typeof payload.state === 'string') updated.prState = payload.state as TeamDashboardRow['prState'];
           if (typeof payload.ci_status === 'string') updated.ciStatus = payload.ci_status as TeamDashboardRow['ciStatus'];
           if (typeof payload.merge_status === 'string') updated.mergeStatus = payload.merge_status as TeamDashboardRow['mergeStatus'];
           return updated;
