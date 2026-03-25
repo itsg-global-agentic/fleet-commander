@@ -14,10 +14,7 @@ let mockConnected = true;
 let mockLastEvent: Date | null = null;
 
 vi.mock('../../src/client/context/FleetContext', () => ({
-  useFleet: () => ({
-    teams: [],
-    selectedTeamId: null,
-    setSelectedTeamId: () => {},
+  useConnection: () => ({
     connected: mockConnected,
     lastEvent: mockLastEvent,
   }),

@@ -17,6 +17,7 @@ interface FleetContextValue {
   connected: boolean;
   lastEvent: Date | null;
   lastEventTeamId: number | null;
+  isThinking: (teamId: number) => boolean;
 }
 
 /**
@@ -64,6 +65,7 @@ interface MockFleetProviderProps {
   connected?: boolean;
   lastEvent?: Date | null;
   lastEventTeamId?: number | null;
+  isThinking?: (teamId: number) => boolean;
 }
 
 export function MockFleetProvider({
@@ -73,6 +75,7 @@ export function MockFleetProvider({
   connected = true,
   lastEvent = null,
   lastEventTeamId = null,
+  isThinking = () => false,
 }: MockFleetProviderProps) {
   const value: FleetContextValue = {
     teams,
@@ -81,6 +84,7 @@ export function MockFleetProvider({
     connected,
     lastEvent,
     lastEventTeamId,
+    isThinking,
   };
 
   return (

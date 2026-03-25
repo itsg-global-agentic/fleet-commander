@@ -9,18 +9,14 @@ import type { TeamDashboardRow } from '../../src/shared/types';
 import { makeTeam } from './test-utils';
 
 // ---------------------------------------------------------------------------
-// Mock the FleetContext module so TopBar's useFleet() returns controlled data
+// Mock the FleetContext module so TopBar's useTeams() returns controlled data
 // ---------------------------------------------------------------------------
 
 let mockTeams: TeamDashboardRow[] = [];
 
 vi.mock('../../src/client/context/FleetContext', () => ({
-  useFleet: () => ({
+  useTeams: () => ({
     teams: mockTeams,
-    selectedTeamId: null,
-    setSelectedTeamId: () => {},
-    connected: true,
-    lastEvent: null,
   }),
 }));
 

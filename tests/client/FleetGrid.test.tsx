@@ -9,12 +9,22 @@ import { FleetGrid } from '../../src/client/components/FleetGrid';
 import { makeTeam } from './test-utils';
 
 // ---------------------------------------------------------------------------
+// Mock useThinking — FleetGrid uses it to pass isThinking to each TeamRow
+// ---------------------------------------------------------------------------
+
+vi.mock('../../src/client/context/FleetContext', () => ({
+  useThinking: () => ({
+    isThinking: () => false,
+  }),
+}));
+
+// ---------------------------------------------------------------------------
 // Mock TeamRow — FleetGrid delegates rendering to TeamRow
 // ---------------------------------------------------------------------------
 
 vi.mock('../../src/client/components/TeamRow', () => ({
-  TeamRow: ({ team, selected, onClick }: any) => (
-    <tr data-testid={`team-row-${team.id}`} data-selected={selected} onClick={onClick}>
+  TeamRow: ({ team, selected, onSelect, isThinking }: { team: { id: number; issueTitle: string }; selected: boolean; onSelect: (id: number) => void; isThinking: boolean }) => (
+    <tr data-testid={`team-row-${team.id}`} data-selected={selected} data-thinking={isThinking} onClick={() => onSelect(team.id)}>
       <td>{team.issueTitle}</td>
     </tr>
   ),

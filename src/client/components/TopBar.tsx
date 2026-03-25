@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useFleet } from '../context/FleetContext';
+import { useTeams } from '../context/FleetContext';
 import { LaunchDialog } from './LaunchDialog';
 import { useApi } from '../hooks/useApi';
 import { RocketIcon } from './Icons';
@@ -29,7 +29,7 @@ interface UsageResponse {
 }
 
 export function TopBar() {
-  const { teams } = useFleet();
+  const { teams } = useTeams();
   const api = useApi();
   const [launchOpen, setLaunchOpen] = useState(false);
   const [usage, setUsage] = useState<UsageResponse | null>(null);

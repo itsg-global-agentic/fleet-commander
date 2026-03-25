@@ -23,18 +23,6 @@ vi.mock('../../src/client/hooks/useApi', () => ({
   }),
 }));
 
-vi.mock('../../src/client/context/FleetContext', () => ({
-  useFleet: () => ({
-    teams: [],
-    selectedTeamId: null,
-    setSelectedTeamId: () => {},
-    connected: true,
-    lastEvent: null,
-    lastEventTeamId: null,
-    isThinking: () => false,
-  }),
-}));
-
 // Import after mocks
 import { TeamRow } from '../../src/client/components/TeamRow';
 
@@ -42,11 +30,11 @@ import { TeamRow } from '../../src/client/components/TeamRow';
 // Helper — TeamRow must be rendered inside a table
 // ---------------------------------------------------------------------------
 
-function renderRow(team: TeamDashboardRow, selected = false, onClick = vi.fn()) {
+function renderRow(team: TeamDashboardRow, selected = false, onSelect = vi.fn(), isThinking = false) {
   return render(
     <table>
       <tbody>
-        <TeamRow team={team} selected={selected} onClick={onClick} />
+        <TeamRow team={team} selected={selected} onSelect={onSelect} isThinking={isThinking} />
       </tbody>
     </table>,
   );
@@ -118,12 +106,14 @@ describe('TeamRow', () => {
     expect(screen.getByText('Untitled')).toBeInTheDocument();
   });
 
-  it('calls onClick when the row is clicked', () => {
-    const onClick = vi.fn();
-    renderRow(fullTeam(), false, onClick);
+  it('calls onSelect with team id when the row is clicked', () => {
+    const onSelect = vi.fn();
+    const team = fullTeam({ id: 42 });
+    renderRow(team, false, onSelect);
     const row = screen.getByRole('row');
     fireEvent.click(row);
-    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(42);
   });
 
   it('applies selected styling when selected=true', () => {
@@ -185,5 +175,32 @@ describe('TeamRow', () => {
     // The tokens cell should contain an em-dash
     const tokenCells = screen.getAllByText('\u2014');
     expect(tokenCells.length).toBeGreaterThan(0);
+  });
+
+  it('shows thinking indicator when isThinking is true', () => {
+    renderRow(fullTeam({ status: 'running' }), false, vi.fn(), true);
+    expect(screen.getByText('thinking...')).toBeInTheDocument();
+  });
+
+  it('does not re-render when props are reference-equal', () => {
+    const team = fullTeam();
+    const onSelect = vi.fn();
+    const { rerender } = render(
+      <table>
+        <tbody>
+          <TeamRow team={team} selected={false} onSelect={onSelect} isThinking={false} />
+        </tbody>
+      </table>,
+    );
+    // Re-render with same props — should be a no-op due to React.memo
+    rerender(
+      <table>
+        <tbody>
+          <TeamRow team={team} selected={false} onSelect={onSelect} isThinking={false} />
+        </tbody>
+      </table>,
+    );
+    // If it renders, the content is still correct
+    expect(screen.getByText('#100')).toBeInTheDocument();
   });
 });

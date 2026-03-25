@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useFleet } from '../context/FleetContext';
+import { useSelection, useConnection, useThinking } from '../context/FleetContext';
 import { useApi } from '../hooks/useApi';
 import { StatusBadge } from './StatusBadge';
 import { CIChecks } from './CIChecks';
@@ -28,7 +28,9 @@ function formatDuration(minutes: number | undefined | null): string {
 // ---------------------------------------------------------------------------
 
 export function TeamDetail() {
-  const { selectedTeamId, setSelectedTeamId, lastEvent, lastEventTeamId, isThinking } = useFleet();
+  const { selectedTeamId, setSelectedTeamId } = useSelection();
+  const { lastEvent, lastEventTeamId } = useConnection();
+  const { isThinking } = useThinking();
   const api = useApi();
   const [detail, setDetail] = useState<TeamDetailType | null>(null);
   const [loading, setLoading] = useState(false);

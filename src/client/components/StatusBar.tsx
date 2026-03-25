@@ -1,8 +1,8 @@
-import { useFleet } from '../context/FleetContext';
+import { useConnection } from '../context/FleetContext';
 import { useEffect, useState } from 'react';
 
 export function StatusBar() {
-  const { connected, lastEvent } = useFleet();
+  const { connected, lastEvent } = useConnection();
   const [secondsAgo, setSecondsAgo] = useState<number | null>(null);
   const [version, setVersion] = useState<string | null>(null);
 

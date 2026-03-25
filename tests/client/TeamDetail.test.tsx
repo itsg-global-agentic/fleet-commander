@@ -25,13 +25,16 @@ const mockApi = {
 };
 
 vi.mock('../../src/client/context/FleetContext', () => ({
-  useFleet: () => ({
-    teams: [],
+  useSelection: () => ({
     selectedTeamId: mockSelectedTeamId,
     setSelectedTeamId: mockSetSelectedTeamId,
+  }),
+  useConnection: () => ({
     connected: true,
     lastEvent: null,
     lastEventTeamId: null,
+  }),
+  useThinking: () => ({
     isThinking: () => false,
   }),
 }));
