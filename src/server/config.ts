@@ -129,6 +129,9 @@ const config = Object.freeze({
   /** Minimum tool-use events for a subagent session to be considered healthy */
   earlyCrashMinTools: safeParseInt(process.env['FLEET_EARLY_CRASH_MIN_TOOLS'] || '5', 'FLEET_EARLY_CRASH_MIN_TOOLS'),
 
+  eventsRetentionDays: safeParseInt(process.env['FLEET_EVENTS_RETENTION_DAYS'] || '90', 'FLEET_EVENTS_RETENTION_DAYS'),
+  usageRetentionDays: safeParseInt(process.env['FLEET_USAGE_RETENTION_DAYS'] || '30', 'FLEET_USAGE_RETENTION_DAYS'),
+
   usageRedDailyPct: safeParseInt(process.env['FLEET_USAGE_RED_DAILY_PCT'] || '85', 'FLEET_USAGE_RED_DAILY_PCT'),
   usageRedWeeklyPct: safeParseInt(process.env['FLEET_USAGE_RED_WEEKLY_PCT'] || '95', 'FLEET_USAGE_RED_WEEKLY_PCT'),
   usageRedSonnetPct: safeParseInt(process.env['FLEET_USAGE_RED_SONNET_PCT'] || '95', 'FLEET_USAGE_RED_SONNET_PCT'),
@@ -193,6 +196,8 @@ export function validateConfig(): void {
     ['earlyCrashThresholdSec', config.earlyCrashThresholdSec],
     ['earlyCrashMinTools', config.earlyCrashMinTools],
     ['ccQueryMaxTurns', config.ccQueryMaxTurns],
+    ['eventsRetentionDays', config.eventsRetentionDays],
+    ['usageRetentionDays', config.usageRetentionDays],
   ];
   for (const [name, value] of positiveIntegers) {
     if (isNaN(value) || value <= 0) {

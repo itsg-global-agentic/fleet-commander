@@ -1843,6 +1843,127 @@ export class FleetDatabase {
   }
 
   // -------------------------------------------------------------------------
+  // Data retention — batched purge of old records
+  // -------------------------------------------------------------------------
+
+  /**
+   * Delete events older than `retentionDays` in batches of `batchSize`.
+   * Returns total number of rows deleted.
+   */
+  purgeOldEvents(retentionDays: number, batchSize: number = 5000): number {
+    const stmt = this.db.prepare(
+      `DELETE FROM events WHERE id IN (
+        SELECT id FROM events WHERE created_at < datetime('now', '-' || @days || ' days') LIMIT @limit
+      )`
+    );
+    let totalDeleted = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const result = stmt.run({ days: retentionDays, limit: batchSize });
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+    }
+    return totalDeleted;
+  }
+
+  /**
+   * Delete usage_snapshots older than `retentionDays` in batches of `batchSize`.
+   * Returns total number of rows deleted.
+   */
+  purgeOldUsageSnapshots(retentionDays: number, batchSize: number = 5000): number {
+    const stmt = this.db.prepare(
+      `DELETE FROM usage_snapshots WHERE id IN (
+        SELECT id FROM usage_snapshots WHERE recorded_at < datetime('now', '-' || @days || ' days') LIMIT @limit
+      )`
+    );
+    let totalDeleted = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const result = stmt.run({ days: retentionDays, limit: batchSize });
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+    }
+    return totalDeleted;
+  }
+
+  /**
+   * Delete commands older than `retentionDays` in batches of `batchSize`.
+   * Returns total number of rows deleted.
+   */
+  purgeOldCommands(retentionDays: number, batchSize: number = 5000): number {
+    const stmt = this.db.prepare(
+      `DELETE FROM commands WHERE id IN (
+        SELECT id FROM commands WHERE created_at < datetime('now', '-' || @days || ' days') LIMIT @limit
+      )`
+    );
+    let totalDeleted = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const result = stmt.run({ days: retentionDays, limit: batchSize });
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+    }
+    return totalDeleted;
+  }
+
+  /**
+   * Delete team_transitions older than `retentionDays` in batches of `batchSize`.
+   * Returns total number of rows deleted.
+   */
+  purgeOldTeamTransitions(retentionDays: number, batchSize: number = 5000): number {
+    const stmt = this.db.prepare(
+      `DELETE FROM team_transitions WHERE id IN (
+        SELECT id FROM team_transitions WHERE created_at < datetime('now', '-' || @days || ' days') LIMIT @limit
+      )`
+    );
+    let totalDeleted = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const result = stmt.run({ days: retentionDays, limit: batchSize });
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+    }
+    return totalDeleted;
+  }
+
+  /**
+   * Delete agent_messages older than `retentionDays` in batches of `batchSize`.
+   * Returns total number of rows deleted.
+   */
+  purgeOldAgentMessages(retentionDays: number, batchSize: number = 5000): number {
+    const stmt = this.db.prepare(
+      `DELETE FROM agent_messages WHERE id IN (
+        SELECT id FROM agent_messages WHERE created_at < datetime('now', '-' || @days || ' days') LIMIT @limit
+      )`
+    );
+    let totalDeleted = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const result = stmt.run({ days: retentionDays, limit: batchSize });
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+    }
+    return totalDeleted;
+  }
+
+  /**
+   * Delete stream_events for teams that have been stopped for more than
+   * `retentionDays`. stream_events has a UNIQUE constraint on team_id
+   * (one row per team), so batch size is less critical here.
+   * Returns total number of rows deleted.
+   */
+  purgeOldStreamEvents(retentionDays: number): number {
+    const result = this.db.prepare(
+      `DELETE FROM stream_events WHERE team_id IN (
+        SELECT id FROM teams
+        WHERE stopped_at IS NOT NULL
+          AND stopped_at < datetime('now', '-' || @days || ' days')
+      )`
+    ).run({ days: retentionDays });
+    return result.changes;
+  }
+
+  // -------------------------------------------------------------------------
   // Connection management
   // -------------------------------------------------------------------------
 
