@@ -722,7 +722,27 @@ class GitHubPoller {
 
     if (prs.length > 0 && prs[0]!.number) {
       const db = getDatabase();
-      db.updateTeam(teamId, { prNumber: prs[0]!.number });
+      const team = db.getTeam(teamId);
+      const prevPhase = team?.phase;
+
+      // Update team with PR number and advance phase to 'pr' if appropriate
+      const updateFields: Record<string, unknown> = { prNumber: prs[0]!.number };
+      if (prevPhase && prevPhase !== 'pr' && prevPhase !== 'done') {
+        updateFields.phase = 'pr';
+      }
+      db.updateTeam(teamId, updateFields);
+
+      // Broadcast phase change if it advanced
+      if (team && prevPhase && prevPhase !== 'pr' && prevPhase !== 'done') {
+        sseBroker.broadcast('team_status_changed', {
+          team_id: teamId,
+          status: team.status,
+          previous_status: team.status,
+          phase: 'pr',
+          previous_phase: prevPhase,
+        }, teamId);
+      }
+
       console.log(
         `[GitHubPoller] Detected PR #${prs[0]!.number} for branch "${branchName}" (team ${teamId}, repo: ${githubRepo})`
       );

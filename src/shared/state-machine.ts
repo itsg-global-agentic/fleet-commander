@@ -6,7 +6,7 @@
 // about state transitions — message templates live in message-templates.ts.
 // =============================================================================
 
-import type { TeamStatus } from './types.js';
+import type { TeamStatus, TeamPhase } from './types.js';
 
 export type TriggerType = 'hook' | 'timer' | 'poller' | 'pm_action' | 'system';
 
@@ -329,6 +329,72 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     triggerLabel: 'Branch up-to-date',
     description: 'PR branch is no longer behind main',
     condition: 'Merge status changes from behind to another state (not dirty)',
+    hookEvent: null,
+  },
+];
+
+// =============================================================================
+// Phase Transitions (informational — documents automatic phase tracking)
+// =============================================================================
+// Phase transitions are driven by SubagentStart/SubagentStop hook events
+// and GitHub poller PR detection. The logic lives in event-collector.ts;
+// these entries document the transitions for the /lifecycle UI view.
+// =============================================================================
+
+export interface PhaseTransition {
+  id: string;
+  fromPhase: TeamPhase;
+  toPhase: TeamPhase;
+  trigger: TriggerType;
+  triggerLabel: string;
+  description: string;
+  hookEvent?: string | null;
+}
+
+export const PHASE_TRANSITIONS: PhaseTransition[] = [
+  {
+    id: 'phase-init-analyzing',
+    fromPhase: 'init',
+    toPhase: 'analyzing',
+    trigger: 'hook',
+    triggerLabel: 'Planner subagent starts',
+    description: 'SubagentStart event received for an agent classified as planner role',
+    hookEvent: 'subagent_start',
+  },
+  {
+    id: 'phase-analyzing-implementing',
+    fromPhase: 'analyzing',
+    toPhase: 'implementing',
+    trigger: 'hook',
+    triggerLabel: 'Planner subagent stops',
+    description: 'SubagentStop event received for planner role, indicating analysis complete and development expected',
+    hookEvent: 'subagent_stop',
+  },
+  {
+    id: 'phase-implementing-reviewing',
+    fromPhase: 'implementing',
+    toPhase: 'reviewing',
+    trigger: 'hook',
+    triggerLabel: 'Dev subagent stops',
+    description: 'SubagentStop event received for dev role, indicating implementation complete and review expected',
+    hookEvent: 'subagent_stop',
+  },
+  {
+    id: 'phase-reviewing-pr',
+    fromPhase: 'reviewing',
+    toPhase: 'pr',
+    trigger: 'hook',
+    triggerLabel: 'Reviewer subagent stops',
+    description: 'SubagentStop event received for reviewer role, indicating review complete and PR expected',
+    hookEvent: 'subagent_stop',
+  },
+  {
+    id: 'phase-pr-detected',
+    fromPhase: 'pr',
+    toPhase: 'pr',
+    trigger: 'poller',
+    triggerLabel: 'PR detected by poller',
+    description: 'GitHub poller detects a PR for the team branch. Phase advances to pr from any earlier phase.',
     hookEvent: null,
   },
 ];

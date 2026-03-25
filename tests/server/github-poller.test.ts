@@ -558,9 +558,10 @@ describe('CI failure counting', () => {
 describe('PR detection by branch', () => {
   it('detects PR for a team without prNumber', async () => {
     const project = makeProject();
-    const team = makeTeam({ prNumber: null, branchName: 'feat/10-test' });
+    const team = makeTeam({ prNumber: null, branchName: 'feat/10-test', phase: 'implementing' });
     mockDb.getProjects.mockReturnValue([project]);
     mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getTeam.mockReturnValue(team);
 
     // detectWorktreeBranch uses execGitAsync
     mockExecGitAsync.mockResolvedValue('feat/10-test');
@@ -569,7 +570,13 @@ describe('PR detection by branch', () => {
 
     await githubPoller.poll();
 
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { prNumber: 55 });
+    // detectPR now also advances phase to 'pr' when the current phase allows it
+    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { prNumber: 55, phase: 'pr' });
+    expect(mockSseBroker.broadcast).toHaveBeenCalledWith(
+      'team_status_changed',
+      expect.objectContaining({ team_id: 1, phase: 'pr', previous_phase: 'implementing' }),
+      1,
+    );
   });
 
   it('does nothing when no PR found for branch', async () => {

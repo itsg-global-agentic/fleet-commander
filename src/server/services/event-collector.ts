@@ -15,7 +15,7 @@
  *   Non-tool_use events are NEVER throttled.
  */
 
-import type { TeamStatus } from '../../shared/types.js';
+import type { TeamStatus, TeamPhase } from '../../shared/types.js';
 import { TERMINAL_STATUSES } from '../../shared/types.js';
 import type { SSEEventType, SSEEventPayloads } from './sse-broker.js';
 import config from '../config.js';
@@ -144,6 +144,65 @@ export function normalizeAgentName(name: string | null | undefined): string {
 }
 
 // ---------------------------------------------------------------------------
+// Agent role classification for phase transitions
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify a normalized agent name into one of three role categories:
+ * planner, dev, or reviewer. Returns null for unknown agent types
+ * (no phase change should occur).
+ *
+ * Uses substring matching to handle variant names across different projects
+ * (e.g., "csharp-dev", "fsharp-dev", "analityk", "weryfikator").
+ */
+export function classifyAgentRole(normalizedName: string): 'planner' | 'dev' | 'reviewer' | null {
+  const name = normalizedName.toLowerCase();
+  if (name.includes('planner') || name.includes('analyst') || name.includes('analityk')) {
+    return 'planner';
+  }
+  if (name.includes('dev') || name.includes('developer') || name.includes('implementer')) {
+    return 'dev';
+  }
+  if (name.includes('reviewer') || name.includes('weryfikator') || name.includes('review')) {
+    return 'reviewer';
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Phase ordering for forward-only transitions
+// ---------------------------------------------------------------------------
+
+/**
+ * Numeric ordering for team phases. Higher numbers are later phases.
+ * `blocked` gets -1 because it is set by the poller (CI failures) and
+ * should not prevent forward progression from hook events.
+ */
+export const PHASE_ORDER: Record<TeamPhase, number> = {
+  init: 0,
+  analyzing: 1,
+  implementing: 2,
+  reviewing: 3,
+  pr: 4,
+  done: 5,
+  blocked: -1,
+};
+
+/**
+ * Determine whether the team should advance to the target phase.
+ * Returns true only when the target phase is strictly later in the
+ * forward-only phase sequence than the current phase, and the
+ * current phase is not terminal ('done').
+ */
+export function shouldAdvancePhase(currentPhase: string, targetPhase: TeamPhase): boolean {
+  if (currentPhase === 'done') return false;
+  const currentOrder = PHASE_ORDER[currentPhase as TeamPhase];
+  const targetOrder = PHASE_ORDER[targetPhase];
+  if (currentOrder === undefined || targetOrder === undefined) return false;
+  return targetOrder > currentOrder;
+}
+
+// ---------------------------------------------------------------------------
 // Event type normalization
 // ---------------------------------------------------------------------------
 
@@ -264,6 +323,48 @@ export function processEvent(
     }
   }
 
+  // ── Phase transition: SubagentStart/SubagentStop -> phase update ──
+  // Compute phase transitions for non-terminal teams based on agent role.
+  // Forward-only: a later phase is never replaced by an earlier one.
+  let phaseUpdateData: { phase: TeamPhase; previousPhase: string } | undefined;
+
+  if (!isTerminal) {
+    const evtForPhase = payload.event.toLowerCase();
+    if (evtForPhase === 'subagent_start' || evtForPhase === 'subagent_stop') {
+      const rawAgentName = payload.teammate_name || payload.agent_type;
+      if (rawAgentName) {
+        const normalized = normalizeAgentName(rawAgentName);
+        const role = classifyAgentRole(normalized);
+        if (role) {
+          let targetPhase: TeamPhase | undefined;
+
+          if (evtForPhase === 'subagent_start') {
+            // Agent starting: transition to the phase the agent represents
+            if (role === 'planner') targetPhase = 'analyzing';
+            else if (role === 'dev') targetPhase = 'implementing';
+            else if (role === 'reviewer') targetPhase = 'reviewing';
+          } else {
+            // Agent stopping: transition to the NEXT expected phase
+            if (role === 'planner') targetPhase = 'implementing';
+            else if (role === 'dev') targetPhase = 'reviewing';
+            else if (role === 'reviewer') targetPhase = 'pr';
+          }
+
+          if (targetPhase && shouldAdvancePhase(team.phase, targetPhase)) {
+            phaseUpdateData = { phase: targetPhase, previousPhase: team.phase };
+
+            // Merge phase into existing statusUpdate or create new one
+            if (statusUpdateData) {
+              statusUpdateData.fields.phase = targetPhase;
+            } else {
+              statusUpdateData = { teamId, fields: { phase: targetPhase } };
+            }
+          }
+        }
+      }
+    }
+  }
+
   // ── Throttle tool_use events ─────────────────────────────────────
   // Throttled events still need a heartbeat update and any transition
   // that was determined above. For throttled events, execute the
@@ -360,11 +461,29 @@ export function processEvent(
   }
 
   // ── Broadcast via SSE (after transaction commits) ────────────────
-  if (previousStatus !== undefined) {
+  // Emit a single team_status_changed event carrying both status and
+  // phase info when both change simultaneously (avoids double-broadcast).
+  if (previousStatus !== undefined && phaseUpdateData) {
     sse.broadcast('team_status_changed', {
       team_id: teamId,
       status: 'running',
       previous_status: previousStatus,
+      phase: phaseUpdateData.phase,
+      previous_phase: phaseUpdateData.previousPhase,
+    }, teamId);
+  } else if (previousStatus !== undefined) {
+    sse.broadcast('team_status_changed', {
+      team_id: teamId,
+      status: 'running',
+      previous_status: previousStatus,
+    }, teamId);
+  } else if (phaseUpdateData) {
+    sse.broadcast('team_status_changed', {
+      team_id: teamId,
+      status: team.status,
+      previous_status: team.status,
+      phase: phaseUpdateData.phase,
+      previous_phase: phaseUpdateData.previousPhase,
     }, teamId);
   }
 
