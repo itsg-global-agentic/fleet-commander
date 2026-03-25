@@ -62,7 +62,7 @@ export interface SSEEventPayloads {
 interface SSEClient {
   id: string;
   reply: FastifyReply;
-  teamFilter: number[] | null; // null = all teams
+  teamFilter: Set<number> | null; // null = all teams
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +125,7 @@ class SSEBroker {
     const client: SSEClient = {
       id,
       reply,
-      teamFilter: teamFilter && teamFilter.length > 0 ? teamFilter : null,
+      teamFilter: teamFilter && teamFilter.length > 0 ? new Set(teamFilter) : null,
     };
     this.clients.set(id, client);
     return id;
@@ -158,7 +158,7 @@ class SSEBroker {
     for (const [id, client] of this.clients) {
       // If the event is scoped to a team, check the client's filter
       if (teamId !== undefined && client.teamFilter !== null) {
-        if (!client.teamFilter.includes(teamId)) {
+        if (!client.teamFilter.has(teamId)) {
           continue;
         }
       }
