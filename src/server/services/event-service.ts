@@ -8,6 +8,7 @@
 
 import { getDatabase } from '../db.js';
 import { validationError } from './service-error.js';
+import type { PaginatedResponse, Event } from '../../shared/types.js';
 
 // ---------------------------------------------------------------------------
 // Service
@@ -15,10 +16,10 @@ import { validationError } from './service-error.js';
 
 export class EventService {
   /**
-   * Query events with optional filters.
+   * Query events with optional filters and pagination.
    *
-   * @param filters - Optional query filters
-   * @returns Array of matching events
+   * @param filters - Optional query filters including pagination
+   * @returns Paginated response with matching events
    * @throws ServiceError with code VALIDATION for invalid filter values
    */
   queryEvents(filters: {
@@ -26,8 +27,9 @@ export class EventService {
     eventType?: string;
     since?: string;
     limit?: number;
-  }): unknown[] {
-    const { teamId, eventType, since, limit } = filters;
+    offset?: number;
+  }): PaginatedResponse<Event> {
+    const { teamId, eventType, since, limit, offset } = filters;
 
     if (teamId !== undefined && (isNaN(teamId) || teamId < 1)) {
       throw validationError('Invalid team_id');
@@ -37,13 +39,19 @@ export class EventService {
       throw validationError('Invalid limit');
     }
 
+    if (offset !== undefined && (isNaN(offset) || offset < 0)) {
+      throw validationError('Invalid offset');
+    }
+
+    const effectiveLimit = limit ?? 100;
+    const effectiveOffset = offset ?? 0;
+
     const db = getDatabase();
-    return db.getAllEvents({
-      teamId,
-      eventType,
-      since,
-      limit: limit ?? 100,
-    });
+    const filterObj = { teamId, eventType, since, limit: effectiveLimit, offset: effectiveOffset };
+    const data = db.getAllEvents(filterObj);
+    const total = db.getAllEventsCount(filterObj);
+
+    return { data, total, limit: effectiveLimit, offset: effectiveOffset };
   }
 }
 

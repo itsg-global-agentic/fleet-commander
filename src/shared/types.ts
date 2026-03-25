@@ -527,3 +527,15 @@ export interface HookTimelineEntry extends BaseTimelineEntry {
 
 /** Discriminated union of all timeline entry types */
 export type TimelineEntry = StreamTimelineEntry | HookTimelineEntry;
+
+// ---------------------------------------------------------------------------
+// Pagination (offset/limit envelope)
+// ---------------------------------------------------------------------------
+
+/** Paginated response envelope for list endpoints */
+export interface PaginatedResponse<T> {
+  data: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}

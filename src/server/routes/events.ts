@@ -12,6 +12,7 @@ interface EventQuerystring {
   type?: string;
   since?: string;
   limit?: string;
+  offset?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +165,7 @@ const eventsRoutes: FastifyPluginCallback = (
     }
   );
 
-  // GET /api/events — query events with filters
+  // GET /api/events — query events with filters (paginated)
   fastify.get(
     '/api/events',
     async (
@@ -173,14 +174,23 @@ const eventsRoutes: FastifyPluginCallback = (
     ) => {
       try {
         const query = request.query;
+
+        const rawOffset = query.offset ? parseInt(query.offset, 10) : undefined;
+        if (rawOffset !== undefined && (isNaN(rawOffset) || rawOffset < 0)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'offset must be a non-negative integer' });
+        }
+
+        const rawLimit = query.limit ? parseInt(query.limit, 10) : undefined;
+
         const service = getEventService();
-        const events = service.queryEvents({
+        const result = service.queryEvents({
           teamId: query.team_id ? parseInt(query.team_id, 10) : undefined,
           eventType: query.type || undefined,
           since: query.since || undefined,
-          limit: query.limit ? parseInt(query.limit, 10) : undefined,
+          limit: rawLimit,
+          offset: rawOffset,
         });
-        return reply.code(200).send(events);
+        return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
           return reply.code(err.statusCode).send({ error: err.code, message: err.message });

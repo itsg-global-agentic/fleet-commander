@@ -87,6 +87,8 @@ export interface TeamFilter {
   status?: TeamStatus;
   issueNumber?: number;
   projectId?: number;
+  limit?: number;
+  offset?: number;
 }
 
 export interface EventFilter {
@@ -94,6 +96,7 @@ export interface EventFilter {
   eventType?: string;
   since?: string;     // ISO 8601
   limit?: number;
+  offset?: number;
 }
 
 export interface TeamInsert {
@@ -993,9 +996,45 @@ export class FleetDatabase {
     }
     sql += ' ORDER BY created_at DESC';
 
+    if (filter?.limit) {
+      sql += ' LIMIT @limit';
+      params.limit = filter.limit;
+    }
+    if (filter?.offset) {
+      sql += ' OFFSET @offset';
+      params.offset = filter.offset;
+    }
+
     const stmt = this.db.prepare(sql);
     const rows = (Object.keys(params).length > 0 ? stmt.all(params) : stmt.all()) as Record<string, unknown>[];
     return rows.map((r) => this.mapTeamRow(r));
+  }
+
+  getTeamsCount(filter?: TeamFilter): number {
+    let sql = 'SELECT COUNT(*) AS cnt FROM teams';
+    const conditions: string[] = [];
+    const params: Record<string, unknown> = {};
+
+    if (filter?.status) {
+      conditions.push('status = @status');
+      params.status = filter.status;
+    }
+    if (filter?.issueNumber) {
+      conditions.push('issue_number = @issueNumber');
+      params.issueNumber = filter.issueNumber;
+    }
+    if (filter?.projectId) {
+      conditions.push('project_id = @projectId');
+      params.projectId = filter.projectId;
+    }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    const stmt = this.db.prepare(sql);
+    const row = (Object.keys(params).length > 0 ? stmt.get(params) : stmt.get()) as { cnt: number };
+    return row.cnt;
   }
 
   getActiveTeams(): Team[] {
@@ -1162,14 +1201,28 @@ export class FleetDatabase {
     return this.mapEventRow(row);
   }
 
-  getEventsByTeam(teamId: number, limit?: number): Event[] {
-    const sql = limit
-      ? 'SELECT * FROM events WHERE team_id = ? ORDER BY id DESC LIMIT ?'
-      : 'SELECT * FROM events WHERE team_id = ? ORDER BY id DESC';
+  getEventsByTeam(teamId: number, limit?: number, offset?: number): Event[] {
+    let sql = 'SELECT * FROM events WHERE team_id = ? ORDER BY id DESC';
+    const params: unknown[] = [teamId];
+
+    if (limit) {
+      sql += ' LIMIT ?';
+      params.push(limit);
+    }
+    if (offset) {
+      sql += ' OFFSET ?';
+      params.push(offset);
+    }
 
     const stmt = this.db.prepare(sql);
-    const rows = (limit ? stmt.all(teamId, limit) : stmt.all(teamId)) as Record<string, unknown>[];
+    const rows = stmt.all(...params) as Record<string, unknown>[];
     return rows.map((r) => this.mapEventRow(r));
+  }
+
+  getEventsByTeamCount(teamId: number): number {
+    const stmt = this.db.prepare('SELECT COUNT(*) AS cnt FROM events WHERE team_id = ?');
+    const row = stmt.get(teamId) as { cnt: number };
+    return row.cnt;
   }
 
   getLatestEventByTeam(teamId: number): Event | undefined {
@@ -1207,10 +1260,41 @@ export class FleetDatabase {
       sql += ' LIMIT @limit';
       params.limit = filters.limit;
     }
+    if (filters?.offset) {
+      sql += ' OFFSET @offset';
+      params.offset = filters.offset;
+    }
 
     const stmt = this.db.prepare(sql);
     const rows = (Object.keys(params).length > 0 ? stmt.all(params) : stmt.all()) as Record<string, unknown>[];
     return rows.map((r) => this.mapEventRow(r));
+  }
+
+  getAllEventsCount(filters?: EventFilter): number {
+    let sql = 'SELECT COUNT(*) AS cnt FROM events';
+    const conditions: string[] = [];
+    const params: Record<string, unknown> = {};
+
+    if (filters?.teamId) {
+      conditions.push('team_id = @teamId');
+      params.teamId = filters.teamId;
+    }
+    if (filters?.eventType) {
+      conditions.push('event_type = @eventType');
+      params.eventType = filters.eventType;
+    }
+    if (filters?.since) {
+      conditions.push('created_at >= @since');
+      params.since = filters.since;
+    }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+
+    const stmt = this.db.prepare(sql);
+    const row = (Object.keys(params).length > 0 ? stmt.get(params) : stmt.get()) as { cnt: number };
+    return row.cnt;
   }
 
   // -------------------------------------------------------------------------
@@ -1672,10 +1756,28 @@ export class FleetDatabase {
   // Views / aggregations
   // -------------------------------------------------------------------------
 
-  getTeamDashboard(): TeamDashboardRow[] {
-    const stmt = this.db.prepare('SELECT * FROM v_team_dashboard');
-    const rows = stmt.all() as Record<string, unknown>[];
+  getTeamDashboard(pagination?: { limit?: number; offset?: number }): TeamDashboardRow[] {
+    let sql = 'SELECT * FROM v_team_dashboard';
+    const params: Record<string, unknown> = {};
+
+    if (pagination?.limit) {
+      sql += ' LIMIT @limit';
+      params.limit = pagination.limit;
+    }
+    if (pagination?.offset) {
+      sql += ' OFFSET @offset';
+      params.offset = pagination.offset;
+    }
+
+    const stmt = this.db.prepare(sql);
+    const rows = (Object.keys(params).length > 0 ? stmt.all(params) : stmt.all()) as Record<string, unknown>[];
     return rows.map((r) => this.mapDashboardRow(r));
+  }
+
+  getTeamDashboardCount(): number {
+    const stmt = this.db.prepare('SELECT COUNT(*) AS cnt FROM v_team_dashboard');
+    const row = stmt.get() as { cnt: number };
+    return row.cnt;
   }
 
   /**

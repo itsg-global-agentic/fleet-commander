@@ -11,10 +11,10 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // ---------------------------------------------------------------------------
 
 const mockTeams = [
-  { id: 1, project_id: 1, issue_number: 10, status: 'running', worktree_name: 'proj-10' },
-  { id: 2, project_id: 1, issue_number: 20, status: 'done', worktree_name: 'proj-20' },
-  { id: 3, project_id: 2, issue_number: 30, status: 'running', worktree_name: 'other-30' },
-  { id: 4, project_id: 2, issue_number: 40, status: 'idle', worktree_name: 'other-40' },
+  { id: 1, projectId: 1, issueNumber: 10, status: 'running', worktreeName: 'proj-10' },
+  { id: 2, projectId: 1, issueNumber: 20, status: 'done', worktreeName: 'proj-20' },
+  { id: 3, projectId: 2, issueNumber: 30, status: 'running', worktreeName: 'other-30' },
+  { id: 4, projectId: 2, issueNumber: 40, status: 'idle', worktreeName: 'other-40' },
 ];
 
 const mockListTeams = vi.fn().mockReturnValue(mockTeams);
@@ -108,8 +108,8 @@ describe('fleet_list_teams MCP tool', () => {
 
     const parsed = JSON.parse(result.content[0]!.text);
     expect(parsed).toHaveLength(2);
-    expect(parsed[0].project_id).toBe(2);
-    expect(parsed[1].project_id).toBe(2);
+    expect(parsed[0].projectId).toBe(2);
+    expect(parsed[1].projectId).toBe(2);
   });
 
   it('handler filters by status', async () => {
@@ -136,7 +136,7 @@ describe('fleet_list_teams MCP tool', () => {
     const parsed = JSON.parse(result.content[0]!.text);
     expect(parsed).toHaveLength(1);
     expect(parsed[0].id).toBe(1);
-    expect(parsed[0].project_id).toBe(1);
+    expect(parsed[0].projectId).toBe(1);
     expect(parsed[0].status).toBe('running');
   });
 

@@ -55,8 +55,10 @@ export function FleetProvider({ children }: { children: ReactNode }) {
     try {
       const res = await fetch('/api/teams');
       if (res.ok) {
-        const data = (await res.json()) as TeamDashboardRow[];
-        setTeams(data);
+        const json = await res.json();
+        // Handle paginated response envelope { data, total, limit, offset }
+        const rows = (Array.isArray(json) ? json : json.data) as TeamDashboardRow[];
+        setTeams(rows);
       }
     } catch {
       // Network error — will be retried on next event or periodic refresh

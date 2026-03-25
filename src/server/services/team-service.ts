@@ -14,7 +14,7 @@ import { githubPoller } from './github-poller.js';
 import { getDatabase } from '../db.js';
 import { sseBroker } from './sse-broker.js';
 import config from '../config.js';
-import type { TeamPhase, IssueDependencyInfo } from '../../shared/types.js';
+import type { TeamPhase, IssueDependencyInfo, PaginatedResponse, TeamDashboardRow } from '../../shared/types.js';
 import { buildTimeline } from '../utils/build-timeline.js';
 import { ServiceError, validationError, notFoundError, conflictError, projectNotReadyError } from './service-error.js';
 import { getProjectService } from './project-service.js';
@@ -671,13 +671,27 @@ export class TeamService {
   }
 
   /**
-   * List all teams with dashboard data.
+   * List all teams with dashboard data, with optional pagination.
    *
-   * @returns Array of team dashboard records
+   * @param pagination - Optional limit/offset for paginated results
+   * @returns Paginated response with team dashboard records, or full array when no pagination
    */
-  listTeams(): unknown[] {
+  listTeams(pagination?: { limit?: number; offset?: number }): PaginatedResponse<TeamDashboardRow> | TeamDashboardRow[] {
     const db = getDatabase();
-    return db.getTeamDashboard();
+
+    // When called without pagination args (internal callers), return bare array
+    if (!pagination) {
+      return db.getTeamDashboard();
+    }
+
+    const data = db.getTeamDashboard(pagination);
+    const total = db.getTeamDashboardCount();
+    return {
+      data,
+      total,
+      limit: pagination.limit ?? data.length,
+      offset: pagination.offset ?? 0,
+    };
   }
 
   /**
@@ -734,15 +748,16 @@ export class TeamService {
   }
 
   /**
-   * Get hook events for a team.
+   * Get hook events for a team, with optional pagination.
    *
    * @param teamId - The team ID
-   * @param limit - Maximum number of events to return (default 100)
-   * @returns Array of events
+   * @param limit - Maximum number of events to return (default 500)
+   * @param offset - Number of events to skip (default 0)
+   * @returns Paginated response with events
    * @throws ServiceError with code VALIDATION if teamId is invalid
    * @throws ServiceError with code NOT_FOUND if team doesn't exist
    */
-  getEvents(teamId: number, limit = 100): unknown[] {
+  getEvents(teamId: number, limit = 500, offset = 0): PaginatedResponse<unknown> {
     if (isNaN(teamId) || teamId < 1) {
       throw validationError('Invalid team ID');
     }
@@ -753,7 +768,9 @@ export class TeamService {
       throw notFoundError(`Team ${teamId} not found`);
     }
 
-    return db.getEventsByTeam(teamId, limit);
+    const data = db.getEventsByTeam(teamId, limit, offset);
+    const total = db.getEventsByTeamCount(teamId);
+    return { data, total, limit, offset };
   }
 
   /**

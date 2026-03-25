@@ -47,6 +47,11 @@ interface TeamIdParams {
   id: string;
 }
 
+interface PaginationQuerystring {
+  limit?: string;
+  offset?: string;
+}
+
 interface OutputQuerystring {
   lines?: string;
 }
@@ -320,20 +325,37 @@ const teamsRoutes: FastifyPluginCallback = (
   );
 
   // -------------------------------------------------------------------------
-  // GET /api/teams — list all teams with dashboard data
+  // GET /api/teams — list all teams with dashboard data (paginated)
   // -------------------------------------------------------------------------
   fastify.get(
     '/api/teams',
-    async (_request: FastifyRequest, reply: FastifyReply) => {
+    async (
+      request: FastifyRequest<{ Querystring: PaginationQuerystring }>,
+      reply: FastifyReply,
+    ) => {
       try {
+        const query = request.query as PaginationQuerystring;
+        const rawLimit = query.limit ? parseInt(query.limit, 10) : undefined;
+        const rawOffset = query.offset ? parseInt(query.offset, 10) : undefined;
+
+        if (rawLimit !== undefined && (isNaN(rawLimit) || rawLimit < 1)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'limit must be a positive integer' });
+        }
+        if (rawOffset !== undefined && (isNaN(rawOffset) || rawOffset < 0)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'offset must be a non-negative integer' });
+        }
+
+        const limit = rawLimit !== undefined ? Math.min(rawLimit, 1000) : 100;
+        const offset = rawOffset ?? 0;
+
         const service = getTeamService();
-        const dashboard = service.listTeams();
-        return reply.code(200).send(dashboard);
+        const result = service.listTeams({ limit, offset });
+        return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
           return reply.code(err.statusCode).send({ error: err.code, message: err.message });
         }
-        _request.log.error(err, 'Failed to list teams');
+        request.log.error(err, 'Failed to list teams');
         return reply.code(500).send({
           error: 'Internal Server Error',
           message: err instanceof Error ? err.message : String(err),
@@ -535,22 +557,33 @@ const teamsRoutes: FastifyPluginCallback = (
   );
 
   // -------------------------------------------------------------------------
-  // GET /api/teams/:id/events — events for this team
+  // GET /api/teams/:id/events — events for this team (paginated)
   // -------------------------------------------------------------------------
   fastify.get(
     '/api/teams/:id/events',
     async (
-      request: FastifyRequest<{ Params: TeamIdParams; Querystring: { limit?: string } }>,
+      request: FastifyRequest<{ Params: TeamIdParams; Querystring: PaginationQuerystring }>,
       reply: FastifyReply,
     ) => {
       try {
         const teamId = parseInt(request.params.id, 10);
-        const limitParam = (request.query as { limit?: string }).limit;
-        const limit = limitParam ? parseInt(limitParam, 10) : 100;
+        const query = request.query as PaginationQuerystring;
+        const rawLimit = query.limit ? parseInt(query.limit, 10) : undefined;
+        const rawOffset = query.offset ? parseInt(query.offset, 10) : undefined;
+
+        if (rawLimit !== undefined && (isNaN(rawLimit) || rawLimit < 1)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'limit must be a positive integer' });
+        }
+        if (rawOffset !== undefined && (isNaN(rawOffset) || rawOffset < 0)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'offset must be a non-negative integer' });
+        }
+
+        const limit = rawLimit !== undefined ? Math.min(rawLimit, 1000) : 500;
+        const offset = rawOffset ?? 0;
 
         const service = getTeamService();
-        const events = service.getEvents(teamId, limit);
-        return reply.code(200).send(events);
+        const result = service.getEvents(teamId, limit, offset);
+        return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
           return reply.code(err.statusCode).send({ error: err.code, message: err.message });

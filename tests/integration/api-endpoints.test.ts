@@ -105,11 +105,28 @@ beforeAll(async () => {
 
   // Register the GET /api/teams and GET /api/teams/:id endpoints manually
   // to avoid pulling in team-manager dependencies from the full teamsRoutes plugin.
-  server.get('/api/teams', async (_req, reply) => {
-    const db = getDatabase();
-    const dashboard = db.getTeamDashboard();
-    return reply.code(200).send(dashboard);
-  });
+  server.get<{ Querystring: { limit?: string; offset?: string } }>(
+    '/api/teams',
+    async (req, reply) => {
+      const db = getDatabase();
+      const rawLimit = req.query.limit ? parseInt(req.query.limit, 10) : undefined;
+      const rawOffset = req.query.offset ? parseInt(req.query.offset, 10) : undefined;
+
+      if (rawLimit !== undefined && (isNaN(rawLimit) || rawLimit < 1)) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'limit must be a positive integer' });
+      }
+      if (rawOffset !== undefined && (isNaN(rawOffset) || rawOffset < 0)) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'offset must be a non-negative integer' });
+      }
+
+      const limit = rawLimit !== undefined ? Math.min(rawLimit, 1000) : 100;
+      const offset = rawOffset ?? 0;
+
+      const data = db.getTeamDashboard({ limit, offset });
+      const total = db.getTeamDashboardCount();
+      return reply.code(200).send({ data, total, limit, offset });
+    },
+  );
 
   server.get<{ Params: { id: string } }>(
     '/api/teams/:id',
@@ -203,16 +220,22 @@ describe('Events API', () => {
     expect(body.event_id).toBeGreaterThan(0);
   });
 
-  it('GET /api/events returns stored events', async () => {
+  it('GET /api/events returns paginated envelope with stored events', async () => {
     const res = await server.inject({
       method: 'GET',
       url: '/api/events?limit=10',
     });
 
     expect(res.statusCode).toBe(200);
-    const events = res.json();
-    expect(Array.isArray(events)).toBe(true);
-    expect(events.length).toBeGreaterThan(0);
+    const body = res.json();
+    expect(body).toHaveProperty('data');
+    expect(body).toHaveProperty('total');
+    expect(body).toHaveProperty('limit');
+    expect(body).toHaveProperty('offset');
+    expect(Array.isArray(body.data)).toBe(true);
+    expect(body.data.length).toBeGreaterThan(0);
+    expect(body.limit).toBe(10);
+    expect(body.offset).toBe(0);
   });
 
   it('GET /api/events supports team_id filter', async () => {
@@ -222,10 +245,11 @@ describe('Events API', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const events = res.json();
-    expect(Array.isArray(events)).toBe(true);
+    const body = res.json();
+    expect(body).toHaveProperty('data');
+    expect(Array.isArray(body.data)).toBe(true);
     // Every event in the result should belong to team_id 1
-    for (const ev of events) {
+    for (const ev of body.data) {
       expect(ev.teamId).toBe(1);
     }
   });
@@ -237,9 +261,10 @@ describe('Events API', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const events = res.json();
-    expect(Array.isArray(events)).toBe(true);
-    for (const ev of events) {
+    const body = res.json();
+    expect(body).toHaveProperty('data');
+    expect(Array.isArray(body.data)).toBe(true);
+    for (const ev of body.data) {
       expect(ev.eventType).toBe('SessionStart');
     }
   });
@@ -341,7 +366,8 @@ describe('Event -> DB verification', () => {
       url: `/api/events?team_id=${postBody.team_id}`,
     });
     expect(getRes.statusCode).toBe(200);
-    const events = getRes.json();
+    const body = getRes.json();
+    const events = body.data;
 
     // The event we just posted must be present
     const found = events.find((e: any) => e.id === eventId);
@@ -403,14 +429,21 @@ describe('Event -> DB verification', () => {
 // =============================================================================
 
 describe('Teams API (read-only)', () => {
-  it('GET /api/teams returns dashboard data', async () => {
+  it('GET /api/teams returns paginated dashboard data', async () => {
     const res = await server.inject({ method: 'GET', url: '/api/teams' });
 
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(Array.isArray(body)).toBe(true);
+    expect(body).toHaveProperty('data');
+    expect(body).toHaveProperty('total');
+    expect(body).toHaveProperty('limit');
+    expect(body).toHaveProperty('offset');
+    expect(Array.isArray(body.data)).toBe(true);
     // At least the teams seeded earlier should appear
-    expect(body.length).toBeGreaterThan(0);
+    expect(body.data.length).toBeGreaterThan(0);
+    expect(body.total).toBeGreaterThan(0);
+    expect(body.limit).toBe(100);
+    expect(body.offset).toBe(0);
   });
 
   it('GET /api/teams/:id returns team detail', async () => {
@@ -432,6 +465,68 @@ describe('Teams API (read-only)', () => {
   it('GET /api/teams/:id returns 400 for non-numeric ID', async () => {
     const res = await server.inject({ method: 'GET', url: '/api/teams/abc' });
 
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+// =============================================================================
+// Pagination tests
+// =============================================================================
+
+describe('Pagination', () => {
+  it('GET /api/teams respects limit and offset params', async () => {
+    const res = await server.inject({ method: 'GET', url: '/api/teams?limit=2&offset=0' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.limit).toBe(2);
+    expect(body.offset).toBe(0);
+    expect(body.data.length).toBeLessThanOrEqual(2);
+    expect(body.total).toBeGreaterThan(0);
+  });
+
+  it('GET /api/teams with offset beyond total returns empty data', async () => {
+    const res = await server.inject({ method: 'GET', url: '/api/teams?limit=10&offset=99999' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.data).toHaveLength(0);
+    expect(body.total).toBeGreaterThan(0);
+    expect(body.offset).toBe(99999);
+  });
+
+  it('GET /api/teams caps limit at 1000', async () => {
+    const res = await server.inject({ method: 'GET', url: '/api/teams?limit=5000' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.limit).toBe(1000);
+  });
+
+  it('GET /api/teams rejects negative limit', async () => {
+    const res = await server.inject({ method: 'GET', url: '/api/teams?limit=-1' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/teams rejects non-numeric limit', async () => {
+    const res = await server.inject({ method: 'GET', url: '/api/teams?limit=abc' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/teams rejects negative offset', async () => {
+    const res = await server.inject({ method: 'GET', url: '/api/teams?offset=-1' });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('GET /api/events respects offset param', async () => {
+    const res = await server.inject({ method: 'GET', url: '/api/events?limit=5&offset=0' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toHaveProperty('data');
+    expect(body).toHaveProperty('total');
+    expect(body.limit).toBe(5);
+    expect(body.offset).toBe(0);
+  });
+
+  it('GET /api/events rejects negative offset', async () => {
+    const res = await server.inject({ method: 'GET', url: '/api/events?offset=-1' });
     expect(res.statusCode).toBe(400);
   });
 });

@@ -13,6 +13,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { getTeamService } from '../../services/team-service.js';
+import type { TeamDashboardRow } from '../../../shared/types.js';
 
 /**
  * Registers the `fleet_list_teams` tool on the given MCP server.
@@ -30,14 +31,17 @@ export function registerListTeamsTool(server: McpServer): void {
     },
     async ({ projectId, status }) => {
       const service = getTeamService();
-      let teams = service.listTeams();
+      const result = service.listTeams();
+      // listTeams() without pagination args returns a bare array
+      const allTeams: TeamDashboardRow[] = Array.isArray(result) ? result : result.data;
+      let teams: TeamDashboardRow[] = allTeams;
 
       if (projectId !== undefined) {
-        teams = teams.filter((t) => (t as Record<string, unknown>).project_id === projectId);
+        teams = teams.filter((t) => t.projectId === projectId);
       }
 
       if (status !== undefined) {
-        teams = teams.filter((t) => (t as Record<string, unknown>).status === status);
+        teams = teams.filter((t) => t.status === status);
       }
 
       return {
