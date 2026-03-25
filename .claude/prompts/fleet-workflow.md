@@ -1,8 +1,8 @@
 <!-- fleet-commander v0.0.10 -->
 <!-- Fleet Commander workflow template. Installed by Fleet Commander into your project. -->
-<!-- Placeholders {{PROJECT_NAME}}, {{project_slug}}, {{BASE_BRANCH}}, {{ISSUE_NUMBER}} are replaced during installation. -->
+<!-- Placeholders fleet-commander, fleet-commander, main, {{ISSUE_NUMBER}} are replaced during installation. -->
 
-# Diamond Workflow — {{PROJECT_NAME}}
+# Diamond Workflow — fleet-commander
 
 ## About Fleet Commander
 
@@ -18,15 +18,15 @@ Fleet Commander (FC) is the orchestration layer that manages your team. Key fact
 
 You are running inside a **git worktree**, not the main repository checkout. This has critical implications:
 
-- **NEVER run `git checkout {{BASE_BRANCH}}`** — the base branch is already checked out in the main worktree. Attempting to check it out here will fail with "already used by worktree."
-- **Use `git fetch origin {{BASE_BRANCH}}` and reference `origin/{{BASE_BRANCH}}`** whenever you need the latest base branch state. Do not try to switch to it.
-- **Your branch is your branch.** Create it, work on it, push it. Never switch away from it to {{BASE_BRANCH}}.
-- This applies to ALL agents (planner, dev, reviewer) — none of them should ever attempt to checkout {{BASE_BRANCH}}.
+- **NEVER run `git checkout main`** — the base branch is already checked out in the main worktree. Attempting to check it out here will fail with "already used by worktree."
+- **Use `git fetch origin main` and reference `origin/main`** whenever you need the latest base branch state. Do not try to switch to it.
+- **Your branch is your branch.** Create it, work on it, push it. Never switch away from it to main.
+- This applies to ALL agents (planner, dev, reviewer) — none of them should ever attempt to checkout main.
 
 ## Entry Point
 
 ```
-User: claude --worktree {{project_slug}}-{N}
+User: claude --worktree fleet-commander-{N}
 (prompt is sent via stdin from Fleet Commander's prompt file)
 ```
 
@@ -211,7 +211,7 @@ If the Planner is unresponsive for >5 minutes or produces an unusable plan:
 ```
 ISSUE: #{N} {title}
 BRANCH: {feat|fix|test}/{N}-{short-desc}
-BASE: {{BASE_BRANCH}}
+BASE: main
 
 PLAN:
 {paste the full planner's plan here}
@@ -265,7 +265,7 @@ For mixed-type issues (e.g., C# backend + TypeScript frontend):
 ```
 ISSUE: #{N} {title}
 BRANCH: {branch_name}
-BASE: {{BASE_BRANCH}}
+BASE: main
 
 GUIDEBOOKS (read these to verify compliance):
 {list of guidebook paths from the plan}
@@ -322,14 +322,14 @@ After TL reads `review.md` with `Status: APPROVE`:
 
 1. **Branch freshness check** (MANDATORY):
    ```bash
-   git stash --include-untracked && git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}} && git stash pop && git push --force-with-lease
+   git stash --include-untracked && git fetch origin main && git rebase origin/main && git stash pop && git push --force-with-lease
    ```
    The `git stash --include-untracked` is required because the CC runtime may leave unstaged changes (e.g., `.claude/settings.json`) that block rebase.
    If rebase fails (conflicts) → state Blocked.
 
 2. **TL creates PR**:
    ```bash
-   gh pr create --base {{BASE_BRANCH}} --title "Issue #{N}: {description}" --body "Closes #{N}"
+   gh pr create --base main --title "Issue #{N}: {description}" --body "Closes #{N}"
    ```
 
 3. **Set auto-merge immediately** (mandatory, no exceptions):
@@ -440,7 +440,7 @@ If the same issue bounces back and forth between dev and reviewer:
 
 ### Rebase Conflict
 
-1. If `git stash --include-untracked && git rebase origin/{{BASE_BRANCH}}` fails with conflicts → state Blocked
+1. If `git stash --include-untracked && git rebase origin/main` fails with conflicts → state Blocked
 2. Comment on issue explaining the conflict
 3. STOP — do not attempt manual conflict resolution across worktrees
 
@@ -474,7 +474,7 @@ Atomic commits — each commit should be a logical unit.
 
 - **One issue at a time** — atomic changes only
 - **CI must be green** — PR CANNOT be merged with red CI
-- **Branch from {{BASE_BRANCH}}** — NEVER commit directly to {{BASE_BRANCH}}
+- **Branch from main** — NEVER commit directly to main
 - **TL creates the PR** — dev pushes code, TL creates the PR and sets auto-merge
 - **P2P for review** — dev and reviewer talk directly, TL does not relay
 - **Idle = normal** — agents waiting for messages are expected to be idle
@@ -492,9 +492,9 @@ Atomic commits — each commit should be a logical unit.
 | TL implements code while dev is active | Let dev do the implementation |
 | TL overrides reviewer without reading feedback | Read feedback, arbitrate only after 3 rounds |
 | Dev pushes without local tests | Build + tests locally BEFORE reporting ready |
-| Dev pushes without rebase | ALWAYS stash + rebase on {{BASE_BRANCH}} before push |
+| Dev pushes without rebase | ALWAYS stash + rebase on main before push |
 | Respawning agents endlessly | Max 5 total spawns — then TL takes over or reports BLOCKED |
-| Checking out {{BASE_BRANCH}} in a worktree | NEVER checkout {{BASE_BRANCH}} — use `origin/{{BASE_BRANCH}}` as reference |
+| Checking out main in a worktree | NEVER checkout main — use `origin/main` as reference |
 | Dev creates the PR | TL creates the PR after APPROVE |
 | Spawning a coordinator / 4th agent | Diamond team is exactly 3 agents: planner, dev, reviewer |
 | Spawning all 3 agents at once before analysis is done | Spawn sequentially: planner first, then dev with plan, then reviewer after dev ready |

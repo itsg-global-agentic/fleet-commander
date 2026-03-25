@@ -1017,7 +1017,7 @@ interface ProjectGroupSectionProps {
 
 function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: ProjectGroupSectionProps) {
   const expanded = !collapsedNodes.has(bucket.key);
-  const totalIssueCount = bucket.projects.reduce((sum, p) => sum + countNodes(p.tree), 0);
+  const totalIssueCount = (bucket.projects ?? []).reduce((sum, p) => sum + countNodes(p.tree), 0);
 
   return (
     <div>
