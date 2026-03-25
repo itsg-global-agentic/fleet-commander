@@ -1,7 +1,8 @@
 // =============================================================================
 // Fleet Commander — MCP system-health Tool Tests
 // =============================================================================
-// Smoke tests for the fleet_system_health MCP tool registration and handler.
+// Tests for the fleet_system_health MCP tool registration, handler, and error
+// paths.
 // =============================================================================
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -19,9 +20,11 @@ const mockHealthSummary: HealthSummary = {
   byPhase: { implementing: 2, reviewing: 1, done: 2 },
 };
 
+const mockGetHealthSummary = vi.fn().mockReturnValue(mockHealthSummary);
+
 vi.mock('../../../src/server/services/diagnostics-service.js', () => ({
   getDiagnosticsService: () => ({
-    getHealthSummary: () => mockHealthSummary,
+    getHealthSummary: mockGetHealthSummary,
   }),
 }));
 
@@ -62,6 +65,7 @@ const { registerSystemHealthTool } = await import(
 describe('fleet_system_health MCP tool', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGetHealthSummary.mockReturnValue(mockHealthSummary);
     registeredTools.length = 0;
   });
 
@@ -110,5 +114,54 @@ describe('fleet_system_health MCP tool', () => {
     expect(text).toContain('  ');
     // Verify it matches JSON.stringify with indent=2
     expect(text).toBe(JSON.stringify(mockHealthSummary, null, 2));
+  });
+
+  it('handler returns zeroed health summary when no teams exist', async () => {
+    const emptyHealth: HealthSummary = {
+      totalTeams: 0,
+      activeTeams: 0,
+      stuckOrIdle: 0,
+      byStatus: {},
+      byPhase: {},
+    };
+    mockGetHealthSummary.mockReturnValue(emptyHealth);
+    registerSystemHealthTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    const result = (await handler()) as {
+      content: Array<{ type: string; text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.totalTeams).toBe(0);
+    expect(parsed.activeTeams).toBe(0);
+    expect(parsed.stuckOrIdle).toBe(0);
+    expect(parsed.byStatus).toEqual({});
+    expect(parsed.byPhase).toEqual({});
+  });
+
+  it('handler propagates service errors (no try/catch in zero-arg tool)', async () => {
+    mockGetHealthSummary.mockImplementationOnce(() => {
+      throw new Error('diagnostics unavailable');
+    });
+
+    registerSystemHealthTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await expect(handler()).rejects.toThrow('diagnostics unavailable');
+  });
+
+  it('handler includes byStatus and byPhase breakdowns', async () => {
+    registerSystemHealthTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    const result = (await handler()) as {
+      content: Array<{ type: string; text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed.byStatus).toHaveProperty('running', 2);
+    expect(parsed.byStatus).toHaveProperty('idle', 1);
+    expect(parsed.byPhase).toHaveProperty('implementing', 2);
   });
 });

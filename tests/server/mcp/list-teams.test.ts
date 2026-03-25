@@ -165,4 +165,43 @@ describe('fleet_list_teams MCP tool', () => {
     expect(text).toContain('  ');
     expect(text).toBe(JSON.stringify(mockTeams, null, 2));
   });
+
+  it('handler returns empty array when service returns empty array', async () => {
+    mockListTeams.mockReturnValueOnce([]);
+    registerListTeamsTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    const result = (await handler({ projectId: undefined, status: undefined })) as {
+      content: Array<{ type: string; text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toEqual([]);
+  });
+
+  it('handler handles service returning { data } shape', async () => {
+    mockListTeams.mockReturnValueOnce({ data: mockTeams });
+    registerListTeamsTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    const result = (await handler({ projectId: undefined, status: undefined })) as {
+      content: Array<{ type: string; text: string }>;
+    };
+
+    const parsed = JSON.parse(result.content[0]!.text);
+    expect(parsed).toEqual(mockTeams);
+  });
+
+  it('handler propagates service errors', async () => {
+    mockListTeams.mockImplementationOnce(() => {
+      throw new Error('DB query failed');
+    });
+
+    registerListTeamsTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await expect(handler({ projectId: undefined, status: undefined })).rejects.toThrow(
+      'DB query failed',
+    );
+  });
 });
