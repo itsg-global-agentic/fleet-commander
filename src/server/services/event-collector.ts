@@ -131,6 +131,9 @@ const subagentTrackers = new Map<string, SubagentTracker>();
 /** Throttle window: tool_use events from the same team within this period are deduplicated */
 const TOOL_USE_THROTTLE_MS = 5000; // 5 seconds
 
+/** TTL for subagent trackers: entries older than this are pruned to prevent unbounded growth */
+const SUBAGENT_TRACKER_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
 // ---------------------------------------------------------------------------
 // Agent name normalization
 // ---------------------------------------------------------------------------
@@ -289,6 +292,13 @@ export function processEvent(
   // by hook events. The event data is still recorded (below) for
   // debugging, but all transition logic is skipped.
   const isTerminal = TERMINAL_STATUSES.has(team.status);
+
+  // ── Clean up subagent trackers for teams in terminal states ───────
+  // If a team has reached done/failed, any orphaned tracker entries for
+  // that team's subagents are removed on the next event for that team.
+  if (isTerminal) {
+    cleanSubagentTrackersForTeam(payload.team);
+  }
 
   // ── Collect transition data (without writing to DB yet) ──────────
   // The actual DB writes happen inside a single transaction below.
@@ -559,6 +569,11 @@ export function processEvent(
     const subagentName = payload.teammate_name || payload.agent_type || 'unknown';
     const trackerKey = `${payload.team}:${subagentName}`;
     subagentTrackers.set(trackerKey, { startTime: now, eventCount: 0 });
+
+    // Prune stale subagent trackers to prevent unbounded growth
+    for (const [k, tracker] of subagentTrackers) {
+      if (now - tracker.startTime > SUBAGENT_TRACKER_TTL_MS) subagentTrackers.delete(k);
+    }
   }
 
   // Increment event count for any tracked subagent on this team
@@ -625,4 +640,17 @@ export function resetThrottleState(): void {
 /** Reset subagent tracking state. Intended for use in tests only. */
 export function resetSubagentTrackers(): void {
   subagentTrackers.clear();
+}
+
+/** Return current size of subagent tracker map. Intended for use in tests only. */
+export function getSubagentTrackerSize(): number {
+  return subagentTrackers.size;
+}
+
+/** Remove all subagent tracker entries for a given team (worktree name). */
+export function cleanSubagentTrackersForTeam(worktreeName: string): void {
+  const prefix = worktreeName + ':';
+  for (const key of subagentTrackers.keys()) {
+    if (key.startsWith(prefix)) subagentTrackers.delete(key);
+  }
 }

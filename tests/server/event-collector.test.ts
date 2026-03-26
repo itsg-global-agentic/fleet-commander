@@ -7,6 +7,8 @@ import {
   processEvent,
   resetThrottleState,
   resetSubagentTrackers,
+  getSubagentTrackerSize,
+  cleanSubagentTrackersForTeam,
   normalizeAgentName,
   classifyAgentRole,
   shouldAdvancePhase,
@@ -1420,6 +1422,184 @@ describe('Subagent crash detection', () => {
     expect(msg).toContain('s after start');
     expect(msg).toContain('events');
     expect(msg).toContain('Consider respawning');
+  });
+});
+
+// =============================================================================
+// Subagent tracker TTL sweep (Issue #520)
+// =============================================================================
+
+describe('Subagent tracker TTL sweep', () => {
+  it('should prune subagent trackers older than 30 minutes on subagent_start', () => {
+    vi.useFakeTimers();
+    try {
+      const baseTime = new Date('2026-03-20T12:00:00Z').getTime();
+      vi.setSystemTime(baseTime);
+
+      const db = createMockDb();
+      const sse = createMockSse();
+
+      // Start a subagent at time T
+      processEvent(
+        makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev' }),
+        db,
+        sse,
+      );
+      expect(getSubagentTrackerSize()).toBe(1);
+
+      // Advance time by 31 minutes
+      vi.setSystemTime(baseTime + 31 * 60 * 1000);
+
+      // Start another subagent — should trigger TTL sweep and prune the old one
+      processEvent(
+        makePayload({ event: 'subagent_start', teammate_name: 'fleet-planner' }),
+        db,
+        sse,
+      );
+
+      // Only the new tracker should remain
+      expect(getSubagentTrackerSize()).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('should NOT prune recent subagent trackers', () => {
+    vi.useFakeTimers();
+    try {
+      const baseTime = new Date('2026-03-20T12:00:00Z').getTime();
+      vi.setSystemTime(baseTime);
+
+      const db = createMockDb();
+      const sse = createMockSse();
+
+      // Start two subagents at time T (different names)
+      processEvent(
+        makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev' }),
+        db,
+        sse,
+      );
+      processEvent(
+        makePayload({ event: 'subagent_start', teammate_name: 'fleet-reviewer' }),
+        db,
+        sse,
+      );
+      expect(getSubagentTrackerSize()).toBe(2);
+
+      // Advance time by only 5 minutes
+      vi.setSystemTime(baseTime + 5 * 60 * 1000);
+
+      // Start a third subagent
+      processEvent(
+        makePayload({ event: 'subagent_start', teammate_name: 'fleet-planner' }),
+        db,
+        sse,
+      );
+
+      // All three trackers should still be present
+      expect(getSubagentTrackerSize()).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// =============================================================================
+// Subagent tracker terminal-state cleanup (Issue #520)
+// =============================================================================
+
+describe('Subagent tracker terminal-state cleanup', () => {
+  it('should clean subagent trackers when team is in terminal state (done)', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    // Start a subagent for the team
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev', team: 'kea-100' }),
+      db,
+      sse,
+    );
+    expect(getSubagentTrackerSize()).toBe(1);
+
+    // Now simulate the team being in terminal state 'done'
+    const terminalDb = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'done', phase: 'pr' }),
+    });
+
+    // Any event for the terminal team should clean up its trackers
+    processEvent(
+      makePayload({ event: 'tool_use', team: 'kea-100' }),
+      terminalDb,
+      sse,
+    );
+
+    expect(getSubagentTrackerSize()).toBe(0);
+  });
+
+  it('should clean subagent trackers when team is in terminal state (failed)', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    // Start subagents for the team
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev', team: 'kea-100' }),
+      db,
+      sse,
+    );
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-planner', team: 'kea-100' }),
+      db,
+      sse,
+    );
+    expect(getSubagentTrackerSize()).toBe(2);
+
+    // Simulate the team being in terminal state 'failed'
+    const terminalDb = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'failed', phase: 'implementing' }),
+    });
+
+    processEvent(
+      makePayload({ event: 'tool_use', team: 'kea-100' }),
+      terminalDb,
+      sse,
+    );
+
+    expect(getSubagentTrackerSize()).toBe(0);
+  });
+
+  it('should NOT clean trackers for other teams when one team reaches terminal state', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    // Start subagents on two different teams
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev', team: 'kea-100' }),
+      db,
+      sse,
+    );
+    processEvent(
+      makePayload({ event: 'subagent_start', teammate_name: 'fleet-dev', team: 'kea-200' }),
+      db,
+      sse,
+    );
+    expect(getSubagentTrackerSize()).toBe(2);
+
+    // Only kea-100 reaches terminal state
+    const terminalDb = createMockDb({
+      getTeamByWorktree: vi.fn().mockImplementation((worktree: string) => {
+        if (worktree === 'kea-100') return { id: 1, status: 'done', phase: 'pr' };
+        return { id: 2, status: 'running', phase: 'implementing' };
+      }),
+    });
+
+    processEvent(
+      makePayload({ event: 'tool_use', team: 'kea-100' }),
+      terminalDb,
+      sse,
+    );
+
+    // Only kea-100 trackers should be cleaned; kea-200 should remain
+    expect(getSubagentTrackerSize()).toBe(1);
   });
 });
 
