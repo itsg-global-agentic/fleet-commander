@@ -163,7 +163,8 @@ All hook wrapper scripts pipe their stdin JSON to `send_event.sh`, which:
 7. Always exits 0
 
 Key design decisions:
-- **No `jq` dependency.** JSON is parsed with grep+sed (POSIX portable).
+- **Uses `jq` for JSON encoding when available; falls back to awk for
+  environments without `jq`.** No hard dependency on `jq`.
 - **No Python dependency.** Pure shell.
 - **Fire and forget.** The curl runs backgrounded. If the server is down,
   the event is simply lost (acceptable — see section 6).

@@ -83,12 +83,43 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%
 # The raw CC stdin JSON is forwarded as the "cc_stdin" string field.
 # All field extraction happens server-side via JSON.parse().
 
+# ── JSON string encoder ────────────────────────────────────────
+# Reads raw text from stdin, outputs a valid JSON string WITH
+# surrounding double quotes. Handles all RFC 8259 control chars.
+# Uses jq when available; falls back to awk for portability.
+json_encode_string() {
+    if command -v jq >/dev/null 2>&1; then
+        jq -Rs .
+    else
+        # Pure-shell fallback using awk for reliable multi-line processing.
+        # tr replaces \r with \x01 sentinel because gawk on Windows strips
+        # \r during record splitting before gsub can see it.
+        local raw
+        raw="$(cat; printf .)"   # printf . preserves trailing newlines
+        raw="${raw%.}"            # strip sentinel
+        printf '%s' "$raw" | tr '\015' '\001' | awk '
+        BEGIN { ORS=""; printf "\"" }
+        {
+            gsub(/\\/, "\\\\")       # backslashes first
+            gsub(/"/, "\\\"")        # double quotes
+            gsub(/\t/, "\\t")        # tabs
+            gsub(/\001/, "\\r")      # carriage returns (from sentinel)
+            gsub(/\x08/, "\\b")      # backspace
+            gsub(/\x0c/, "\\f")      # form feed
+            if (NR > 1) printf "\\n" # newlines between lines
+            printf "%s", $0
+        }
+        END { printf "\"" }
+        '
+    fi
+}
+
 json_field() {
     local key="$1" val="$2"
     [ -z "$val" ] && return
-    # Escape backslashes first, then double quotes
-    val=$(printf '%s' "$val" | sed 's|\\|\\\\|g; s|"|\\"|g')
-    printf '"%s":"%s",' "$key" "$val"
+    local encoded
+    encoded=$(printf '%s' "$val" | json_encode_string)
+    printf '"%s":%s,' "$key" "$encoded"
 }
 
 PAYLOAD="{"
@@ -96,10 +127,8 @@ PAYLOAD="${PAYLOAD}$(json_field "event" "$EVENT_TYPE")"
 PAYLOAD="${PAYLOAD}$(json_field "team" "$TEAM_NAME")"
 PAYLOAD="${PAYLOAD}$(json_field "timestamp" "$TIMESTAMP")"
 if [ -n "$STDIN_JSON" ] && [ "$STDIN_JSON" != "{}" ]; then
-    # Escape the raw JSON string for embedding inside a JSON string value.
-    # This handles backslashes, double quotes, and control characters.
-    ESCAPED=$(printf '%s' "$STDIN_JSON" | sed 's|\\|\\\\|g; s|"|\\"|g' | tr '\n' ' ' | tr '\r' ' ' | tr '\t' ' ')
-    PAYLOAD="${PAYLOAD}\"cc_stdin\":\"${ESCAPED}\","
+    ENCODED=$(printf '%s' "$STDIN_JSON" | json_encode_string)
+    PAYLOAD="${PAYLOAD}\"cc_stdin\":${ENCODED},"
 fi
 # Remove trailing comma, close brace
 PAYLOAD=$(printf '%s' "$PAYLOAD" | sed 's/,$//')
