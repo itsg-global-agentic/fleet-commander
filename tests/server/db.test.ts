@@ -573,6 +573,32 @@ describe('v_team_dashboard view', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].prState).toBeNull();
   });
+
+  it('returns rows in id DESC order with pagination', () => {
+    // Insert 3 teams; they will get ids 1, 2, 3
+    db.insertTeam({ issueNumber: 100, worktreeName: 'order-100', status: 'running', phase: 'init' });
+    db.insertTeam({ issueNumber: 101, worktreeName: 'order-101', status: 'running', phase: 'init' });
+    db.insertTeam({ issueNumber: 102, worktreeName: 'order-102', status: 'running', phase: 'init' });
+
+    // Without pagination, all 3 returned in id DESC order
+    const all = db.getTeamDashboard();
+    expect(all.map((r) => r.id)).toEqual([3, 2, 1]);
+
+    // Page 1: limit=2, offset=0 -> ids 3, 2
+    const page1 = db.getTeamDashboard({ limit: 2, offset: 0 });
+    expect(page1.map((r) => r.id)).toEqual([3, 2]);
+
+    // Page 2: limit=2, offset=2 -> id 1
+    const page2 = db.getTeamDashboard({ limit: 2, offset: 2 });
+    expect(page2.map((r) => r.id)).toEqual([1]);
+
+    // No overlap between pages
+    const page1Ids = new Set(page1.map((r) => r.id));
+    const page2Ids = new Set(page2.map((r) => r.id));
+    for (const id of page2Ids) {
+      expect(page1Ids.has(id)).toBe(false);
+    }
+  });
 });
 
 // =============================================================================
