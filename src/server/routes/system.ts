@@ -174,23 +174,42 @@ const systemRoutes: FastifyPluginCallback = (
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const { path: dirPath } = request.query as { path?: string };
-        const targetPath = dirPath ||
-          (process.platform === 'win32' ? 'C:/Git' : (process.env['HOME'] || '/home') + '/projects');
+        const targetPath = dirPath || config.browseRoot;
+
+        // Resolve to absolute path to collapse .., ., and redundant separators
+        const resolvedPath = path.resolve(targetPath);
+        const allowedRoot = path.resolve(config.browseRoot);
+
+        // Case-insensitive comparison on Windows (NTFS is case-insensitive)
+        const normalize = process.platform === 'win32'
+          ? (p: string) => p.toLowerCase()
+          : (p: string) => p;
+
+        const normalizedResolved = normalize(resolvedPath);
+        const normalizedRoot = normalize(allowedRoot);
+
+        if (normalizedResolved !== normalizedRoot &&
+            !normalizedResolved.startsWith(normalizedRoot + path.sep)) {
+          return reply.code(403).send({
+            error: 'Forbidden',
+            message: 'Path is outside the allowed browsing root',
+          });
+        }
 
         let entries: fs.Dirent[];
         try {
-          entries = fs.readdirSync(targetPath, { withFileTypes: true });
+          entries = fs.readdirSync(resolvedPath, { withFileTypes: true });
         } catch {
-          return reply.code(200).send({ parentPath: targetPath.replace(/\\/g, '/'), dirs: [] });
+          return reply.code(200).send({ parentPath: resolvedPath.replace(/\\/g, '/'), dirs: [] });
         }
 
         const dirs = entries
           .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
           .map((e) => {
-            const fullPath = path.join(targetPath, e.name).replace(/\\/g, '/');
+            const fullPath = path.join(resolvedPath, e.name).replace(/\\/g, '/');
             let isGitRepo = false;
             try {
-              isGitRepo = fs.existsSync(path.join(fullPath, '.git'));
+              isGitRepo = fs.existsSync(path.join(resolvedPath, e.name, '.git'));
             } catch {
               // ignore permission errors
             }
@@ -201,7 +220,7 @@ const systemRoutes: FastifyPluginCallback = (
           );
 
         return reply.code(200).send({
-          parentPath: targetPath.replace(/\\/g, '/'),
+          parentPath: resolvedPath.replace(/\\/g, '/'),
           dirs,
         });
       } catch (err: unknown) {

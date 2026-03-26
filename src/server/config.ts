@@ -175,6 +175,9 @@ const config = Object.freeze({
    *   'cmd'  — force classic cmd.exe
    */
   terminalCmd: (process.env['FLEET_TERMINAL'] || 'auto') as 'auto' | 'wt' | 'cmd',
+
+  /** Root directory for filesystem browsing. Defaults to user home dir. */
+  browseRoot: path.resolve(process.env['FLEET_BROWSE_ROOT'] || os.homedir()),
 });
 
 // Ensure the database directory exists before any DB access
