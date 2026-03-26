@@ -313,7 +313,7 @@ export class TeamManager {
     // Ensure parsedEvents is initialized before syncWithOrigin so the sync
     // event can be captured (syncWithOrigin pushes to parsedEvents.get(teamId))
     if (!this.parsedEvents.has(team.id)) {
-      this.parsedEvents.set(team.id, []);
+      this.parsedEvents.set(team.id, new CircularBuffer<StreamEvent>(MAX_PARSED_EVENTS));
     }
 
     // Sync with origin before creating worktree
@@ -1191,7 +1191,7 @@ export class TeamManager {
     // Ensure parsedEvents is initialized before syncWithOrigin so the sync
     // event can be captured (syncWithOrigin pushes to parsedEvents.get(teamId))
     if (!this.parsedEvents.has(team.id)) {
-      this.parsedEvents.set(team.id, []);
+      this.parsedEvents.set(team.id, new CircularBuffer<StreamEvent>(MAX_PARSED_EVENTS));
     }
 
     // Sync with origin before creating worktree
