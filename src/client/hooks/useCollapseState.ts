@@ -13,6 +13,21 @@ interface UseCollapseStateReturn {
   collapseAll: (allNodeIds: string[]) => void;
   /** Check if a specific node is collapsed */
   isCollapsed: (nodeId: string) => boolean;
+  /**
+   * Seed default collapsed nodes on first load (when localStorage is empty).
+   * Call this after the tree data is available. Only applies if no prior
+   * collapse state was persisted.
+   */
+  seedDefaults: (nodeIds: string[]) => void;
+}
+
+/** Check if localStorage has a persisted collapse state */
+function hasStoredState(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
 }
 
 /** Read collapsed node IDs from localStorage */
@@ -50,6 +65,12 @@ export function useCollapseState(): UseCollapseStateReturn {
   // so we don't write back to storage on mount.
   const initialized = useRef(false);
 
+  // Track whether default seeding has already been attempted to avoid repeated calls
+  const seeded = useRef(false);
+
+  // Track whether localStorage had prior state (used by seedDefaults)
+  const hadStoredState = useRef(hasStoredState());
+
   useEffect(() => {
     if (!initialized.current) {
       initialized.current = true;
@@ -83,11 +104,21 @@ export function useCollapseState(): UseCollapseStateReturn {
     [collapsedNodes],
   );
 
+  const seedDefaults = useCallback((nodeIds: string[]) => {
+    // Only seed on first load when localStorage was empty
+    if (seeded.current || hadStoredState.current) return;
+    seeded.current = true;
+    if (nodeIds.length > 0) {
+      setCollapsedNodes(new Set(nodeIds));
+    }
+  }, []);
+
   return {
     collapsedNodes,
     toggleCollapse,
     expandAll,
     collapseAll,
     isCollapsed,
+    seedDefaults,
   };
 }

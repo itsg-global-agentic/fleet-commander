@@ -56,6 +56,7 @@ vi.mock('../../src/client/hooks/usePrioritization', () => ({
 const mockExpandAll = vi.fn();
 const mockCollapseAll = vi.fn();
 const mockToggleCollapse = vi.fn();
+const mockSeedDefaults = vi.fn();
 
 vi.mock('../../src/client/hooks/useCollapseState', () => ({
   useCollapseState: () => ({
@@ -64,6 +65,7 @@ vi.mock('../../src/client/hooks/useCollapseState', () => ({
     expandAll: mockExpandAll,
     collapseAll: mockCollapseAll,
     isCollapsed: () => false,
+    seedDefaults: mockSeedDefaults,
   }),
 }));
 
@@ -72,6 +74,19 @@ vi.mock('../../src/client/components/TreeNode', () => ({
   TreeNode: (props: { node: { number: number; title: string } }) => (
     <div data-testid={`tree-node-${props.node.number}`}>
       #{props.node.number} {props.node.title}
+    </div>
+  ),
+}));
+
+// Mock VirtualizedTreeList to render rows without virtualization
+vi.mock('../../src/client/components/VirtualizedTreeList', () => ({
+  VirtualizedTreeList: (props: { rows: Array<{ node: { number: number; title: string }; key: string }> }) => (
+    <div data-testid="virtualized-tree-list">
+      {props.rows.map((row) => (
+        <div key={row.key} data-testid={`tree-node-${row.node.number}`}>
+          #{row.node.number} {row.node.title}
+        </div>
+      ))}
     </div>
   ),
 }));
@@ -656,6 +671,7 @@ describe('IssueTreeView', () => {
       expandAll: mockExpandAll,
       collapseAll: mockCollapseAll,
       isCollapsed: (id: string) => collapsedSet.has(id),
+      seedDefaults: mockSeedDefaults,
     });
 
     const issueA = { number: 10, title: 'Issue A', state: 'open', labels: [], children: [], activeTeam: null };
