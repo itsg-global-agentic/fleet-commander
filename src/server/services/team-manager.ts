@@ -2030,7 +2030,7 @@ export class TeamManager {
                         if (Array.isArray(todos)) {
                           const db = getDatabase();
                           for (const todo of todos) {
-                            const taskId = (todo.id ?? `stdout-${toolId}-${todos.indexOf(todo)}`) as string;
+                            const taskId = (todo.id ?? `team-${teamId}-task-${todos.indexOf(todo)}`) as string;
                             const subject = (todo.content ?? todo.title ?? todo.subject ?? 'Untitled task') as string;
                             const status = (todo.status ?? 'pending') as string;
                             // Derive owner from parent_tool_use_id if available

@@ -2913,13 +2913,54 @@ describe('TaskCreated event processing', () => {
     expect(result.processed).toBe(true);
 
     // Should still call upsertTeamTask with fallback values
+    // taskId should be content-based: task-{teamId}-{subjectSlug}
     expect(upsertTeamTask).toHaveBeenCalledWith(
       expect.objectContaining({
         teamId: 1,
+        taskId: 'task-1-some-message',
         subject: 'Some message',
         status: 'pending',
       }),
     );
+  });
+
+  it('should produce stable taskId across repeated events with same subject but different tool_use_ids', () => {
+    const upsertTeamTask = vi.fn().mockReturnValue({
+      id: 1,
+      teamId: 1,
+      taskId: 'task-1-implement-login-page',
+      subject: 'Implement login page',
+      status: 'in_progress',
+      owner: 'team-lead',
+    });
+    const db = createMockDb({ upsertTeamTask });
+    const sse = createMockSse();
+
+    // First event with one tool_use_id
+    const payload1 = makePayload({
+      event: 'task_created',
+      cc_stdin: 'not valid json{{{',
+      tool_use_id: 'toolu_abc123',
+      message: 'Implement login page',
+    });
+
+    // Second event with a different tool_use_id (e.g., after context compaction)
+    const payload2 = makePayload({
+      event: 'task_created',
+      cc_stdin: 'not valid json{{{',
+      tool_use_id: 'toolu_def456',
+      message: 'Implement login page',
+    });
+
+    processEvent(payload1, db, sse);
+    processEvent(payload2, db, sse);
+
+    // Both calls should produce the same stable taskId based on content, not tool_use_id
+    const call1 = upsertTeamTask.mock.calls[0][0];
+    const call2 = upsertTeamTask.mock.calls[1][0];
+    expect(call1.taskId).toBe('task-1-implement-login-page');
+    expect(call2.taskId).toBe('task-1-implement-login-page');
+    expect(call1.taskId).toBe(call2.taskId);
   });
 
   it('should not throw when upsertTeamTask is not available on db', () => {

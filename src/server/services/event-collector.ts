@@ -539,8 +539,12 @@ export function processEvent(
       }
 
       // Cascading fallback: cc_stdin fields -> direct payload fields -> defaults
-      const taskId = (ccData.task_id ?? payload.tool_use_id ?? `task-${eventId}`) as string;
+      // Compute subject first so we can derive a content-based stable fallback taskId.
+      // Using tool_use_id or eventId as fallback causes duplicates after context compaction
+      // because the same logical task fires a new hook event with a new tool_use_id.
       const subject = (ccData.subject ?? ccData.title ?? payload.message ?? 'Untitled task') as string;
+      const subjectSlug = subject.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60);
+      const taskId = (ccData.task_id ?? `task-${teamId}-${subjectSlug}`) as string;
       const description = (ccData.description ?? null) as string | null;
       const status = (ccData.status ?? 'pending') as string;
       const owner = normalizeAgentName(payload.agent_type);
