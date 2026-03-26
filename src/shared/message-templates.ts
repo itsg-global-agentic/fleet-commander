@@ -22,6 +22,14 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
     placeholders: ['PR_NUMBER', 'AUTO_MERGE_STATUS'],
   },
   {
+    id: 'ci_green_but_dirty',
+    template:
+      'CI passed on PR #{{PR_NUMBER}}, all checks green. However, the PR has merge conflicts. Rebase or merge the base branch to resolve conflicts before merging. Auto-merge is {{AUTO_MERGE_STATUS}}.',
+    description:
+      'Sent to TL when CI passes but PR has merge conflicts (dirty merge state)',
+    placeholders: ['PR_NUMBER', 'AUTO_MERGE_STATUS'],
+  },
+  {
     id: 'ci_red',
     template:
       'CI failed on PR #{{PR_NUMBER}}. Failing checks: {{FAILED_CHECKS}}. Fix count: {{FAIL_COUNT}}/{{MAX_FAILURES}}. What went wrong?',

@@ -1041,6 +1041,147 @@ describe('Branch behind notifications', () => {
 });
 
 // =============================================================================
+// First PR detection — dirty merge state notification
+// =============================================================================
+
+describe('First PR detection — dirty merge state', () => {
+  it('sends merge_conflict message when PR is first detected as dirty', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue(undefined);
+
+    (mockResolveMessage as ReturnType<typeof vi.fn>).mockImplementation(
+      (id: string) => (id === 'merge_conflict' ? 'PR has merge conflicts' : null),
+    );
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({ mergeStateStatus: 'DIRTY' }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockDb.insertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: 42,
+        teamId: 1,
+        mergeStatus: 'dirty',
+      }),
+    );
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(
+      1,
+      'PR has merge conflicts',
+      'fc',
+      'merge_conflict',
+    );
+  });
+
+  it('does not send merge_conflict when PR is first detected as clean', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue(undefined);
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({ mergeStateStatus: 'CLEAN' }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockDb.insertPullRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prNumber: 42,
+        teamId: 1,
+        mergeStatus: 'clean',
+      }),
+    );
+    expect(mockManager.sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// CI green with dirty merge state
+// =============================================================================
+
+describe('CI green with dirty merge state', () => {
+  it('sends ci_green_but_dirty when CI passes and PR is dirty', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'pending',
+      mergeStatus: 'dirty',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    (mockResolveMessage as ReturnType<typeof vi.fn>).mockImplementation(
+      (id: string) => (id === 'ci_green_but_dirty' ? 'CI green but dirty' : null),
+    );
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        mergeStateStatus: 'DIRTY',
+        statusCheckRollup: [
+          { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED' },
+        ],
+      }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(
+      1,
+      'CI green but dirty',
+      'fc',
+      'ci_green_but_dirty',
+    );
+  });
+
+  it('sends regular ci_green when CI passes and PR is clean', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'pending',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    (mockResolveMessage as ReturnType<typeof vi.fn>).mockImplementation(
+      (id: string) => (id === 'ci_green' ? 'CI passed' : null),
+    );
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        mergeStateStatus: 'CLEAN',
+        statusCheckRollup: [
+          { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED' },
+        ],
+      }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(
+      1,
+      'CI passed',
+      'fc',
+      'ci_green',
+    );
+  });
+});
+
+// =============================================================================
 // Input validation guards (injection prevention)
 // =============================================================================
 

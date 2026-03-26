@@ -339,11 +339,19 @@ class GitHubPoller {
             let msg: string | null = null;
             let ciSubtype: string | undefined;
             if (ciStatus === 'passing') {
-              msg = resolveMessage('ci_green', {
-                PR_NUMBER: String(prNumber),
-                AUTO_MERGE_STATUS: autoMerge ? 'enabled' : 'not enabled',
-              });
-              ciSubtype = 'ci_green';
+              if (mergeState === 'dirty') {
+                msg = resolveMessage('ci_green_but_dirty', {
+                  PR_NUMBER: String(prNumber),
+                  AUTO_MERGE_STATUS: autoMerge ? 'enabled' : 'not enabled',
+                });
+                ciSubtype = 'ci_green_but_dirty';
+              } else {
+                msg = resolveMessage('ci_green', {
+                  PR_NUMBER: String(prNumber),
+                  AUTO_MERGE_STATUS: autoMerge ? 'enabled' : 'not enabled',
+                });
+                ciSubtype = 'ci_green';
+              }
             } else if (ciStatus === 'failing') {
               const failedCheckNames = checks
                 .filter((c) => isFailureConclusion(c.conclusion))
@@ -420,8 +428,22 @@ class GitHubPoller {
         teamId
       );
       console.log(
-        `[GitHubPoller] PR #${prNumber} discovered — state=${state} ci=${ciStatus} (repo: ${githubRepo})`
+        `[GitHubPoller] PR #${prNumber} discovered — state=${state} ci=${ciStatus} merge=${mergeState} (repo: ${githubRepo})`
       );
+
+      // Notify team if the PR was born with merge conflicts
+      if (mergeState === 'dirty') {
+        try {
+          const { getTeamManager } = await import('./team-manager.js');
+          const manager = getTeamManager();
+          const msg = resolveMessage('merge_conflict', {
+            PR_NUMBER: String(prNumber),
+          });
+          if (msg) manager.sendMessage(teamId, msg, 'fc', 'merge_conflict');
+        } catch (err) {
+          console.error(`[GitHubPoller] Failed to send initial merge_conflict to team ${teamId}:`, err);
+        }
+      }
     }
 
     // If the PR was merged, update the team status to 'done'

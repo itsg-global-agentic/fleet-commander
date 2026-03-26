@@ -260,6 +260,17 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     hookEvent: null,
   },
   {
+    id: 'ci_green_but_dirty',
+    from: 'running',
+    to: 'running',
+    trigger: 'poller',
+    triggerLabel: 'CI green but merge conflicts',
+    description:
+      'All CI checks pass but PR has merge conflicts — TL needs to rebase before merge is possible',
+    condition: 'CI status changes to success AND merge status is dirty',
+    hookEvent: null,
+  },
+  {
     id: 'ci_red',
     from: 'running',
     to: 'running',
