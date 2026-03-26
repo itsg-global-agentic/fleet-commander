@@ -430,12 +430,18 @@ export class TeamManager {
     // Try graceful shutdown via stdin.end() first — closing stdin signals
     // Claude Code to finish its current work and exit cleanly.
     const stdin = this.stdinPipes.get(teamId);
+    const child = this.childProcesses.get(teamId);
     if (stdin && !stdin.destroyed) {
       try {
         stdin.end();
         console.log(`[TeamManager] Sent stdin EOF to team ${teamId} for graceful shutdown`);
-        // Give the process 5 seconds to finish gracefully before force-killing
-        await new Promise(resolve => setTimeout(resolve, 5000));
+        // Give the process 5 seconds to finish gracefully before force-killing.
+        // If the child process exits early, resolve immediately instead of
+        // blocking for the full 5 seconds.
+        await new Promise<void>(resolve => {
+          const timer = setTimeout(resolve, 5000);
+          child?.once('exit', () => { clearTimeout(timer); resolve(); });
+        });
       } catch {
         // stdin.end() failed — fall through to force kill
       }
@@ -464,13 +470,12 @@ export class TeamManager {
         trigger: 'pm_action',
         reason: 'PM stopped team',
       });
+      db.updateTeamSilent(teamId, {
+        status: 'failed',
+        pid: null,
+        stoppedAt: new Date().toISOString(),
+      });
     }
-
-    const updated = db.updateTeam(teamId, {
-      status: 'failed',
-      pid: null,
-      stoppedAt: new Date().toISOString(),
-    });
 
     sseBroker.broadcast(
       'team_stopped',
@@ -487,7 +492,7 @@ export class TeamManager {
       });
     }
 
-    return updated!;
+    return db.getTeam(teamId)!;
   }
 
   // -------------------------------------------------------------------------
