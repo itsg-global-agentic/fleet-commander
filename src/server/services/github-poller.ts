@@ -205,7 +205,7 @@ class GitHubPoller {
           if (team.prNumber) {
             const pr = await this.pollPR(team.prNumber, team.id, githubRepo);
             // Fast-poll when CI is pending
-            if (pr && (pr.ciStatus === 'pending' || pr.state === 'open')) {
+            if (pr && pr.ciStatus === 'pending') {
               wantFast = true;
             }
           } else if (team.branchName) {
@@ -471,20 +471,20 @@ class GitHubPoller {
         console.log(
           `[GitHubPoller] Team ${teamId} marked done — PR #${prNumber} merged`
         );
-      }
 
-      // Record merged_at timestamp on the PR
-      db.updatePullRequest(prNumber, {
-        mergedAt: new Date().toISOString(),
-      });
+        // Record merged_at timestamp on the PR (once, during the done transition)
+        db.updatePullRequest(prNumber, {
+          mergedAt: new Date().toISOString(),
+        });
 
-      // Initiate graceful shutdown: notify TL, wait grace period, then kill
-      try {
-        const { getTeamManager } = await import('./team-manager.js');
-        const manager = getTeamManager();
-        manager.gracefulShutdown(teamId, prNumber, config.mergeShutdownGraceMs);
-      } catch (err) {
-        console.error(`[GitHubPoller] Failed to initiate graceful shutdown for team ${teamId}:`, err);
+        // Initiate graceful shutdown: notify TL, wait grace period, then kill
+        try {
+          const { getTeamManager } = await import('./team-manager.js');
+          const manager = getTeamManager();
+          manager.gracefulShutdown(teamId, prNumber, config.mergeShutdownGraceMs);
+        } catch (err) {
+          console.error(`[GitHubPoller] Failed to initiate graceful shutdown for team ${teamId}:`, err);
+        }
       }
     }
 

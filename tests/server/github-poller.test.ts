@@ -216,6 +216,40 @@ describe('PR state transitions', () => {
     expect(mockManager.gracefulShutdown).toHaveBeenCalledWith(1, 42, 120000);
   });
 
+  it('does not call gracefulShutdown again when team is already done', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42, status: 'done' });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'merged',
+      ciStatus: 'passing',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+    // Team is already done
+    mockDb.getTeam.mockReturnValue({ ...team, status: 'done' });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        state: 'CLOSED',
+        mergedAt: '2025-01-01T00:00:00Z',
+      }),
+    );
+
+    await githubPoller.poll();
+
+    // gracefulShutdown should NOT be called since team is already done
+    expect(mockManager.gracefulShutdown).not.toHaveBeenCalled();
+    // mergedAt should NOT be written again either
+    expect(mockDb.updatePullRequest).not.toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ mergedAt: expect.any(String) }),
+    );
+  });
+
   it('detects new PR state (no existing PR record) and inserts it', async () => {
     const project = makeProject();
     const team = makeTeam({ prNumber: 42 });
@@ -1184,6 +1218,64 @@ describe('CI green with dirty merge state', () => {
 // =============================================================================
 // Input validation guards (injection prevention)
 // =============================================================================
+
+describe('Adaptive polling interval', () => {
+  it('sets fast poll when CI is pending', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        statusCheckRollup: [
+          { name: 'build', conclusion: null, status: 'IN_PROGRESS' },
+        ],
+      }),
+    );
+
+    await githubPoller.poll();
+
+    // needsFastPoll should be true (accessed via bracket notation)
+    expect((githubPoller as unknown as Record<string, unknown>)['needsFastPoll']).toBe(true);
+  });
+
+  it('does not set fast poll for open PR with passing CI', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'passing',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        statusCheckRollup: [
+          { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED' },
+        ],
+      }),
+    );
+
+    await githubPoller.poll();
+
+    // needsFastPoll should be false — open PRs with passing CI do NOT trigger fast poll
+    expect((githubPoller as unknown as Record<string, unknown>)['needsFastPoll']).toBe(false);
+  });
+});
 
 describe('Input validation guards', () => {
   it('pollPR skips gh CLI call when githubRepo is invalid', async () => {
