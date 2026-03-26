@@ -222,6 +222,63 @@ describe('TeamManager.stop', () => {
       1,
     );
   });
+
+  it('should not overwrite done status when process exits cleanly during grace period', async () => {
+    const team = makeTeam({ id: 1, status: 'running', pid: 12345 });
+    const mockStdin = createMockStdin();
+    const child = createMockChildProcess();
+
+    (tm as any).stdinPipes.set(1, mockStdin);
+    (tm as any).childProcesses.set(1, child);
+
+    // First call: initial team lookup (running)
+    // Second call: after grace period, freshTeam for killProcess (pid gone)
+    // Third call: stopTeam re-read shows 'done' (exit handler ran)
+    // Fourth call: final return
+    mockDb.getTeam
+      .mockReturnValueOnce(team)                                    // initial
+      .mockReturnValueOnce({ ...team, pid: null, status: 'done' }) // freshTeam
+      .mockReturnValueOnce({ ...team, pid: null, status: 'done' }) // stopTeam
+      .mockReturnValueOnce({ ...team, pid: null, status: 'done' }); // return
+
+    const stopPromise = tm.stop(1);
+
+    // Simulate process exiting immediately (triggers early resolve of the sleep)
+    child.emit('exit', 0, null);
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await stopPromise;
+
+    // insertTransition should NOT have been called with 'failed'
+    // because stopTeam.status was already 'done'
+    expect(mockDb.insertTransition).not.toHaveBeenCalled();
+    // updateTeamSilent should NOT have been called to overwrite done with failed
+    expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
+    expect(mockDb.updateTeam).not.toHaveBeenCalled();
+  });
+
+  it('should resolve the 5s grace period early when process exits', async () => {
+    const team = makeTeam({ id: 1, status: 'running', pid: 12345 });
+    const mockStdin = createMockStdin();
+    const child = createMockChildProcess();
+
+    (tm as any).stdinPipes.set(1, mockStdin);
+    (tm as any).childProcesses.set(1, child);
+
+    mockDb.getTeam.mockReturnValue(team);
+
+    const stopPromise = tm.stop(1);
+
+    // Emit exit immediately — should cancel the 5s timer
+    child.emit('exit', 0, null);
+
+    // Advance only 100ms — if the race works, stop() should already resolve
+    await vi.advanceTimersByTimeAsync(100);
+    await stopPromise;
+
+    // stop() completed without needing the full 5000ms
+    expect(mockStdin.end).toHaveBeenCalled();
+  });
 });
 
 // =============================================================================
