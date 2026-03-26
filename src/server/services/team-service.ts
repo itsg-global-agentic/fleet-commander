@@ -861,6 +861,28 @@ export class TeamService {
 
     return db.getAgentMessageSummary(teamId);
   }
+
+  /**
+   * Get tasks for a team.
+   *
+   * @param teamId - The team ID
+   * @returns Array of team tasks
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getTasks(teamId: number): unknown[] {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    return db.getTeamTasks(teamId);
+  }
 }
 
 // ---------------------------------------------------------------------------

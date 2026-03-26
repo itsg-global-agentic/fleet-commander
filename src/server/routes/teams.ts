@@ -769,6 +769,40 @@ const teamsRoutes: FastifyPluginCallback = (
   );
 
   // -------------------------------------------------------------------------
+  // GET /api/teams/:id/tasks — task list for this team
+  // -------------------------------------------------------------------------
+  fastify.get(
+    '/api/teams/:id/tasks',
+    async (
+      request: FastifyRequest<{ Params: TeamIdParams }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const teamId = parseInt(request.params.id, 10);
+        if (isNaN(teamId) || teamId < 1) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: 'Invalid team ID',
+          });
+        }
+
+        const service = getTeamService();
+        const tasks = service.getTasks(teamId);
+        return reply.code(200).send(tasks);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        request.log.error(err, 'Failed to get team tasks');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // GET /api/teams/:id/messages — agent messages for this team
   // -------------------------------------------------------------------------
   fastify.get(

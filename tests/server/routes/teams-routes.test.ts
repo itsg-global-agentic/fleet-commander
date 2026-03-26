@@ -716,3 +716,75 @@ describe('POST /api/teams/launch-batch', () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+// =============================================================================
+// Tests: GET /api/teams/:id/tasks
+// =============================================================================
+
+describe('GET /api/teams/:id/tasks', () => {
+  it('should return 200 with empty task list for team with no tasks', async () => {
+    const team = seedTeam();
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/teams/${team.id}/tasks`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBe(0);
+  });
+
+  it('should return 200 with task list after upserting tasks', async () => {
+    const team = seedTeam();
+    const db = getDatabase();
+
+    db.upsertTeamTask({
+      teamId: team.id,
+      taskId: 'task-1',
+      subject: 'Implement feature A',
+      status: 'in_progress',
+      owner: 'dev',
+    });
+    db.upsertTeamTask({
+      teamId: team.id,
+      taskId: 'task-2',
+      subject: 'Write tests',
+      status: 'pending',
+      owner: 'team-lead',
+    });
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/teams/${team.id}/tasks`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.length).toBe(2);
+    expect(body[0].taskId).toBe('task-1');
+    expect(body[0].subject).toBe('Implement feature A');
+    expect(body[0].status).toBe('in_progress');
+    expect(body[0].owner).toBe('dev');
+    expect(body[1].taskId).toBe('task-2');
+  });
+
+  it('should return 404 for unknown team', async () => {
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/teams/99999/tasks',
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('should return 400 for invalid team ID', async () => {
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/teams/abc/tasks',
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+});

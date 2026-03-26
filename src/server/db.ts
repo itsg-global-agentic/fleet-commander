@@ -27,6 +27,7 @@ import type {
   TeamMember,
   AgentMessage,
   MessageEdge,
+  TeamTask,
 } from '../shared/types.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -329,6 +330,9 @@ export class FleetDatabase {
 
     // Add UNIQUE constraint on teams(project_id, issue_number) (v8 migration)
     this.addTeamProjectIssueUniqueIndex();
+
+    // Add team_tasks table if missing (v9 migration — TaskCreated hook)
+    this.addTeamTasksTable();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -703,6 +707,32 @@ export class FleetDatabase {
       console.log('[DB] v8 migration: added UNIQUE index on teams(project_id, issue_number)');
     } catch {
       // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
+  /**
+   * Add team_tasks table if it doesn't exist.
+   * v9 migration — stores task items from TaskCreated hook / TodoWrite.
+   */
+  private addTeamTasksTable(): void {
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS team_tasks (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          team_id         INTEGER NOT NULL REFERENCES teams(id),
+          task_id         TEXT NOT NULL,
+          subject         TEXT NOT NULL,
+          description     TEXT,
+          status          TEXT NOT NULL DEFAULT 'pending',
+          owner           TEXT NOT NULL DEFAULT 'team-lead',
+          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_team_tasks_team_task ON team_tasks(team_id, task_id);
+        CREATE INDEX IF NOT EXISTS idx_team_tasks_team ON team_tasks(team_id);
+      `);
+    } catch {
+      // Table may already exist — safe to ignore
     }
   }
 
@@ -2341,6 +2371,74 @@ export class FleetDatabase {
       content: (row.content as string | null) ?? null,
       sessionId: (row.session_id as string | null) ?? null,
       createdAt: utcify(row.created_at as string),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Team Tasks
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Upsert a task for a team. Uses ON CONFLICT to update existing tasks
+   * (keyed on team_id + task_id) or insert new ones.
+   */
+  upsertTeamTask(data: {
+    teamId: number;
+    taskId: string;
+    subject: string;
+    description?: string | null;
+    status: string;
+    owner: string;
+  }): TeamTask {
+    const stmt = this.db.prepare(`
+      INSERT INTO team_tasks (team_id, task_id, subject, description, status, owner)
+      VALUES (@teamId, @taskId, @subject, @description, @status, @owner)
+      ON CONFLICT(team_id, task_id) DO UPDATE SET
+        subject = excluded.subject,
+        description = excluded.description,
+        status = excluded.status,
+        owner = excluded.owner,
+        updated_at = datetime('now')
+    `);
+
+    stmt.run({
+      teamId: data.teamId,
+      taskId: data.taskId,
+      subject: data.subject,
+      description: data.description ?? null,
+      status: data.status,
+      owner: data.owner,
+    });
+
+    const row = this.db.prepare(
+      'SELECT * FROM team_tasks WHERE team_id = ? AND task_id = ?'
+    ).get(data.teamId, data.taskId) as Record<string, unknown>;
+
+    return this.mapTeamTaskRow(row);
+  }
+
+  /**
+   * Get all tasks for a team, ordered by id ascending.
+   */
+  getTeamTasks(teamId: number): TeamTask[] {
+    const rows = this.db.prepare(
+      'SELECT * FROM team_tasks WHERE team_id = ? ORDER BY id ASC'
+    ).all(teamId) as Record<string, unknown>[];
+
+    return rows.map((r) => this.mapTeamTaskRow(r));
+  }
+
+  private mapTeamTaskRow(row: Record<string, unknown>): TeamTask {
+    return {
+      id: row.id as number,
+      teamId: row.team_id as number,
+      taskId: row.task_id as string,
+      subject: row.subject as string,
+      description: (row.description as string | null) ?? null,
+      status: row.status as 'pending' | 'in_progress' | 'completed',
+      owner: row.owner as string,
+      createdAt: utcify(row.created_at as string),
+      updatedAt: utcify(row.updated_at as string),
     };
   }
 }

@@ -2603,3 +2603,112 @@ describe('Worktree payload parsing (Issue #512)', () => {
     expect(payload.worktree_root).toBe('/path/to/root');
   });
 });
+
+// =============================================================================
+// TaskCreated event processing
+// =============================================================================
+
+describe('TaskCreated event processing', () => {
+  it('should upsert task and broadcast task_updated SSE event', () => {
+    const upsertTeamTask = vi.fn().mockReturnValue({
+      id: 1,
+      teamId: 1,
+      taskId: 'task-1',
+      subject: 'Implement feature',
+      status: 'in_progress',
+      owner: 'team-lead',
+    });
+    const db = createMockDb({ upsertTeamTask });
+    const sse = createMockSse();
+
+    const payload = makePayload({
+      event: 'task_created',
+      cc_stdin: JSON.stringify({
+        task_id: 'task-1',
+        subject: 'Implement feature',
+        status: 'in_progress',
+      }),
+    });
+
+    processEvent(payload, db, sse);
+
+    expect(upsertTeamTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        taskId: 'task-1',
+        subject: 'Implement feature',
+        status: 'in_progress',
+      }),
+    );
+
+    // Verify task_updated SSE broadcast
+    const taskBroadcasts = (sse.broadcast as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => call[0] === 'task_updated',
+    );
+    expect(taskBroadcasts.length).toBe(1);
+    expect(taskBroadcasts[0][1]).toMatchObject({
+      team_id: 1,
+      task_id: 'task-1',
+      subject: 'Implement feature',
+      status: 'in_progress',
+    });
+  });
+
+  it('should handle malformed cc_stdin gracefully and use fallback fields', () => {
+    const upsertTeamTask = vi.fn().mockReturnValue({
+      id: 1,
+      teamId: 1,
+      taskId: expect.any(String),
+      subject: 'Some message',
+      status: 'pending',
+      owner: 'team-lead',
+    });
+    const db = createMockDb({ upsertTeamTask });
+    const sse = createMockSse();
+
+    const payload = makePayload({
+      event: 'task_created',
+      cc_stdin: 'not valid json{{{',
+      message: 'Some message',
+    });
+
+    // Should not throw
+    const result = processEvent(payload, db, sse);
+    expect(result.processed).toBe(true);
+
+    // Should still call upsertTeamTask with fallback values
+    expect(upsertTeamTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        subject: 'Some message',
+        status: 'pending',
+      }),
+    );
+  });
+
+  it('should not throw when upsertTeamTask is not available on db', () => {
+    // Simulates an older db that doesn't have the method
+    const db = createMockDb();
+    // Ensure upsertTeamTask is not set
+    delete (db as Record<string, unknown>).upsertTeamTask;
+    const sse = createMockSse();
+
+    const payload = makePayload({ event: 'task_created' });
+
+    // Should not throw
+    const result = processEvent(payload, db, sse);
+    expect(result.processed).toBe(true);
+  });
+
+  it('should normalize task_created event type to TaskCreated', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    const payload = makePayload({ event: 'task_created' });
+    processEvent(payload, db, sse);
+
+    // The event should be stored with normalized type
+    const insertCall = db.processEventTransaction.mock.calls[0][0];
+    expect(insertCall.eventInsert.eventType).toBe('TaskCreated');
+  });
+});

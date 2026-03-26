@@ -106,6 +106,16 @@
         ]
       }
     ],
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/fleet-commander/run-hook.sh task_created on_task_created.sh"
+          }
+        ]
+      }
+    ],
     "PostToolUseFailure": [
       {
         "hooks": [

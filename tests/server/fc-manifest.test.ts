@@ -32,6 +32,7 @@ describe('getHookFiles', () => {
     expect(hooks).toContain('on_session_start.sh');
     expect(hooks).toContain('on_session_end.sh');
     expect(hooks).toContain('on_stop.sh');
+    expect(hooks).toContain('on_task_created.sh');
   });
 
   it('returns filenames sorted alphabetically', () => {
@@ -112,6 +113,7 @@ describe('getHookEventTypes', () => {
     expect(types).toContain('SessionStart');
     expect(types).toContain('SessionEnd');
     expect(types).toContain('Stop');
+    expect(types).toContain('TaskCreated');
   });
 
   it('returns event types sorted alphabetically', () => {

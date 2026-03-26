@@ -8,6 +8,7 @@ import { UnifiedTimeline } from './UnifiedTimeline';
 import { CommandInput } from './CommandInput';
 import { CommGraph } from './CommGraph';
 import { STATUS_COLORS } from '../utils/constants';
+import type { TeamTask } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,7 +41,9 @@ export function TeamDetail() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [quickActionLoading, setQuickActionLoading] = useState<string | null>(null);
   const [quickActionSent, setQuickActionSent] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'session-log' | 'team'>('session-log');
+  const [activeTab, setActiveTab] = useState<'session-log' | 'tasks' | 'team'>('session-log');
+  const [tasks, setTasks] = useState<TeamTask[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
   const [metadataCollapsed, setMetadataCollapsed] = useState(false);
   const [agentFilters, setAgentFilters] = useState<Set<string>>(new Set());
   const templateCacheRef = useRef<{ data: Array<{ id: string; template: string; enabled: boolean }>; fetchedAt: number } | null>(null);
@@ -69,6 +72,40 @@ export function TeamDetail() {
       setMetadataCollapsed(true);
     }
   }, [detail?.status]);
+
+  // Fetch tasks when the Tasks tab is selected
+  useEffect(() => {
+    if (activeTab !== 'tasks' || !selectedTeamId) return;
+    let cancelled = false;
+    setTasksLoading(true);
+    api.get<TeamTask[]>(`teams/${selectedTeamId}/tasks`)
+      .then((data) => {
+        if (!cancelled) setTasks(data);
+      })
+      .catch(() => {
+        if (!cancelled) setTasks([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTasksLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [activeTab, selectedTeamId, api]);
+
+  // Refresh tasks on SSE task_updated events
+  useEffect(() => {
+    if (activeTab !== 'tasks' || !selectedTeamId) return;
+    if (!lastEvent || lastEventTeamId !== selectedTeamId) return;
+    try {
+      const parsed = typeof lastEvent === 'string' ? JSON.parse(lastEvent) : lastEvent;
+      if (parsed?.type === 'task_updated') {
+        api.get<TeamTask[]>(`teams/${selectedTeamId}/tasks`)
+          .then((data) => setTasks(data))
+          .catch(() => { /* SSE refresh is best-effort */ });
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }, [activeTab, selectedTeamId, lastEvent, lastEventTeamId, api]);
 
   // Close panel handler
   const handleClose = useCallback(() => {
@@ -461,6 +498,21 @@ export function TeamDetail() {
                     Session Log
                   </button>
                   <button
+                    onClick={() => setActiveTab('tasks')}
+                    className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                      activeTab === 'tasks'
+                        ? 'border-dark-accent text-dark-text'
+                        : 'border-transparent text-dark-muted hover:text-dark-text'
+                    }`}
+                  >
+                    Tasks
+                    {tasks.length > 0 && (
+                      <span className="ml-1.5 text-xs text-dark-muted">
+                        ({tasks.filter(t => t.status === 'completed').length}/{tasks.length})
+                      </span>
+                    )}
+                  </button>
+                  <button
                     onClick={() => setActiveTab('team')}
                     className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
                       activeTab === 'team'
@@ -485,6 +537,80 @@ export function TeamDetail() {
                         onAgentFiltersChange={setAgentFilters}
                       />
                     </div>
+                  </div>
+                )}
+
+                {activeTab === 'tasks' && (
+                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 py-3">
+                    {tasksLoading && tasks.length === 0 && (
+                      <div className="flex items-center justify-center py-8">
+                        <span className="text-dark-muted">Loading tasks...</span>
+                      </div>
+                    )}
+
+                    {!tasksLoading && tasks.length === 0 && (
+                      <div className="flex flex-col items-center justify-center py-12 text-center">
+                        <svg className="w-10 h-10 text-dark-muted/40 mb-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                          <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <p className="text-sm text-dark-muted">No tasks yet.</p>
+                        <p className="text-xs text-dark-muted/60 mt-1">Tasks appear when the TL creates a task list.</p>
+                      </div>
+                    )}
+
+                    {tasks.length > 0 && (
+                      <div className="space-y-1">
+                        {tasks.map((task) => (
+                          <div
+                            key={task.id}
+                            className={`flex items-start gap-2.5 px-3 py-2 rounded border transition-colors ${
+                              task.status === 'completed'
+                                ? 'border-dark-border/30 bg-dark-border/5'
+                                : task.status === 'in_progress'
+                                  ? 'border-[#58A6FF]/30 bg-[#58A6FF]/5'
+                                  : 'border-dark-border/50 bg-transparent'
+                            }`}
+                          >
+                            {/* Status icon */}
+                            <div className="shrink-0 mt-0.5">
+                              {task.status === 'completed' && (
+                                <svg className="w-4 h-4 text-[#3FB950]" viewBox="0 0 16 16" fill="currentColor">
+                                  <path fillRule="evenodd" d="M13.78 4.22a.75.75 0 010 1.06l-7.25 7.25a.75.75 0 01-1.06 0L2.22 9.28a.75.75 0 011.06-1.06L6 10.94l6.72-6.72a.75.75 0 011.06 0z" clipRule="evenodd" />
+                                </svg>
+                              )}
+                              {task.status === 'in_progress' && (
+                                <svg className="w-4 h-4 text-[#58A6FF] animate-spin" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2">
+                                  <circle cx="8" cy="8" r="6" strokeOpacity="0.3" />
+                                  <path d="M8 2a6 6 0 014.9 9.4" />
+                                </svg>
+                              )}
+                              {task.status === 'pending' && (
+                                <svg className="w-4 h-4 text-dark-muted" viewBox="0 0 16 16" fill="currentColor">
+                                  <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                                </svg>
+                              )}
+                            </div>
+
+                            {/* Task content */}
+                            <div className="flex-1 min-w-0">
+                              <p className={`text-sm leading-snug ${
+                                task.status === 'completed' ? 'text-dark-muted line-through' : 'text-dark-text'
+                              }`}>
+                                {task.subject}
+                              </p>
+                              {task.description && (
+                                <p className="text-xs text-dark-muted mt-0.5 truncate">{task.description}</p>
+                              )}
+                            </div>
+
+                            {/* Owner badge */}
+                            <span className="shrink-0 text-[10px] text-dark-muted px-1.5 py-0.5 rounded bg-dark-border/20">
+                              {task.owner}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 )}
 

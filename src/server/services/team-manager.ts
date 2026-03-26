@@ -2010,6 +2010,42 @@ export class TeamManager {
                       const agentName = (input?.agent_name ?? input?.name ?? 'subagent') as string;
                       agentMap.set(toolId, agentName.toLowerCase());
                     }
+
+                    // Stdout fallback: extract tasks from TodoWrite tool_use blocks
+                    if (toolName === 'TodoWrite') {
+                      try {
+                        const input = toolBlock.input as Record<string, unknown> | undefined;
+                        const todos = input?.todos as Array<Record<string, unknown>> | undefined;
+                        if (Array.isArray(todos)) {
+                          const db = getDatabase();
+                          for (const todo of todos) {
+                            const taskId = (todo.id ?? `stdout-${toolId}-${todos.indexOf(todo)}`) as string;
+                            const subject = (todo.content ?? todo.title ?? todo.subject ?? 'Untitled task') as string;
+                            const status = (todo.status ?? 'pending') as string;
+                            // Derive owner from parent_tool_use_id if available
+                            const parentId = (ev.parent_tool_use_id as string | null | undefined) ?? null;
+                            const owner = parentId ? (agentMap.get(parentId) ?? 'team-lead') : 'team-lead';
+
+                            const task = db.upsertTeamTask({
+                              teamId,
+                              taskId,
+                              subject,
+                              status,
+                              owner,
+                            });
+                            sseBroker.broadcast('task_updated', {
+                              team_id: teamId,
+                              task_id: task.taskId,
+                              subject: task.subject,
+                              status: task.status,
+                              owner: task.owner,
+                            }, teamId);
+                          }
+                        }
+                      } catch {
+                        // Non-critical — task extraction failure should not break stream parsing
+                      }
+                    }
                   }
                 }
               }

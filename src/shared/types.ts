@@ -371,6 +371,19 @@ export interface AgentMessage {
   createdAt: string;
 }
 
+/** A task item from the TL's task list (TodoWrite/TaskCreate) */
+export interface TeamTask {
+  id: number;
+  teamId: number;
+  taskId: string;
+  subject: string;
+  description: string | null;
+  status: 'pending' | 'in_progress' | 'completed';
+  owner: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Aggregated edge for the communication graph (sender -> recipient) */
 export interface MessageEdge {
   sender: string;

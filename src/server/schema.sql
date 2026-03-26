@@ -270,5 +270,23 @@ CREATE TABLE IF NOT EXISTS stream_events (
 
 CREATE INDEX IF NOT EXISTS idx_stream_events_team ON stream_events(team_id);
 
--- Insert schema version 8 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (8);
+-- ---------------------------------------------------------------------------
+-- TEAM TASKS — task items from TL's task list (TaskCreated hook / TodoWrite)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS team_tasks (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id         INTEGER NOT NULL REFERENCES teams(id),
+  task_id         TEXT NOT NULL,
+  subject         TEXT NOT NULL,
+  description     TEXT,
+  status          TEXT NOT NULL DEFAULT 'pending',
+  owner           TEXT NOT NULL DEFAULT 'team-lead',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_team_tasks_team_task ON team_tasks(team_id, task_id);
+CREATE INDEX IF NOT EXISTS idx_team_tasks_team ON team_tasks(team_id);
+
+-- Insert schema version 9 (or upgrade from earlier versions)
+INSERT OR IGNORE INTO schema_version (version) VALUES (9);

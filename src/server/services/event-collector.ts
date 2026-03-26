@@ -89,6 +89,14 @@ export interface EventCollectorDb {
     eventInsert: { teamId: number; sessionId: string | null; agentName: string | null; eventType: string; toolName?: string | null; payload: string };
     agentMessages?: Array<{ teamId: number; sender: string; recipient: string; summary?: string | null; content?: string | null; sessionId?: string | null }>;
   }): { eventId: number };
+  upsertTeamTask?(data: {
+    teamId: number;
+    taskId: string;
+    subject: string;
+    description?: string | null;
+    status: string;
+    owner: string;
+  }): { id: number; teamId: number; taskId: string; subject: string; status: string; owner: string };
 }
 
 /** SSE broker interface for broadcasting events */
@@ -227,6 +235,7 @@ function normalizeEventType(raw: string): string {
     'teammate_idle': 'TeammateIdle',
     'worktree_create': 'WorktreeCreate',
     'worktree_remove': 'WorktreeRemove',
+    'task_created': 'TaskCreated',
   };
   return map[raw.toLowerCase()] || raw;
 }
@@ -499,6 +508,48 @@ export function processEvent(
     tool_name: payload.tool_name || null,
     timestamp: payload.timestamp || nowIso,
   });
+
+  // ── Task extraction from TaskCreated events ─────────────────────
+  // Parse TaskCreated hook events and upsert task data into team_tasks.
+  if (eventType === 'TaskCreated' && db.upsertTeamTask) {
+    try {
+      // Parse cc_stdin for task fields (hook sends raw CC stdin JSON)
+      let ccData: Record<string, unknown> = {};
+      if (payload.cc_stdin) {
+        try {
+          ccData = JSON.parse(payload.cc_stdin) as Record<string, unknown>;
+        } catch {
+          // Malformed cc_stdin — fall through to direct payload fields
+        }
+      }
+
+      // Cascading fallback: cc_stdin fields -> direct payload fields -> defaults
+      const taskId = (ccData.task_id ?? payload.tool_use_id ?? `task-${eventId}`) as string;
+      const subject = (ccData.subject ?? ccData.title ?? payload.message ?? 'Untitled task') as string;
+      const description = (ccData.description ?? null) as string | null;
+      const status = (ccData.status ?? 'pending') as string;
+      const owner = normalizeAgentName(payload.agent_type);
+
+      const task = db.upsertTeamTask({
+        teamId,
+        taskId,
+        subject,
+        description,
+        status,
+        owner,
+      });
+
+      sse.broadcast('task_updated', {
+        team_id: teamId,
+        task_id: task.taskId,
+        subject: task.subject,
+        status: task.status,
+        owner: task.owner,
+      }, teamId);
+    } catch {
+      // Non-critical — task extraction failure should not break event processing
+    }
+  }
 
   // ── Subagent crash detection (advisory) ───────────────────────
   // Track SubagentStart/SubagentStop pairs. If a subagent stops very
