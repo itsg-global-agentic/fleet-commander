@@ -466,48 +466,56 @@ export async function spawnInteractive(options: InteractiveSpawnOptions): Promis
     env,
   });
 
-  const termPref = options.terminalPref ?? config.terminalCmd;
-  let useWindowsTerminal = false;
-  if (termPref === 'wt') {
-    useWindowsTerminal = true;
-  } else if (termPref === 'auto') {
-    useWindowsTerminal = await detectWindowsTerminal();
+  let cleanedUp = false;
+  try {
+    const termPref = options.terminalPref ?? config.terminalCmd;
+    let useWindowsTerminal = false;
+    if (termPref === 'wt') {
+      useWindowsTerminal = true;
+    } else if (termPref === 'auto') {
+      useWindowsTerminal = await detectWindowsTerminal();
+    }
+    // termPref === 'cmd' → useWindowsTerminal remains false
+
+    // Strip `"` from the title; it is embedded inside a `"..."` quoted string
+    // in the launch command. Spaces and other printable chars are fine.
+    const safeTitle = options.windowTitle.replace(/"/g, '');
+    // The .cmd path comes from os.tmpdir() which never contains `"`, so
+    // wrapping in double-quotes is sufficient for paths with spaces.
+    const quotedCmdFile = `"${cmdFilePath}"`;
+
+    let launchCmd: string;
+    if (useWindowsTerminal) {
+      launchCmd = `wt.exe new-tab --title "${safeTitle}" cmd.exe /k ${quotedCmdFile}`;
+    } else {
+      launchCmd = `start "${safeTitle}" cmd.exe /k ${quotedCmdFile}`;
+    }
+
+    console.log(
+      `[cc-spawn] interactive: terminal=${useWindowsTerminal ? 'wt' : 'cmd'}` +
+      ` worktree=${options.worktreeName} launcher=${cmdFilePath}`,
+    );
+
+    // shell:true is required so `start` (a cmd builtin) and `wt.exe` (PATH-resolved)
+    // work correctly. detached:true lets the window outlive the server process.
+    const launcher = spawn(launchCmd, [], {
+      env: env as NodeJS.ProcessEnv,
+      shell: true,
+      detached: true,
+      stdio: 'ignore',
+    });
+    launcher.unref();
+
+    // Best-effort cleanup after 60 s (generous margin for terminal startup)
+    setTimeout(() => {
+      try { fs.unlinkSync(cmdFilePath); } catch { /* ignore */ }
+    }, 60_000);
+    cleanedUp = true;
+  } finally {
+    if (!cleanedUp) {
+      try { fs.unlinkSync(cmdFilePath); } catch { /* ignore */ }
+    }
   }
-  // termPref === 'cmd' → useWindowsTerminal remains false
-
-  // Strip `"` from the title; it is embedded inside a `"..."` quoted string
-  // in the launch command. Spaces and other printable chars are fine.
-  const safeTitle = options.windowTitle.replace(/"/g, '');
-  // The .cmd path comes from os.tmpdir() which never contains `"`, so
-  // wrapping in double-quotes is sufficient for paths with spaces.
-  const quotedCmdFile = `"${cmdFilePath}"`;
-
-  let launchCmd: string;
-  if (useWindowsTerminal) {
-    launchCmd = `wt.exe new-tab --title "${safeTitle}" cmd.exe /k ${quotedCmdFile}`;
-  } else {
-    launchCmd = `start "${safeTitle}" cmd.exe /k ${quotedCmdFile}`;
-  }
-
-  console.log(
-    `[cc-spawn] interactive: terminal=${useWindowsTerminal ? 'wt' : 'cmd'}` +
-    ` worktree=${options.worktreeName} launcher=${cmdFilePath}`,
-  );
-
-  // shell:true is required so `start` (a cmd builtin) and `wt.exe` (PATH-resolved)
-  // work correctly. detached:true lets the window outlive the server process.
-  const launcher = spawn(launchCmd, [], {
-    env: env as NodeJS.ProcessEnv,
-    shell: true,
-    detached: true,
-    stdio: 'ignore',
-  });
-  launcher.unref();
-
-  // Best-effort cleanup after 60 s (generous margin for terminal startup)
-  setTimeout(() => {
-    try { fs.unlinkSync(cmdFilePath); } catch { /* ignore */ }
-  }, 60_000);
 }
 
 // ---------------------------------------------------------------------------
@@ -597,7 +605,9 @@ export function spawnQuery(options: QuerySpawnOptions): Promise<QuerySpawnResult
     const timeoutHandle = setTimeout(() => {
       timedOut = true;
       try {
-        if (process.platform === 'win32') {
+        if (child.pid === undefined) {
+          // spawn failed — no process to kill
+        } else if (process.platform === 'win32') {
           // Kill the full process tree; SIGKILL is not available on Windows.
           spawn('taskkill', ['/F', '/T', '/PID', String(child.pid)], {
             stdio: 'pipe',

@@ -858,6 +858,34 @@ describe('cc-spawn', () => {
       expect(writeOpts).toEqual({ encoding: 'utf8' });
     });
 
+    it('cleans up temp .cmd file immediately when spawn throws', async () => {
+      // Make spawn throw to simulate a failure after writeLauncherCmdFile
+      mockSpawn.mockImplementation(() => { throw new Error('spawn ENOENT'); });
+
+      await expect(spawnInteractive({
+        mode: 'interactive',
+        cwd: 'C:\\repos\\proj',
+        worktreeName: 'proj-42',
+        windowTitle: 'Team proj-42',
+        fleetContext: makeFleetContext(),
+        prompt: 'Fix it',
+        terminalPref: 'cmd',
+      })).rejects.toThrow('spawn ENOENT');
+
+      // The .cmd file should have been written
+      expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+
+      // The finally block should have deleted the file immediately (no timer needed)
+      expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
+      const [deletedPath] = mockUnlinkSync.mock.calls[0];
+      expect(deletedPath).toMatch(/fleet-cc-.*\.cmd$/);
+
+      // No timer should have been scheduled for cleanup (it was immediate)
+      vi.advanceTimersByTime(60_000);
+      // Still only 1 call — no timer-based cleanup
+      expect(mockUnlinkSync).toHaveBeenCalledTimes(1);
+    });
+
     it('includes CLAUDE_CODE_GIT_BASH_PATH SET in launcher when findGitBash returns path', async () => {
       mockFindGitBash.mockReturnValue('C:\\Program Files\\Git\\bin\\bash.exe');
 
@@ -1108,6 +1136,40 @@ describe('cc-spawn', () => {
       expect(opts.env['FLEET_PROJECT_ID']).toBeUndefined();
       // But should still have agent teams flag
       expect(opts.env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS']).toBe('1');
+    });
+
+    it('skips taskkill when child.pid is undefined on timeout', async () => {
+      vi.useRealTimers();
+
+      // Create a child with undefined pid to simulate a failed spawn
+      const child = createMockChild();
+      (child as { pid: number | undefined }).pid = undefined;
+
+      let spawnCallCount = 0;
+      mockSpawn.mockImplementation(() => {
+        spawnCallCount++;
+        if (spawnCallCount === 1) return child; // the CC spawn (with undefined pid)
+        return createMockChild(); // should NOT be reached — no taskkill call
+      });
+
+      const promise = spawnQuery({
+        mode: 'query',
+        prompt: 'Analyze',
+        jsonSchema: { type: 'object' },
+        timeoutMs: 50,
+      });
+
+      // After the timeout fires, simulate the child closing
+      setTimeout(() => {
+        child.emit('close', null);
+      }, 100);
+
+      const result = await promise;
+      expect(result.timedOut).toBe(true);
+      expect(result.exitedOk).toBe(false);
+
+      // spawn should have been called exactly once (for CC, not for taskkill)
+      expect(spawnCallCount).toBe(1);
     });
 
     it('handles timeout by setting timedOut:true', async () => {
