@@ -321,7 +321,7 @@ describe('TeamManager.sendMessage', () => {
   it('writes a stream-json message to stdin and returns true', () => {
     const mockStdin = createMockStdin();
     (tm as any).stdinPipes.set(1, mockStdin);
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
 
     const result = tm.sendMessage(1, 'Fix the tests');
     expect(result).toBe(true);
@@ -336,13 +336,13 @@ describe('TeamManager.sendMessage', () => {
   it('injects synthetic event into parsedEvents for session log', () => {
     const mockStdin = createMockStdin();
     (tm as any).stdinPipes.set(1, mockStdin);
-    const events: unknown[] = [];
-    (tm as any).parsedEvents.set(1, events);
+    const buf = new CircularBuffer<unknown>(1000);
+    (tm as any).parsedEvents.set(1, buf);
 
     tm.sendMessage(1, 'Check status', 'user');
 
-    expect(events.length).toBe(1);
-    const event = events[0] as Record<string, unknown>;
+    expect(buf.length).toBe(1);
+    const event = buf.toArray()[0] as Record<string, unknown>;
     expect(event.type).toBe('user');
     expect(event.agentName).toBe('__pm__');
   });
@@ -350,13 +350,13 @@ describe('TeamManager.sendMessage', () => {
   it('tags FC messages with __fc__ agent name and subtype', () => {
     const mockStdin = createMockStdin();
     (tm as any).stdinPipes.set(1, mockStdin);
-    const events: unknown[] = [];
-    (tm as any).parsedEvents.set(1, events);
+    const buf = new CircularBuffer<unknown>(1000);
+    (tm as any).parsedEvents.set(1, buf);
 
     tm.sendMessage(1, 'CI passed', 'fc', 'ci_green');
 
-    expect(events.length).toBe(1);
-    const event = events[0] as Record<string, unknown>;
+    expect(buf.length).toBe(1);
+    const event = buf.toArray()[0] as Record<string, unknown>;
     expect(event.type).toBe('fc');
     expect(event.agentName).toBe('__fc__');
     expect(event.subtype).toBe('ci_green');
@@ -365,7 +365,7 @@ describe('TeamManager.sendMessage', () => {
   it('broadcasts team_output SSE event for the message', () => {
     const mockStdin = createMockStdin();
     (tm as any).stdinPipes.set(1, mockStdin);
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
 
     tm.sendMessage(1, 'Hello team');
 
@@ -406,7 +406,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
 
     (tm as any).childProcesses.set(1, child);
     (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
     mockDb.getTeam.mockReturnValue(team);
@@ -436,7 +436,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
 
     (tm as any).childProcesses.set(1, child);
     (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
     mockDb.getTeam.mockReturnValue(team);
@@ -466,7 +466,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
 
     (tm as any).childProcesses.set(1, child);
     (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
     mockDb.getTeam.mockReturnValue(team);
@@ -491,7 +491,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
 
     (tm as any).childProcesses.set(1, child);
     (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
     mockDb.getTeam.mockReturnValue(team);
@@ -509,7 +509,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
 
     (tm as any).childProcesses.set(1, child);
     (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
     mockDb.getTeam.mockReturnValue(team);
@@ -530,7 +530,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
 
     (tm as any).childProcesses.set(1, child);
     (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
     mockDb.getTeam.mockReturnValue(undefined);
@@ -559,7 +559,7 @@ describe('TeamManager.attachProcessHandlers (error)', () => {
 
     (tm as any).childProcesses.set(1, child);
     (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
     mockDb.getTeam.mockReturnValue(team);
@@ -589,7 +589,7 @@ describe('TeamManager.attachProcessHandlers (error)', () => {
 
     (tm as any).childProcesses.set(1, child);
     (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
     (tm as any).stdinPipes.set(1, createMockStdin());
     (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
 
@@ -626,7 +626,7 @@ describe('TeamManager.gracefulShutdown', () => {
   it('sends pr_merged_shutdown message via stdin', () => {
     const mockStdin = createMockStdin();
     (tm as any).stdinPipes.set(1, mockStdin);
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
 
     tm.gracefulShutdown(1, 42, 120000);
 
@@ -636,7 +636,7 @@ describe('TeamManager.gracefulShutdown', () => {
   it('clears existing shutdown timer before setting new one', () => {
     const mockStdin = createMockStdin();
     (tm as any).stdinPipes.set(1, mockStdin);
-    (tm as any).parsedEvents.set(1, []);
+    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
 
     tm.gracefulShutdown(1, 42, 120000);
     tm.gracefulShutdown(1, 43, 60000);
@@ -664,7 +664,7 @@ describe('TeamManager.purgeTeamMaps', () => {
     (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
     (tm as any).childProcesses.set(teamId, createMockChildProcess());
     (tm as any).stdinPipes.set(teamId, createMockStdin());
-    (tm as any).parsedEvents.set(teamId, []);
+    (tm as any).parsedEvents.set(teamId, new CircularBuffer<unknown>(1000));
     (tm as any).tokenCounters.set(teamId, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
     (tm as any).agentMaps.set(teamId, new Map());
     (tm as any).lastStreamAt.set(teamId, Date.now());
@@ -720,7 +720,7 @@ describe('TeamManager.sweepOrphanedMaps', () => {
   it('should purge maps for teams in terminal state (done)', () => {
     const teamId = 5;
     (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
-    (tm as any).parsedEvents.set(teamId, []);
+    (tm as any).parsedEvents.set(teamId, new CircularBuffer<unknown>(1000));
     (tm as any).agentMaps.set(teamId, new Map());
     (tm as any).lastStreamAt.set(teamId, Date.now());
 
@@ -750,7 +750,7 @@ describe('TeamManager.sweepOrphanedMaps', () => {
     const child = createMockChildProcess();
     (tm as any).childProcesses.set(teamId, child);
     (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
-    (tm as any).parsedEvents.set(teamId, []);
+    (tm as any).parsedEvents.set(teamId, new CircularBuffer<unknown>(1000));
 
     mockDb.getTeam.mockReturnValue(makeTeam({ id: teamId, status: 'failed' }));
 
@@ -794,7 +794,7 @@ describe('TeamManager.sweepOrphanedMaps', () => {
   it('should purge maps for teams that no longer exist in DB', () => {
     const teamId = 11;
     (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(10));
-    (tm as any).parsedEvents.set(teamId, []);
+    (tm as any).parsedEvents.set(teamId, new CircularBuffer<unknown>(1000));
     (tm as any).lastStreamAt.set(teamId, Date.now());
 
     mockDb.getTeam.mockReturnValue(undefined);

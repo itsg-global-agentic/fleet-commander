@@ -80,7 +80,7 @@ export class TeamManager {
   private outputBuffers: Map<number, CircularBuffer<string>> = new Map();
   private childProcesses: Map<number, ChildProcess> = new Map();
   private stdinPipes: Map<number, Writable> = new Map();
-  private parsedEvents: Map<number, StreamEvent[]> = new Map();
+  private parsedEvents: Map<number, CircularBuffer<StreamEvent>> = new Map();
   private tokenCounters: Map<number, TokenCounter> = new Map();
   private _processingQueue = new Set<number>();
   private shutdownTimers: Map<number, NodeJS.Timeout> = new Map();
@@ -1287,7 +1287,7 @@ export class TeamManager {
     // Check in-memory buffer first (for running teams)
     const inMemory = this.parsedEvents.get(teamId);
     if (inMemory && inMemory.length > 0) {
-      return inMemory;
+      return inMemory.toArray();
     }
 
     // Fall back to persisted events in DB (for done/failed/restarted teams)
@@ -1343,7 +1343,7 @@ export class TeamManager {
 
     try {
       const db = getDatabase();
-      db.upsertStreamEvents(teamId, JSON.stringify(events));
+      db.upsertStreamEvents(teamId, JSON.stringify(events.toArray()));
     } catch (err) {
       console.error(`[TeamManager] Failed to persist stream events for team ${teamId}:`, err);
     }
@@ -1375,9 +1375,6 @@ export class TeamManager {
       const events = this.parsedEvents.get(teamId);
       if (events) {
         events.push(syntheticEvent);
-        while (events.length > MAX_PARSED_EVENTS) {
-          events.shift();
-        }
       }
       sseBroker.broadcast('team_output', { team_id: teamId, event: syntheticEvent }, teamId);
 
@@ -1934,7 +1931,7 @@ export class TeamManager {
 
     // Initialize parsed events buffer for this team
     if (!this.parsedEvents.has(teamId)) {
-      this.parsedEvents.set(teamId, []);
+      this.parsedEvents.set(teamId, new CircularBuffer<StreamEvent>(MAX_PARSED_EVENTS));
     }
     const events = this.parsedEvents.get(teamId)!;
 
@@ -2101,9 +2098,6 @@ export class TeamManager {
               ...(lastToolName ? { lastToolName } : {}),
             };
             events.push(timestampedEvent);
-            if (events.length > MAX_PARSED_EVENTS) {
-              events.shift();
-            }
 
             // Accumulate token counts from assistant events
             this.accumulateTokens(teamId, event);
@@ -2220,9 +2214,6 @@ export class TeamManager {
                   agentName: endAgentName,
                 };
                 events.push(timestampedEvent);
-                if (events.length > MAX_PARSED_EVENTS) {
-                  events.shift();
-                }
 
                 // Accumulate token counts from assistant events
                 this.accumulateTokens(teamId, event);
