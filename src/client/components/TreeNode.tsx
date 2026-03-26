@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
 import { PlayIcon, LockIcon } from './Icons';
@@ -155,7 +155,6 @@ interface TreeNodeProps {
   onLaunch: (issueNumber: number, title: string, projectId?: number) => Promise<void>;
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
-  forceExpand?: boolean;
   /** When set, the play button uses this project instead of requiring the user to select one. */
   projectId?: number;
   /** Map of issue number -> priority data from AI prioritization */
@@ -170,16 +169,13 @@ interface TreeNodeProps {
   prioritizing?: boolean;
   /** Controlled collapse state: set of collapsed node IDs */
   collapsedNodes?: Set<string>;
-  /** Callback when a node's collapse state is toggled (controlled mode) */
+  /** Callback when a node's collapse state is toggled */
   onToggleCollapse?: (nodeId: string) => void;
 }
 
-export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, forceExpand, projectId, priorityMap, checkedIssues, onCheckChange, onPrioritizeSubtree, prioritizing, collapsedNodes, onToggleCollapse }: TreeNodeProps) {
+export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, projectId, priorityMap, checkedIssues, onCheckChange, onPrioritizeSubtree, prioritizing, collapsedNodes, onToggleCollapse }: TreeNodeProps) {
   const nodeId = node.number.toString();
-  const isControlled = collapsedNodes != null && onToggleCollapse != null;
-  const [localExpanded, setLocalExpanded] = useState(depth < 2);
-  const controlledExpanded = isControlled ? !collapsedNodes.has(nodeId) : localExpanded;
-  const isExpanded = forceExpand || controlledExpanded;
+  const isExpanded = collapsedNodes ? !collapsedNodes.has(nodeId) : true;
   const hasChildren = node.children.length > 0;
   const hasActiveTeam = node.activeTeam != null;
   const isBlocked = !!(node.dependencies && !node.dependencies.resolved && node.dependencies.openCount > 0);
@@ -202,16 +198,14 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
         className={`flex items-center gap-2 py-1.5 px-2 rounded hover:bg-dark-surface/80 group transition-colors ${
           isBlocked ? 'opacity-60 border-l-2 border-[#F85149]' : ''
         }`}
-        style={{ paddingLeft: `${depth * 20 + 8}px` }}
+        style={{ paddingLeft: `${Math.min(depth * 20, 200) + 8}px` }}
       >
         {/* Expand/collapse arrow */}
         <button
           disabled={!hasChildren}
           onClick={() => {
-            if (isControlled) {
+            if (onToggleCollapse) {
               onToggleCollapse(nodeId);
-            } else {
-              setLocalExpanded(!isExpanded);
             }
           }}
           className={`w-4 h-4 flex items-center justify-center text-dark-muted shrink-0 transition-transform duration-150 ${
@@ -362,37 +356,12 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
       {launchError && (
         <div
           className="flex items-center gap-1.5 py-1 text-xs text-[#F85149]"
-          style={{ paddingLeft: `${depth * 20 + 32}px` }}
+          style={{ paddingLeft: `${Math.min(depth * 20, 200) + 32}px` }}
         >
           <svg className="w-3 h-3 shrink-0" viewBox="0 0 16 16" fill="currentColor">
             <path d="M2.343 13.657A8 8 0 1 1 13.657 2.343 8 8 0 0 1 2.343 13.657ZM6.03 4.97a.751.751 0 0 0-1.042.018.751.751 0 0 0-.018 1.042L6.94 8 4.97 9.97a.749.749 0 0 0 .326 1.275.749.749 0 0 0 .734-.215L8 9.06l1.97 1.97a.749.749 0 0 0 1.275-.326.749.749 0 0 0-.215-.734L9.06 8l1.97-1.97a.749.749 0 0 0-.326-1.275.749.749 0 0 0-.734.215L8 6.94Z" />
           </svg>
           <span>{launchError}</span>
-        </div>
-      )}
-
-      {/* Children (recursive) */}
-      {hasChildren && isExpanded && (
-        <div>
-          {node.children.map((child) => (
-            <TreeNode
-              key={child.number}
-              node={child}
-              depth={depth + 1}
-              onLaunch={onLaunch}
-              launchingIssues={launchingIssues}
-              launchErrors={launchErrors}
-              forceExpand={forceExpand}
-              projectId={projectId}
-              priorityMap={priorityMap}
-              checkedIssues={checkedIssues}
-              onCheckChange={onCheckChange}
-              onPrioritizeSubtree={onPrioritizeSubtree}
-              prioritizing={prioritizing}
-              collapsedNodes={collapsedNodes}
-              onToggleCollapse={onToggleCollapse}
-            />
-          ))}
         </div>
       )}
     </div>

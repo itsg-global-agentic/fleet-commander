@@ -62,10 +62,11 @@
     "prepublishOnly": "echo 'Tests already run in CI — skipping'"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
     "@fastify/cors": "^10.0.3",
     "@fastify/static": "^9.0.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "@dagrejs/dagre": "^3.0.0",
+    "@tanstack/react-virtual": "^3.13.23",
     "better-sqlite3": "^12.0.0",
     "execa": "^9.6.1",
     "fastify": "^5.3.3",

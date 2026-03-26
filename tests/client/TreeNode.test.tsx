@@ -68,28 +68,14 @@ describe('TreeNode', () => {
     expect(arrowBtn).toBeDefined();
   });
 
-  it('shows children when expanded (depth < 2 is default expanded)', () => {
+  it('does not render children (flat row renderer)', () => {
     const parent = makeNode({
       number: 1,
       title: 'Parent',
       children: [makeNode({ number: 2, title: 'Child issue' })],
     });
-    render(<TreeNode node={parent} {...defaultProps} depth={0} />);
-    expect(screen.getByText('Child issue')).toBeInTheDocument();
-  });
-
-  it('collapses children when arrow is clicked', () => {
-    const parent = makeNode({
-      number: 1,
-      title: 'Parent',
-      children: [makeNode({ number: 2, title: 'Child issue' })],
-    });
-    render(<TreeNode node={parent} {...defaultProps} depth={0} />);
-    expect(screen.getByText('Child issue')).toBeInTheDocument();
-
-    // Click the first (parent) Collapse button — child also has one but it's invisible
-    const collapseButtons = screen.getAllByLabelText('Collapse');
-    fireEvent.click(collapseButtons[0]);
+    render(<TreeNode node={parent} {...defaultProps} depth={0} collapsedNodes={new Set()} onToggleCollapse={vi.fn()} />);
+    // TreeNode no longer renders children — only the parent row
     expect(screen.queryByText('Child issue')).not.toBeInTheDocument();
   });
 
@@ -178,22 +164,6 @@ describe('TreeNode', () => {
     expect(screen.getByText('7/10')).toBeInTheDocument();
   });
 
-  it('force expands all children when forceExpand is true', () => {
-    const parent = makeNode({
-      number: 1,
-      title: 'Parent',
-      children: [
-        makeNode({
-          number: 2,
-          title: 'Child',
-          children: [makeNode({ number: 3, title: 'Grandchild' })],
-        }),
-      ],
-    });
-    render(<TreeNode node={parent} {...defaultProps} depth={0} forceExpand />);
-    expect(screen.getByText('Grandchild')).toBeInTheDocument();
-  });
-
   it('renders blocked badge for issues with unresolved dependencies', () => {
     render(
       <TreeNode
@@ -212,36 +182,34 @@ describe('TreeNode', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Closed parent with open children (Issue #348 fix)
+  // Closed parent styling (Issue #348 fix)
   // -------------------------------------------------------------------------
 
-  it('renders closed parent with open children correctly', () => {
+  it('renders closed parent with correct styling', () => {
     const closedParent = makeNode({
       number: 5,
       title: 'Closed epic',
       state: 'closed',
       children: [
         makeNode({ number: 10, title: 'Open sub-issue A', state: 'open' }),
-        makeNode({ number: 11, title: 'Open sub-issue B', state: 'open' }),
       ],
     });
-    render(<TreeNode node={closedParent} {...defaultProps} depth={0} />);
+    render(
+      <TreeNode
+        node={closedParent}
+        {...defaultProps}
+        depth={0}
+        collapsedNodes={new Set()}
+        onToggleCollapse={vi.fn()}
+      />,
+    );
 
     // Parent should have closed styling
     const parentTitle = screen.getByText('Closed epic');
     expect(parentTitle.className).toContain('line-through');
 
-    // Children should be visible (expanded by default at depth 0)
-    expect(screen.getByText('Open sub-issue A')).toBeInTheDocument();
-    expect(screen.getByText('Open sub-issue B')).toBeInTheDocument();
-
-    // Children should NOT have line-through styling
-    const childA = screen.getByText('Open sub-issue A');
-    expect(childA.className).not.toContain('line-through');
-
-    // Play button should be available for open leaf children
-    expect(screen.getByTitle('Launch team for #10')).toBeInTheDocument();
-    expect(screen.getByTitle('Launch team for #11')).toBeInTheDocument();
+    // TreeNode no longer renders children — only the parent row
+    expect(screen.queryByText('Open sub-issue A')).not.toBeInTheDocument();
 
     // No Play button for the closed parent (it also has children)
     expect(screen.queryByTitle('Launch team for #5')).not.toBeInTheDocument();
@@ -256,7 +224,7 @@ describe('TreeNode', () => {
   // Controlled collapse state (Issue #349)
   // -------------------------------------------------------------------------
 
-  it('uses controlled collapse state when collapsedNodes and onToggleCollapse are provided', () => {
+  it('shows expand arrow when node is not in collapsedNodes (expanded)', () => {
     const collapsedNodes = new Set<string>();
     const onToggleCollapse = vi.fn();
     const parent = makeNode({
@@ -265,7 +233,6 @@ describe('TreeNode', () => {
       children: [makeNode({ number: 2, title: 'Child issue' })],
     });
 
-    // Not in collapsed set = expanded
     render(
       <TreeNode
         node={parent}
@@ -275,10 +242,11 @@ describe('TreeNode', () => {
         onToggleCollapse={onToggleCollapse}
       />,
     );
-    expect(screen.getByText('Child issue')).toBeInTheDocument();
+    // Arrow should show Collapse label since node is expanded
+    expect(screen.getByLabelText('Collapse')).toBeInTheDocument();
   });
 
-  it('hides children when node is in collapsedNodes set', () => {
+  it('shows collapse arrow when node is in collapsedNodes set', () => {
     const collapsedNodes = new Set<string>(['1']);
     const onToggleCollapse = vi.fn();
     const parent = makeNode({
@@ -296,10 +264,11 @@ describe('TreeNode', () => {
         onToggleCollapse={onToggleCollapse}
       />,
     );
-    expect(screen.queryByText('Child issue')).not.toBeInTheDocument();
+    // Arrow should show Expand label since node is collapsed
+    expect(screen.getByLabelText('Expand')).toBeInTheDocument();
   });
 
-  it('calls onToggleCollapse with nodeId when arrow is clicked in controlled mode', () => {
+  it('calls onToggleCollapse with nodeId when arrow is clicked', () => {
     const collapsedNodes = new Set<string>();
     const onToggleCollapse = vi.fn();
     const parent = makeNode({
@@ -318,61 +287,24 @@ describe('TreeNode', () => {
       />,
     );
 
-    const collapseBtn = screen.getAllByLabelText('Collapse')[0];
+    const collapseBtn = screen.getByLabelText('Collapse');
     fireEvent.click(collapseBtn);
     expect(onToggleCollapse).toHaveBeenCalledWith('42');
   });
 
-  it('forceExpand overrides controlled collapse state', () => {
-    const collapsedNodes = new Set<string>(['1']);
-    const onToggleCollapse = vi.fn();
-    const parent = makeNode({
-      number: 1,
-      title: 'Parent',
-      children: [makeNode({ number: 2, title: 'Child issue' })],
-    });
-
-    render(
+  it('caps paddingLeft for deeply nested rows', () => {
+    const deepNode = makeNode({ number: 99, title: 'Deep node' });
+    const { container } = render(
       <TreeNode
-        node={parent}
+        node={deepNode}
         {...defaultProps}
-        depth={0}
-        forceExpand
-        collapsedNodes={collapsedNodes}
-        onToggleCollapse={onToggleCollapse}
+        depth={15}
+        collapsedNodes={new Set()}
+        onToggleCollapse={vi.fn()}
       />,
     );
-    // Child should be visible because forceExpand overrides collapse
-    expect(screen.getByText('Child issue')).toBeInTheDocument();
-  });
-
-  it('passes collapsedNodes and onToggleCollapse to child TreeNodes', () => {
-    const collapsedNodes = new Set<string>(['2']);
-    const onToggleCollapse = vi.fn();
-    const parent = makeNode({
-      number: 1,
-      title: 'Parent',
-      children: [
-        makeNode({
-          number: 2,
-          title: 'Child',
-          children: [makeNode({ number: 3, title: 'Grandchild' })],
-        }),
-      ],
-    });
-
-    render(
-      <TreeNode
-        node={parent}
-        {...defaultProps}
-        depth={0}
-        collapsedNodes={collapsedNodes}
-        onToggleCollapse={onToggleCollapse}
-      />,
-    );
-
-    // Parent is expanded (not in collapsed set), Child (2) is collapsed
-    expect(screen.getByText('Child')).toBeInTheDocument();
-    expect(screen.queryByText('Grandchild')).not.toBeInTheDocument();
+    // depth 15 * 20 = 300, capped at 200, plus 8 = 208px
+    const row = container.querySelector('.flex.items-center.gap-2') as HTMLElement;
+    expect(row.style.paddingLeft).toBe('208px');
   });
 });

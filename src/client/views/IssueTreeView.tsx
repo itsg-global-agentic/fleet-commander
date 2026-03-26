@@ -3,7 +3,9 @@ import { useApi } from '../hooks/useApi';
 import { useSSE } from '../hooks/useSSE';
 import { usePrioritization, sortTreeByPriority } from '../hooks/usePrioritization';
 import { useCollapseState } from '../hooks/useCollapseState';
-import { TreeNode, type IssueNode } from '../components/TreeNode';
+import { useFlattenedTree } from '../hooks/useVirtualizedTree';
+import { VirtualizedTreeList } from '../components/VirtualizedTreeList';
+import type { IssueNode } from '../components/TreeNode';
 import type { ProjectSummary } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -442,6 +444,21 @@ export function IssueTreeView() {
     }
     return collectAllNodeIds(tree);
   }, [tree, groups]);
+
+  // Seed default collapse state: collapse parent nodes at depth >= 2
+  // This only fires once on first load when localStorage is empty.
+  const deepNodeIds = useMemo(() => {
+    if (groups.length > 0) {
+      return groups.flatMap((g) => collectDeepParentNodeIds(g.tree, 0, 2));
+    }
+    return collectDeepParentNodeIds(tree, 0, 2);
+  }, [tree, groups]);
+
+  useEffect(() => {
+    if (deepNodeIds.length > 0) {
+      collapseState.seedDefaults(deepNodeIds);
+    }
+  }, [deepNodeIds, collapseState.seedDefaults]);
 
   // -------------------------------------------------------------------------
   // Loading state
@@ -1101,6 +1118,8 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
 
   const launchableInfo = useMemo(() => collectLaunchableIssues(group.tree), [group.tree]);
 
+  const flatRows = useFlattenedTree(displayTree, collapsedNodes, forceExpand);
+
   return (
     <div>
       {/* Project section header */}
@@ -1161,28 +1180,24 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
         fetchTree={fetchTree}
       />
 
-      {/* Issue tree within this project group */}
+      {/* Issue tree within this project group (virtualized) */}
       {expanded && (
         <div className="ml-2 border-l border-dark-border/40 pl-1">
-          {displayTree.map((node) => (
-            <TreeNode
-              key={node.number}
-              node={node}
-              depth={0}
-              onLaunch={onLaunch}
-              launchingIssues={launchingIssues}
-              launchErrors={launchErrors}
-              forceExpand={forceExpand}
-              projectId={group.projectId}
-              priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
-              checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
-              onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
-              onPrioritizeSubtree={prioritization.prioritizeSubtree}
-              prioritizing={prioritization.loading}
-              collapsedNodes={collapsedNodes}
-              onToggleCollapse={onToggleCollapse}
-            />
-          ))}
+          <VirtualizedTreeList
+            rows={flatRows}
+            onLaunch={onLaunch}
+            launchingIssues={launchingIssues}
+            launchErrors={launchErrors}
+            projectId={group.projectId}
+            priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
+            checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
+            onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
+            onPrioritizeSubtree={prioritization.prioritizeSubtree}
+            prioritizing={prioritization.loading}
+            collapsedNodes={collapsedNodes}
+            onToggleCollapse={onToggleCollapse}
+            className="max-h-[70vh]"
+          />
         </div>
       )}
 
@@ -1230,10 +1245,12 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
 
   const launchableInfo = useMemo(() => collectLaunchableIssues(tree), [tree]);
 
+  const flatRows = useFlattenedTree(displayTree, collapsedNodes, forceExpand);
+
   return (
-    <div>
+    <div className="flex flex-col h-full">
       {/* Prioritize controls */}
-      <div className="flex items-center gap-2 px-2 pb-2">
+      <div className="flex items-center gap-2 px-2 pb-2 shrink-0">
         <PrioritizeButtons
           prioritization={prioritization}
           tree={tree}
@@ -1244,14 +1261,14 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
 
       {/* Prioritization error banner */}
       {prioritization.error && (
-        <div className="mx-2 mb-2 px-3 py-2 rounded border border-[#F85149]/30 bg-[#F85149]/10 text-xs text-[#F85149]">
+        <div className="mx-2 mb-2 px-3 py-2 rounded border border-[#F85149]/30 bg-[#F85149]/10 text-xs text-[#F85149] shrink-0">
           Prioritization failed: {prioritization.error}
         </div>
       )}
 
       {/* Prioritization loading banner */}
       {prioritization.loading && (
-        <div className="mx-2 mb-2 px-3 py-2 rounded border border-[#A371F7]/30 bg-[#A371F7]/10 flex items-center gap-2">
+        <div className="mx-2 mb-2 px-3 py-2 rounded border border-[#A371F7]/30 bg-[#A371F7]/10 flex items-center gap-2 shrink-0">
           <svg className="w-4 h-4 text-[#A371F7] animate-spin shrink-0" viewBox="0 0 24 24" fill="none">
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
@@ -1270,26 +1287,21 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
         />
       )}
 
-      <div className="space-y-0">
-        {displayTree.map((node) => (
-          <TreeNode
-            key={node.number}
-            node={node}
-            depth={0}
-            onLaunch={onLaunch}
-            launchingIssues={launchingIssues}
-            launchErrors={launchErrors}
-            forceExpand={forceExpand}
-            priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
-            checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
-            onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
-            onPrioritizeSubtree={prioritization.prioritizeSubtree}
-            prioritizing={prioritization.loading}
-            collapsedNodes={collapsedNodes}
-            onToggleCollapse={onToggleCollapse}
-          />
-        ))}
-      </div>
+      <VirtualizedTreeList
+        rows={flatRows}
+        onLaunch={onLaunch}
+        launchingIssues={launchingIssues}
+        launchErrors={launchErrors}
+        projectId={projectId ?? undefined}
+        priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
+        checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
+        onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
+        onPrioritizeSubtree={prioritization.prioritizeSubtree}
+        prioritizing={prioritization.loading}
+        collapsedNodes={collapsedNodes}
+        onToggleCollapse={onToggleCollapse}
+        className="flex-1"
+      />
 
       {/* Run All confirmation dialog */}
       {showRunAllDialog && projectId && (
@@ -1403,6 +1415,23 @@ function collectLaunchableIssues(nodes: IssueNode[]): {
 
   walk(nodes);
   return { launchable, skippedActive, skippedBlocked };
+}
+
+/**
+ * Collect IDs of parent nodes (nodes with children) at depth >= minDepth.
+ * Used to pre-collapse deep branches on first load.
+ */
+function collectDeepParentNodeIds(nodes: IssueNode[], currentDepth: number, minDepth: number): string[] {
+  const ids: string[] = [];
+  for (const node of nodes) {
+    if (node.children.length > 0) {
+      if (currentDepth >= minDepth) {
+        ids.push(node.number.toString());
+      }
+      ids.push(...collectDeepParentNodeIds(node.children, currentDepth + 1, minDepth));
+    }
+  }
+  return ids;
 }
 
 /** Format a timestamp as HH:MM local time */
