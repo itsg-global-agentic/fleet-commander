@@ -239,6 +239,7 @@ describe('getCleanupPreview', () => {
     const project = makeProject();
     mockDb.getProject.mockReturnValue(project);
     mockDb.getTeams.mockReturnValue([]);
+    mockDb.getTeamByWorktree.mockReturnValue(undefined);
 
     // Worktree dir exists but is empty
     mockFs.existsSync.mockImplementation((p: string) => {
@@ -258,6 +259,55 @@ describe('getCleanupPreview', () => {
     const branchItems = result.items.filter((i) => i.type === 'stale_branch');
     expect(branchItems.length).toBe(1);
     expect(branchItems[0]!.name).toBe('worktree-test-project-10');
+  });
+
+  it('skips stale branch when team is re-queued (defense-in-depth DB check)', () => {
+    const project = makeProject();
+    // activeWorktreeNames set is empty (team was not in initial getTeams query)
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([]);
+    // But the direct DB lookup finds the team as queued (re-launched between set build and branch scan)
+    const requeuedTeam = makeTeam({ id: 10, status: 'queued', worktreeName: 'test-project-10', projectId: 1 });
+    mockDb.getTeamByWorktree.mockReturnValue(requeuedTeam);
+
+    mockFs.existsSync.mockImplementation((p: string) => {
+      if (pathContains(p, '.claude/worktrees') && !pathContains(p, 'test-project-10')) return true;
+      return false;
+    });
+    mockFs.readdirSync.mockImplementation((_p: string, opts?: unknown) => {
+      if (opts) return [];
+      return [];
+    });
+    mockExecSync.mockReturnValue('  worktree-test-project-10\n');
+
+    const result = getCleanupPreview(1);
+
+    const branchItems = result.items.filter((i) => i.type === 'stale_branch');
+    expect(branchItems.length).toBe(0);
+  });
+
+  it('skips stale branch belonging to a different project', () => {
+    const project = makeProject();
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([]);
+    // Branch belongs to a team in projectId 2 (different project)
+    const otherProjectTeam = makeTeam({ id: 20, status: 'done', worktreeName: 'test-project-10', projectId: 2 });
+    mockDb.getTeamByWorktree.mockReturnValue(otherProjectTeam);
+
+    mockFs.existsSync.mockImplementation((p: string) => {
+      if (pathContains(p, '.claude/worktrees') && !pathContains(p, 'test-project-10')) return true;
+      return false;
+    });
+    mockFs.readdirSync.mockImplementation((_p: string, opts?: unknown) => {
+      if (opts) return [];
+      return [];
+    });
+    mockExecSync.mockReturnValue('  worktree-test-project-10\n');
+
+    const result = getCleanupPreview(1);
+
+    const branchItems = result.items.filter((i) => i.type === 'stale_branch');
+    expect(branchItems.length).toBe(0);
   });
 
   it('includes team records when resetTeams is true', () => {
@@ -360,6 +410,7 @@ describe('executeCleanup', () => {
     const project = makeProject();
     mockDb.getProject.mockReturnValue(project);
     mockDb.getTeams.mockReturnValue([]);
+    mockDb.getTeamByWorktree.mockReturnValue(undefined);
 
     // Worktree dir exists but empty
     mockFs.existsSync.mockImplementation((p: string) => {
@@ -386,6 +437,51 @@ describe('executeCleanup', () => {
       (call) => typeof call[0] === 'string' && call[0].includes('branch -D'),
     );
     expect(branchDeleteCalls.length).toBe(1);
+  });
+
+  it('skips stale branch deletion when team becomes active between preview and execute', () => {
+    const project = makeProject();
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([]);
+
+    // Worktree dir exists but empty
+    mockFs.existsSync.mockImplementation((p: string) => {
+      if (pathContains(p, '.claude/worktrees') && !pathContains(p, 'test-project-10')) return true;
+      return false;
+    });
+    mockFs.readdirSync.mockImplementation((_p: string, opts?: unknown) => {
+      if (opts) return [];
+      return [];
+    });
+
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (typeof cmd === 'string' && cmd.includes('branch --list')) {
+        return '  worktree-test-project-10\n';
+      }
+      return '';
+    });
+
+    // The preview re-scan (getCleanupPreview inside executeCleanup) returns the branch as stale
+    // because getTeamByWorktree returns undefined during the preview phase.
+    // But the just-before-delete guard finds the team is now queued.
+    let callCount = 0;
+    mockDb.getTeamByWorktree.mockImplementation(() => {
+      callCount++;
+      // First call is from getCleanupPreview (defense-in-depth check) — no team yet
+      if (callCount <= 1) return undefined;
+      // Second call is from executeCleanup just-before-delete guard — team is now queued
+      return makeTeam({ id: 10, status: 'queued', worktreeName: 'test-project-10' });
+    });
+
+    const result = executeCleanup(1, ['worktree-test-project-10']);
+
+    // Branch should NOT be deleted
+    expect(result.removed).not.toContain('worktree-test-project-10');
+    // Verify git branch -D was NOT called
+    const branchDeleteCalls = mockExecSync.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('branch -D'),
+    );
+    expect(branchDeleteCalls.length).toBe(0);
   });
 
   it('deletes team records when included in itemPaths', () => {

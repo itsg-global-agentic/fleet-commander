@@ -138,6 +138,12 @@ export function getCleanupPreview(projectId: number, resetTeams: boolean = false
       // Gap B: skip branches for active teams
       if (activeWorktreeNames.has(worktreeName)) continue;
 
+      // Defense-in-depth: direct DB check in case activeWorktreeNames is stale
+      const branchTeam = db.getTeamByWorktree(worktreeName);
+      if (branchTeam && activeStatuses.includes(branchTeam.status)) continue;
+      // Skip branches belonging to a different project
+      if (branchTeam && branchTeam.projectId !== projectId) continue;
+
       // Gap A: only flag as stale when worktreeDir exists
       const worktreeExists = fs.existsSync(worktreeDir) &&
         fs.existsSync(path.join(worktreeDir, worktreeName));
@@ -234,6 +240,15 @@ export function executeCleanup(
         // If file is gone (e.g. already removed as part of worktree deletion), still count as success
         removed.push(item.name);
       } else if (item.type === 'stale_branch') {
+        // Re-check: skip if this branch now belongs to an active/re-queued team
+        const branchWorktree = item.name.startsWith('worktree-')
+          ? item.name.slice('worktree-'.length)
+          : item.name;
+        const ownerTeam = db.getTeamByWorktree(branchWorktree);
+        if (ownerTeam && ['queued', 'launching', 'running', 'idle', 'stuck'].includes(ownerTeam.status)) {
+          console.log(`[Cleanup] Skipping branch ${item.name} — team ${ownerTeam.id} is now ${ownerTeam.status}`);
+          continue;
+        }
         execSync(
           `git -C "${project.repoPath}" branch -D "${item.name}"`,
           { encoding: 'utf-8', stdio: 'pipe', timeout: 5000 },
