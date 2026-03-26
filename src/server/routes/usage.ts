@@ -55,7 +55,11 @@ const usageRoutes: FastifyPluginCallback = (
     async (request: FastifyRequest, reply: FastifyReply) => {
       try {
         const query = request.query as { limit?: string };
-        const limit = query.limit ? parseInt(query.limit, 10) : undefined;
+        const rawLimit = query.limit ? parseInt(query.limit, 10) : undefined;
+        if (rawLimit !== undefined && (isNaN(rawLimit) || rawLimit < 1)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'limit must be a positive integer' });
+        }
+        const limit = rawLimit !== undefined ? Math.min(rawLimit, 1000) : undefined;
 
         const service = getUsageService();
         const result = service.getHistory(limit);

@@ -438,8 +438,13 @@ const teamsRoutes: FastifyPluginCallback = (
         const linesParam = (request.query as OutputQuerystring).lines;
         const lines = linesParam ? parseInt(linesParam, 10) : undefined;
 
+        if (lines !== undefined && (isNaN(lines) || lines < 1)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'lines must be a positive integer' });
+        }
+        const clampedLines = lines !== undefined ? Math.min(lines, 1000) : undefined;
+
         const service = getTeamService();
-        const result = service.getOutput(teamId, lines);
+        const result = service.getOutput(teamId, clampedLines);
         return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
@@ -500,7 +505,11 @@ const teamsRoutes: FastifyPluginCallback = (
         }
 
         const limitParam = (request.query as TimelineQuerystring).limit;
-        const limit = limitParam ? parseInt(limitParam, 10) : 500;
+        const rawLimit = limitParam ? parseInt(limitParam, 10) : undefined;
+        if (rawLimit !== undefined && (isNaN(rawLimit) || rawLimit < 1)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'limit must be a positive integer' });
+        }
+        const limit = rawLimit !== undefined ? Math.min(rawLimit, 5000) : 500;
 
         const service = getTeamService();
         const timeline = service.getTeamTimeline(teamId, limit);
@@ -814,7 +823,11 @@ const teamsRoutes: FastifyPluginCallback = (
       try {
         const teamId = parseInt(request.params.id, 10);
         const limitParam = (request.query as { limit?: string }).limit;
-        const limit = limitParam ? parseInt(limitParam, 10) : undefined;
+        const rawLimit = limitParam ? parseInt(limitParam, 10) : undefined;
+        if (rawLimit !== undefined && (isNaN(rawLimit) || rawLimit < 1)) {
+          return reply.code(400).send({ error: 'Bad Request', message: 'limit must be a positive integer' });
+        }
+        const limit = rawLimit !== undefined ? Math.min(rawLimit, 1000) : undefined;
 
         const service = getTeamService();
         const messages = service.getMessages(teamId, limit);

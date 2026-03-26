@@ -290,6 +290,27 @@ describe('GET /api/teams/:id/output', () => {
     const res = await server.inject({ method: 'GET', url: '/api/teams/99999/output' });
     expect(res.statusCode).toBe(404);
   });
+
+  it('should return 400 for non-numeric lines param', async () => {
+    const team = seedTeam();
+    const res = await server.inject({ method: 'GET', url: `/api/teams/${team.id}/output?lines=abc` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('lines');
+  });
+
+  it('should return 400 for negative lines param', async () => {
+    const team = seedTeam();
+    const res = await server.inject({ method: 'GET', url: `/api/teams/${team.id}/output?lines=-5` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('lines');
+  });
+
+  it('should return 400 for zero lines param', async () => {
+    const team = seedTeam();
+    const res = await server.inject({ method: 'GET', url: `/api/teams/${team.id}/output?lines=0` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('lines');
+  });
 });
 
 // =============================================================================
@@ -335,6 +356,47 @@ describe('GET /api/teams/:id/timeline', () => {
   it('should return 404 for unknown team', async () => {
     const res = await server.inject({ method: 'GET', url: '/api/teams/99999/timeline' });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('should return 400 for non-numeric limit', async () => {
+    const team = seedTeam();
+    const res = await server.inject({ method: 'GET', url: `/api/teams/${team.id}/timeline?limit=abc` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('limit');
+  });
+
+  it('should return 400 for negative limit', async () => {
+    const team = seedTeam();
+    const res = await server.inject({ method: 'GET', url: `/api/teams/${team.id}/timeline?limit=-1` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('limit');
+  });
+});
+
+// =============================================================================
+// Tests: GET /api/teams/:id/messages
+// =============================================================================
+
+describe('GET /api/teams/:id/messages', () => {
+  it('should return 400 for non-numeric limit', async () => {
+    const team = seedTeam();
+    const res = await server.inject({ method: 'GET', url: `/api/teams/${team.id}/messages?limit=abc` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('limit');
+  });
+
+  it('should return 400 for negative limit', async () => {
+    const team = seedTeam();
+    const res = await server.inject({ method: 'GET', url: `/api/teams/${team.id}/messages?limit=-1` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('limit');
+  });
+
+  it('should return 400 for zero limit', async () => {
+    const team = seedTeam();
+    const res = await server.inject({ method: 'GET', url: `/api/teams/${team.id}/messages?limit=0` });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('limit');
   });
 });
 
