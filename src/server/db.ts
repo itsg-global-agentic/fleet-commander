@@ -1951,7 +1951,7 @@ export class FleetDatabase {
   // -------------------------------------------------------------------------
 
   getTeamDashboard(pagination?: { limit?: number; offset?: number }): TeamDashboardRow[] {
-    let sql = 'SELECT * FROM v_team_dashboard';
+    let sql = 'SELECT * FROM v_team_dashboard ORDER BY id DESC';
     const params: Record<string, unknown> = {};
 
     if (pagination?.limit) {
