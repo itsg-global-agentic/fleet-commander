@@ -14,7 +14,7 @@ param(
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if ($TargetRepo) {
-    & bash "$scriptDir/install.sh" $TargetRepo
+    & bash "$scriptDir/install.sh" "$TargetRepo"
 } else {
     & bash "$scriptDir/install.sh"
 }

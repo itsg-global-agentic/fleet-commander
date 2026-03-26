@@ -14,7 +14,7 @@ param(
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if ($TargetRepo) {
-    & bash "$scriptDir/uninstall.sh" $TargetRepo
+    & bash "$scriptDir/uninstall.sh" "$TargetRepo"
 } else {
     & bash "$scriptDir/uninstall.sh"
 }
