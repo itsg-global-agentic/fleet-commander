@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useSSE } from '../hooks/useSSE';
+import { useFleetSSE } from '../hooks/useFleetSSE';
 import { usePrioritization, sortTreeByPriority } from '../hooks/usePrioritization';
 import { useCollapseState } from '../hooks/useCollapseState';
 import { useFlattenedTree } from '../hooks/useVirtualizedTree';
@@ -152,7 +152,7 @@ export function IssueTreeView() {
     }
   }, [fetchTree]);
 
-  useSSE({ onEvent: handleSSEEvent });
+  useFleetSSE('dependency_resolved', handleSSEEvent);
 
   // -------------------------------------------------------------------------
   // Refresh (force re-fetch from GitHub)

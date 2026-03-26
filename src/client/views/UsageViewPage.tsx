@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useSSE } from '../hooks/useSSE';
+import { useFleetSSE } from '../hooks/useFleetSSE';
 import { getUsageColor } from '../utils/constants';
 import { formatResetsAt } from '../utils/format-resets-at';
 import { UsageChart } from '../components/UsageChart';
@@ -112,7 +112,7 @@ export function UsageViewPage() {
     }
   }, [fetchUsage]);
 
-  useSSE({ onEvent: handleSSEEvent });
+  useFleetSSE('usage_updated', handleSSEEvent);
 
   return (
     <div className="p-6 max-w-4xl mx-auto flex flex-col gap-8">

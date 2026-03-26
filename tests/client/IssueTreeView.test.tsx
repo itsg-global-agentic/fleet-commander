@@ -25,12 +25,8 @@ vi.mock('../../src/client/hooks/useApi', () => ({
   useApi: () => mockApi,
 }));
 
-vi.mock('../../src/client/hooks/useSSE', () => ({
-  useSSE: () => ({
-    connected: true,
-    lastEvent: null,
-    lastEventTeamId: null,
-  }),
+vi.mock('../../src/client/hooks/useFleetSSE', () => ({
+  useFleetSSE: () => {},
 }));
 
 vi.mock('../../src/client/hooks/usePrioritization', () => ({

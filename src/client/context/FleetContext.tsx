@@ -3,6 +3,19 @@ import { useSSE } from '../hooks/useSSE';
 import type { TeamDashboardRow } from '../../shared/types';
 
 // =============================================================================
+// SSE dispatch context — allows components to subscribe to specific SSE events
+// without opening their own EventSource connections.
+// =============================================================================
+
+type SSESubscriberCallback = (type: string, data: unknown) => void;
+
+interface SSEDispatchContextValue {
+  subscribe: (type: string, cb: SSESubscriberCallback) => () => void;
+}
+
+const SSEDispatchContext = createContext<SSEDispatchContextValue | null>(null);
+
+// =============================================================================
 // Context value interfaces — each context holds a narrow slice of state
 // =============================================================================
 
@@ -50,6 +63,30 @@ export function FleetProvider({ children }: { children: ReactNode }) {
   const fetchFailCountRef = useRef(0);
   const thinkingTeamIdsRef = useRef<Set<number>>(new Set());
   const [thinkingVersion, forceThinkingUpdate] = useState(0);
+
+  // SSE subscriber registry — ref-based to avoid re-renders on subscribe/unsubscribe
+  const subscribersRef = useRef<Map<string, Set<SSESubscriberCallback>>>(new Map());
+
+  const subscribe = useCallback((type: string, cb: SSESubscriberCallback): () => void => {
+    const map = subscribersRef.current;
+    if (!map.has(type)) {
+      map.set(type, new Set());
+    }
+    map.get(type)!.add(cb);
+    return () => {
+      const set = map.get(type);
+      if (set) {
+        set.delete(cb);
+        if (set.size === 0) {
+          map.delete(type);
+        }
+      }
+    };
+  }, []);
+
+  const sseDispatchValue = useMemo<SSEDispatchContextValue>(() => ({
+    subscribe,
+  }), [subscribe]);
 
   // Fetch the full team dashboard from the REST API.
   // Used as a fallback when an SSE event signals a change but
@@ -179,6 +216,18 @@ export function FleetProvider({ children }: { children: ReactNode }) {
       }
     }
     // usage_updated: no longer triggers team list refetch (C7)
+
+    // Dispatch to registered subscribers (other components listening via useFleetSSE)
+    const subscribers = subscribersRef.current.get(type);
+    if (subscribers) {
+      for (const cb of subscribers) {
+        try {
+          cb(type, data);
+        } catch (err) {
+          console.error('[FleetProvider] SSE subscriber error:', err);
+        }
+      }
+    }
   }, [debouncedFetchTeams]);
 
   const { connected, lastEvent, lastEventTeamId } = useSSE({ onEvent: handleSSEEvent });
@@ -231,15 +280,17 @@ export function FleetProvider({ children }: { children: ReactNode }) {
   }), [isThinking, thinkingVersion]);
 
   return (
-    <TeamsContext.Provider value={teamsValue}>
-      <SelectionContext.Provider value={selectionValue}>
-        <ConnectionContext.Provider value={connectionValue}>
-          <ThinkingContext.Provider value={thinkingValue}>
-            {children}
-          </ThinkingContext.Provider>
-        </ConnectionContext.Provider>
-      </SelectionContext.Provider>
-    </TeamsContext.Provider>
+    <SSEDispatchContext.Provider value={sseDispatchValue}>
+      <TeamsContext.Provider value={teamsValue}>
+        <SelectionContext.Provider value={selectionValue}>
+          <ConnectionContext.Provider value={connectionValue}>
+            <ThinkingContext.Provider value={thinkingValue}>
+              {children}
+            </ThinkingContext.Provider>
+          </ConnectionContext.Provider>
+        </SelectionContext.Provider>
+      </TeamsContext.Provider>
+    </SSEDispatchContext.Provider>
   );
 }
 
@@ -279,6 +330,15 @@ export function useThinking(): ThinkingContextValue {
   const ctx = useContext(ThinkingContext);
   if (!ctx) {
     throw new Error('useThinking must be used within a FleetProvider');
+  }
+  return ctx;
+}
+
+/** Access the SSE dispatch context for subscribing to specific SSE event types */
+export function useSSEDispatch(): SSEDispatchContextValue {
+  const ctx = useContext(SSEDispatchContext);
+  if (!ctx) {
+    throw new Error('useSSEDispatch must be used within a FleetProvider');
   }
   return ctx;
 }

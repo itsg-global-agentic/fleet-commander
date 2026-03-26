@@ -35,15 +35,14 @@ vi.mock('../../src/client/hooks/useApi', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// Mock useSSE — capture the onEvent callback for simulating SSE events
+// Mock useFleetSSE — capture the onEvent callback for simulating SSE events
 // ---------------------------------------------------------------------------
 
 let capturedOnEvent: ((type: string, data: unknown) => void) | undefined;
 
-vi.mock('../../src/client/hooks/useSSE', () => ({
-  useSSE: (options: { onEvent?: (type: string, data: unknown) => void }) => {
-    capturedOnEvent = options.onEvent;
-    return { connected: true, lastEvent: null, lastEventTeamId: null };
+vi.mock('../../src/client/hooks/useFleetSSE', () => ({
+  useFleetSSE: (_eventTypes: string | string[], onEvent: (type: string, data: unknown) => void) => {
+    capturedOnEvent = onEvent;
   },
 }));
 

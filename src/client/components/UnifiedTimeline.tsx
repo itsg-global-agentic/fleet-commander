@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useReducer } from 'react';
 import { useApi } from '../hooks/useApi';
-import { useSSE } from '../hooks/useSSE';
+import { useFleetSSE } from '../hooks/useFleetSSE';
 import type { TimelineEntry, StreamTimelineEntry, HookTimelineEntry, TeamMember, TeamStatus } from '../../shared/types';
 import { TERMINAL_STATUSES } from '../../shared/types';
 import { agentColor } from '../utils/constants';
@@ -729,7 +729,7 @@ export function UnifiedTimeline({
     }
   }, []);
 
-  useSSE({ onEvent: handleSSEEvent });
+  useFleetSSE(['team_output', 'team_event'], handleSSEEvent);
 
   const { entries } = state;
 
