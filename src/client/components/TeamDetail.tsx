@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useSelection, useConnection, useThinking } from '../context/FleetContext';
 import { useApi } from '../hooks/useApi';
+import { useFleetSSE } from '../hooks/useFleetSSE';
 import { useTeamDetailData } from '../hooks/useTeamDetailData';
 import { StatusBadge } from './StatusBadge';
 import { CIChecks } from './CIChecks';
@@ -49,13 +50,18 @@ export function TeamDetail() {
   const templateCacheRef = useRef<{ data: Array<{ id: string; template: string; enabled: boolean }>; fetchedAt: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const selectedTeamIdRef = useRef(selectedTeamId);
+  const activeTabRef = useRef(activeTab);
 
   const isOpen = selectedTeamId !== null;
 
-  // Keep ref in sync with selectedTeamId for use in async callbacks
+  // Keep refs in sync for use in async callbacks
   useEffect(() => {
     selectedTeamIdRef.current = selectedTeamId;
   }, [selectedTeamId]);
+
+  useEffect(() => {
+    activeTabRef.current = activeTab;
+  }, [activeTab]);
 
   // Reset active tab, metadata collapse state, and agent filters when team changes
   useEffect(() => {
@@ -92,20 +98,17 @@ export function TeamDetail() {
   }, [activeTab, selectedTeamId, api]);
 
   // Refresh tasks on SSE task_updated events
-  useEffect(() => {
-    if (activeTab !== 'tasks' || !selectedTeamId) return;
-    if (!lastEvent || lastEventTeamId !== selectedTeamId) return;
-    try {
-      const parsed = typeof lastEvent === 'string' ? JSON.parse(lastEvent) : lastEvent;
-      if (parsed?.type === 'task_updated') {
-        api.get<TeamTask[]>(`teams/${selectedTeamId}/tasks`)
-          .then((data) => setTasks(data))
-          .catch(() => { /* SSE refresh is best-effort */ });
-      }
-    } catch {
-      // Ignore parse errors
-    }
-  }, [activeTab, selectedTeamId, lastEvent, lastEventTeamId, api]);
+  const handleTaskUpdated = useCallback((_type: string, data: unknown) => {
+    const payload = data as { team_id: number };
+    const teamId = selectedTeamIdRef.current;
+    if (activeTabRef.current !== 'tasks' || !teamId) return;
+    if (payload.team_id !== teamId) return;
+    api.get<TeamTask[]>(`teams/${teamId}/tasks`)
+      .then((tasks) => setTasks(tasks))
+      .catch(() => { /* SSE refresh is best-effort */ });
+  }, [api]);
+
+  useFleetSSE('task_updated', handleTaskUpdated);
 
   // Close panel handler
   const handleClose = useCallback(() => {

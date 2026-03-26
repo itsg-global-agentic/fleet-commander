@@ -52,6 +52,10 @@ vi.mock('../../src/client/components/CommGraph', () => ({
   CommGraph: () => <div data-testid="comm-graph">CommGraph</div>,
 }));
 
+vi.mock('../../src/client/hooks/useFleetSSE', () => ({
+  useFleetSSE: vi.fn(),
+}));
+
 // Import after mocks
 import { TeamDetail } from '../../src/client/components/TeamDetail';
 

@@ -50,7 +50,7 @@ export function useSSE(options: UseSSEOptions = {}): UseSSEResult {
       'pr_updated', 'team_launched', 'team_stopped',
       'usage_updated', 'project_added', 'project_updated', 'project_removed',
       'project_cleanup', 'dependency_resolved', 'heartbeat',
-      'team_thinking_start', 'team_thinking_stop',
+      'team_thinking_start', 'team_thinking_stop', 'task_updated',
     ];
 
     const handleSSEMessage = (event: MessageEvent) => {
