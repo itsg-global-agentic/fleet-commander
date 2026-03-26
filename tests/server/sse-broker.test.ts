@@ -16,7 +16,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 // Mock FastifyReply
 // ---------------------------------------------------------------------------
 
-interface MockRaw {
+import { EventEmitter } from 'events';
+
+interface MockRaw extends EventEmitter {
   write: ReturnType<typeof vi.fn>;
   end: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
@@ -27,13 +29,13 @@ interface MockReply {
 }
 
 function createMockReply(): MockReply {
-  return {
-    raw: {
-      write: vi.fn().mockReturnValue(true),
-      end: vi.fn(),
-      destroy: vi.fn(),
-    },
-  };
+  const emitter = new EventEmitter();
+  const raw = Object.assign(emitter, {
+    write: vi.fn().mockReturnValue(true),
+    end: vi.fn(),
+    destroy: vi.fn(),
+  }) as MockRaw;
+  return { raw };
 }
 
 // ---------------------------------------------------------------------------
@@ -328,5 +330,219 @@ describe('Client count', () => {
 
     sseBroker.stop();
     expect(sseBroker.getClientCount()).toBe(0);
+  });
+});
+
+// =============================================================================
+// Client lifecycle and error handling
+// =============================================================================
+
+describe('Client lifecycle and error handling', () => {
+  it('registers close and error listeners on reply.raw during addClient', () => {
+    const reply = createMockReply();
+    const onSpy = vi.spyOn(reply.raw, 'on');
+
+    sseBroker.addClient(reply as any);
+
+    expect(onSpy).toHaveBeenCalledWith('close', expect.any(Function));
+    expect(onSpy).toHaveBeenCalledWith('error', expect.any(Function));
+  });
+
+  it('removes client when reply.raw emits close', () => {
+    const reply = createMockReply();
+    sseBroker.addClient(reply as any);
+
+    expect(sseBroker.getClientCount()).toBe(1);
+
+    reply.raw.emit('close');
+
+    expect(sseBroker.getClientCount()).toBe(0);
+  });
+
+  it('removes client when reply.raw emits error', () => {
+    const reply = createMockReply();
+    sseBroker.addClient(reply as any);
+
+    expect(sseBroker.getClientCount()).toBe(1);
+
+    reply.raw.emit('error', new Error('Connection reset'));
+
+    expect(sseBroker.getClientCount()).toBe(0);
+  });
+
+  it('removes listeners from reply.raw during removeClient', () => {
+    const reply = createMockReply();
+    const id = sseBroker.addClient(reply as any);
+
+    // Before removal, listeners should be registered
+    expect(reply.raw.listenerCount('close')).toBe(1);
+    expect(reply.raw.listenerCount('error')).toBe(1);
+
+    sseBroker.removeClient(id);
+
+    expect(reply.raw.listenerCount('close')).toBe(0);
+    expect(reply.raw.listenerCount('error')).toBe(0);
+  });
+
+  it('double removal is idempotent and does not throw', () => {
+    const reply = createMockReply();
+    const id = sseBroker.addClient(reply as any);
+
+    sseBroker.removeClient(id);
+    expect(sseBroker.getClientCount()).toBe(0);
+
+    // Second removal should be a no-op
+    expect(() => sseBroker.removeClient(id)).not.toThrow();
+    expect(sseBroker.getClientCount()).toBe(0);
+  });
+
+  it('handles both close and error firing for the same client', () => {
+    const reply = createMockReply();
+    sseBroker.addClient(reply as any);
+
+    expect(sseBroker.getClientCount()).toBe(1);
+
+    reply.raw.emit('close');
+    expect(sseBroker.getClientCount()).toBe(0);
+
+    // After removeClient, our cleanup listener is gone. In a real
+    // http.ServerResponse (a Writable), error events are handled internally.
+    // In our bare EventEmitter mock, unhandled error events throw by default.
+    // Add a no-op listener to mimic real ServerResponse behavior.
+    reply.raw.on('error', () => { /* no-op — mimics Writable internals */ });
+    expect(() => reply.raw.emit('error', new Error('late error'))).not.toThrow();
+    expect(sseBroker.getClientCount()).toBe(0);
+  });
+
+  it('stop removes listeners before destroying sockets', () => {
+    const reply = createMockReply();
+    const removeListenerSpy = vi.spyOn(reply.raw, 'removeListener');
+
+    sseBroker.addClient(reply as any);
+    sseBroker.stop();
+
+    expect(removeListenerSpy).toHaveBeenCalledWith('close', expect.any(Function));
+    expect(removeListenerSpy).toHaveBeenCalledWith('error', expect.any(Function));
+    expect(reply.raw.destroy).toHaveBeenCalled();
+  });
+
+  it('broadcast uses removeClient (not direct delete) on write error', () => {
+    const reply = createMockReply();
+    reply.raw.write.mockImplementation(() => {
+      throw new Error('Connection reset');
+    });
+
+    sseBroker.addClient(reply as any);
+    expect(sseBroker.getClientCount()).toBe(1);
+
+    sseBroker.broadcast('heartbeat', { timestamp: new Date().toISOString() });
+    expect(sseBroker.getClientCount()).toBe(0);
+
+    // Listeners should have been cleaned up via removeClient
+    expect(reply.raw.listenerCount('close')).toBe(0);
+    expect(reply.raw.listenerCount('error')).toBe(0);
+  });
+});
+
+// =============================================================================
+// Back-pressure eviction
+// =============================================================================
+
+describe('Back-pressure eviction', () => {
+  it('starts eviction timer when write returns false', () => {
+    vi.useFakeTimers();
+    try {
+      const reply = createMockReply();
+      reply.raw.write.mockReturnValue(false); // simulate back-pressure
+
+      sseBroker.addClient(reply as any);
+      sseBroker.broadcast('heartbeat', { timestamp: new Date().toISOString() });
+
+      // Client should still be present (timer not yet fired)
+      expect(sseBroker.getClientCount()).toBe(1);
+
+      // Advance past the 30s eviction timeout
+      vi.advanceTimersByTime(30_000);
+
+      // Client should now be evicted
+      expect(sseBroker.getClientCount()).toBe(0);
+      expect(reply.raw.destroy).toHaveBeenCalled();
+    } finally {
+      sseBroker.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels eviction timer when drain fires', () => {
+    vi.useFakeTimers();
+    try {
+      const reply = createMockReply();
+      reply.raw.write.mockReturnValue(false);
+
+      sseBroker.addClient(reply as any);
+      sseBroker.broadcast('heartbeat', { timestamp: new Date().toISOString() });
+
+      expect(sseBroker.getClientCount()).toBe(1);
+
+      // Simulate buffer drain before timeout
+      reply.raw.emit('drain');
+
+      // Advance past the 30s eviction timeout
+      vi.advanceTimersByTime(30_000);
+
+      // Client should still be present (drain cancelled eviction)
+      expect(sseBroker.getClientCount()).toBe(1);
+      expect(reply.raw.destroy).not.toHaveBeenCalled();
+    } finally {
+      sseBroker.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not start duplicate timers on repeated back-pressure', () => {
+    vi.useFakeTimers();
+    try {
+      const reply = createMockReply();
+      reply.raw.write.mockReturnValue(false);
+
+      sseBroker.addClient(reply as any);
+
+      // Two broadcasts, both with back-pressure
+      sseBroker.broadcast('heartbeat', { timestamp: '2025-01-01T00:00:00Z' });
+      sseBroker.broadcast('heartbeat', { timestamp: '2025-01-01T00:00:01Z' });
+
+      // Client should still be present
+      expect(sseBroker.getClientCount()).toBe(1);
+
+      // Only one drain listener should be registered (from the first back-pressure)
+      expect(reply.raw.listenerCount('drain')).toBe(1);
+
+      // Advance past eviction timeout
+      vi.advanceTimersByTime(30_000);
+      expect(sseBroker.getClientCount()).toBe(0);
+    } finally {
+      sseBroker.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('stop clears back-pressure timers', () => {
+    vi.useFakeTimers();
+    try {
+      const reply = createMockReply();
+      reply.raw.write.mockReturnValue(false);
+
+      sseBroker.addClient(reply as any);
+      sseBroker.broadcast('heartbeat', { timestamp: new Date().toISOString() });
+
+      // Stop should clear the timer and remove the client
+      sseBroker.stop();
+      expect(sseBroker.getClientCount()).toBe(0);
+
+      // Advancing time should not cause errors
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

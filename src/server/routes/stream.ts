@@ -52,7 +52,9 @@ const streamRoutes: FastifyPluginCallback = (
     // Send an initial comment so the client knows the connection is live
     reply.raw.write(`:ok\n\n`);
 
-    // Send initial team dashboard snapshot so the client has data immediately
+    // Send initial team dashboard snapshot so the client has data immediately.
+    // If the write fails (client already disconnected), remove from broker and
+    // destroy the socket to prevent a dangling connection.
     try {
       const db = getDatabase();
       const dashboard = db.getTeamDashboard();
@@ -61,12 +63,13 @@ const streamRoutes: FastifyPluginCallback = (
       reply.raw.write(frame);
     } catch (err) {
       request.log.warn(err, 'Failed to send initial SSE snapshot');
-    }
-
-    // Detect client disconnect
-    request.raw.on('close', () => {
       sseBroker.removeClient(clientId);
-    });
+      try {
+        reply.raw.destroy();
+      } catch {
+        // Socket may already be destroyed — ignore
+      }
+    }
   });
 
   done();
