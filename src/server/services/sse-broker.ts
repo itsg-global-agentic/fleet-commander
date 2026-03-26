@@ -65,6 +65,8 @@ interface SSEClient {
   id: string;
   reply: FastifyReply;
   teamFilter: Set<number> | null; // null = all teams
+  backPressureTimer: NodeJS.Timeout | null;
+  cleanupBound: (() => void) | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,9 +105,22 @@ class SSEBroker {
       this.heartbeatInterval = null;
     }
 
-    // Close all client connections — use destroy() for immediate socket
-    // teardown without waiting for a graceful FIN/ACK handshake.
+    // Close all client connections — clear timers, remove listeners, then
+    // destroy socket for immediate teardown.
     for (const [id, client] of this.clients) {
+      if (client.backPressureTimer) {
+        clearTimeout(client.backPressureTimer);
+        client.backPressureTimer = null;
+      }
+      if (client.cleanupBound) {
+        try {
+          client.reply.raw.removeListener('close', client.cleanupBound);
+          client.reply.raw.removeListener('error', client.cleanupBound);
+        } catch {
+          // Client may already be disconnected — ignore
+        }
+        client.cleanupBound = null;
+      }
       try {
         client.reply.raw.destroy();
       } catch {
@@ -118,25 +133,64 @@ class SSEBroker {
   /**
    * Register a new SSE client. Returns the generated client id.
    *
+   * Registers `close` and `error` listeners on `reply.raw` (the underlying
+   * `http.ServerResponse` writable stream) so the client is automatically
+   * removed when the connection drops, regardless of how it was lost.
+   *
    * @param reply   The Fastify reply object (must NOT have been sent yet)
    * @param teamFilter  Optional array of team IDs to subscribe to.
    *                    When omitted or empty, the client receives all events.
    */
   addClient(reply: FastifyReply, teamFilter?: number[]): string {
     const id = randomUUID();
+
+    const cleanup = (): void => {
+      this.removeClient(id);
+    };
+
     const client: SSEClient = {
       id,
       reply,
       teamFilter: teamFilter && teamFilter.length > 0 ? new Set(teamFilter) : null,
+      backPressureTimer: null,
+      cleanupBound: cleanup,
     };
     this.clients.set(id, client);
+
+    // Listen on the response writable stream for disconnect/error
+    reply.raw.on('close', cleanup);
+    reply.raw.on('error', cleanup);
+
     return id;
   }
 
   /**
    * Remove a client by id (e.g. on disconnect).
+   *
+   * Idempotent — safe to call multiple times for the same id (e.g. when
+   * both `close` and `error` fire for the same connection). Clears any
+   * active back-pressure eviction timer and removes event listeners from
+   * `reply.raw` to prevent dangling references.
    */
   removeClient(id: string): void {
+    const client = this.clients.get(id);
+    if (!client) return;
+
+    if (client.backPressureTimer) {
+      clearTimeout(client.backPressureTimer);
+      client.backPressureTimer = null;
+    }
+
+    if (client.cleanupBound) {
+      try {
+        client.reply.raw.removeListener('close', client.cleanupBound);
+        client.reply.raw.removeListener('error', client.cleanupBound);
+      } catch {
+        // Socket may already be destroyed — ignore
+      }
+      client.cleanupBound = null;
+    }
+
     this.clients.delete(id);
   }
 
@@ -167,13 +221,40 @@ class SSEBroker {
 
       try {
         const ok = client.reply.raw.write(frame);
-        if (ok === false) {
-          // Back-pressure — stream buffer full; unlikely for SSE but handle it
-          // We keep the client; the kernel buffer will drain eventually.
+        if (ok === false && !client.backPressureTimer) {
+          // Back-pressure — stream buffer full. Start a 30s eviction timer.
+          // If the buffer drains before timeout, cancel eviction.
+          const drainHandler = (): void => {
+            if (client.backPressureTimer) {
+              clearTimeout(client.backPressureTimer);
+              client.backPressureTimer = null;
+            }
+          };
+          client.reply.raw.once('drain', drainHandler);
+
+          client.backPressureTimer = setTimeout(() => {
+            client.backPressureTimer = null;
+            try {
+              client.reply.raw.removeListener('drain', drainHandler);
+            } catch {
+              // Socket may already be destroyed — ignore
+            }
+            try {
+              client.reply.raw.destroy();
+            } catch {
+              // Socket may already be destroyed — ignore
+            }
+            this.removeClient(id);
+          }, 30_000);
+
+          // Allow the Node.js process to exit even if the timer is active
+          if (client.backPressureTimer.unref) {
+            client.backPressureTimer.unref();
+          }
         }
       } catch {
         // Write failed — client is gone. Clean up.
-        this.clients.delete(id);
+        this.removeClient(id);
       }
     }
   }
