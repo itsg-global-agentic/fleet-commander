@@ -1,8 +1,10 @@
 // =============================================================================
-// Fleet Commander — TeamManager Lifecycle Tests (stop, sendMessage, process exit)
+// Fleet Commander — TeamManager Lifecycle Tests (stop, stopAll, sendMessage,
+// process exit, gracefulShutdown)
 // =============================================================================
-// Tests for stop(), sendMessage(), attachProcessHandlers exit/error handling,
-// and gracefulShutdown. Does NOT duplicate queue/env tests from other files.
+// Tests for stop(), stopAll(), sendMessage(), attachProcessHandlers
+// exit/error handling, and gracefulShutdown. Does NOT duplicate queue/env
+// tests from other files.
 // =============================================================================
 
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
@@ -219,6 +221,74 @@ describe('TeamManager.stop', () => {
       { team_id: 1 },
       1,
     );
+  });
+});
+
+// =============================================================================
+// stopAll
+// =============================================================================
+
+describe('TeamManager.stopAll', () => {
+  let tm: TeamManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.useFakeTimers();
+    tm = new TeamManager();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('should stop teams in parallel, not sequentially', async () => {
+    // Create 3 active teams, each with a stdin pipe and child process
+    const teams = [1, 2, 3].map(id => {
+      const team = makeTeam({ id, status: 'running', pid: 10000 + id });
+      const mockStdin = createMockStdin();
+      (tm as any).stdinPipes.set(id, mockStdin);
+      (tm as any).childProcesses.set(id, createMockChildProcess());
+      return team;
+    });
+
+    mockDb.getActiveTeams.mockReturnValue(teams);
+    mockDb.getTeam.mockImplementation((id: number) =>
+      teams.find(t => t.id === id),
+    );
+    mockDb.updateTeam.mockImplementation((id: number) =>
+      teams.find(t => t.id === id),
+    );
+
+    const stopAllPromise = tm.stopAll();
+
+    // Advance past the 5-second graceful shutdown timeout for all teams.
+    // If stopAll were sequential, we'd need 3 * 5s = 15s.
+    // With parallel execution, 6s is enough for all.
+    await vi.advanceTimersByTimeAsync(6000);
+    const results = await stopAllPromise;
+
+    expect(results).toHaveLength(3);
+  });
+
+  it('should return empty array when no active teams', async () => {
+    mockDb.getActiveTeams.mockReturnValue([]);
+
+    const results = await tm.stopAll();
+
+    expect(results).toEqual([]);
+  });
+
+  it('should use fallback team on stop failure', async () => {
+    const team = makeTeam({ id: 1, status: 'running', pid: 12345 });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    // getTeam returns undefined, causing stop() to throw "Team X not found"
+    mockDb.getTeam.mockReturnValue(undefined);
+
+    const results = await tm.stopAll();
+
+    // The rejected promise falls back to the original team object
+    expect(results).toHaveLength(1);
+    expect(results[0].id).toBe(1);
   });
 });
 

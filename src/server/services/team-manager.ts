@@ -310,6 +310,12 @@ export class TeamManager {
     // Broadcast immediately so the team appears in the grid right away
     this.broadcastSnapshot();
 
+    // Ensure parsedEvents is initialized before syncWithOrigin so the sync
+    // event can be captured (syncWithOrigin pushes to parsedEvents.get(teamId))
+    if (!this.parsedEvents.has(team.id)) {
+      this.parsedEvents.set(team.id, []);
+    }
+
     // Sync with origin before creating worktree
     await this.syncWithOrigin(project.repoPath, team.id);
 
@@ -630,17 +636,16 @@ export class TeamManager {
 
     const db = getDatabase();
     const activeTeams = db.getActiveTeams();
-    const results: Team[] = [];
 
-    for (const team of activeTeams) {
-      try {
-        const stopped = await this.stop(team.id);
-        results.push(stopped);
-      } catch {
-        // Log but continue stopping other teams
-        results.push(team);
-      }
-    }
+    // Stop all teams in parallel — each stop() waits up to 5s for graceful
+    // shutdown, so sequential execution takes N*5s. Promise.allSettled sends
+    // all stdin EOF signals concurrently and waits for all grace periods in parallel.
+    const settled = await Promise.allSettled(
+      activeTeams.map(team => this.stop(team.id)),
+    );
+    const results: Team[] = settled.map((result, i) =>
+      result.status === 'fulfilled' ? result.value : activeTeams[i],
+    );
 
     return results;
   }
@@ -1182,6 +1187,12 @@ export class TeamManager {
     const worktreeAbsPath = path.join(project.repoPath, config.worktreeDir, team.worktreeName);
     const worktreeRelPath = path.posix.join(config.worktreeDir, team.worktreeName);
     const branchName = team.branchName ?? `worktree-${team.worktreeName}`;
+
+    // Ensure parsedEvents is initialized before syncWithOrigin so the sync
+    // event can be captured (syncWithOrigin pushes to parsedEvents.get(teamId))
+    if (!this.parsedEvents.has(team.id)) {
+      this.parsedEvents.set(team.id, []);
+    }
 
     // Sync with origin before creating worktree
     await this.syncWithOrigin(project.repoPath, team.id);
@@ -1754,6 +1765,7 @@ export class TeamManager {
     try {
       await execAsync(
         `git -C "${repoPath}" worktree add "${worktreeRelPath}" -b "${branchName}"`,
+        { timeout: 30000 },
       );
       return true;
     } catch {
@@ -1761,6 +1773,7 @@ export class TeamManager {
       try {
         await execAsync(
           `git -C "${repoPath}" worktree add "${worktreeRelPath}" "${branchName}"`,
+          { timeout: 30000 },
         );
         return true;
       } catch (err2: unknown) {
