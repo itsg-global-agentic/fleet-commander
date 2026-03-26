@@ -100,7 +100,7 @@ class StuckDetector {
             trigger: 'timer',
             reason: `Launch timeout after ${Math.round(launchMinutes)} minutes`,
           });
-          db.updateTeam(team.id, { status: 'failed' });
+          db.updateTeamSilent(team.id, { status: 'failed' });
 
           sseBroker.broadcast(
             'team_status_changed',
@@ -179,7 +179,7 @@ class StuckDetector {
               ? `No events for ${Math.round(idleMinutes)} minutes`
               : `Idle for ${Math.round(idleMinutes)} minutes (stuck threshold exceeded)`,
           });
-          db.updateTeam(team.id, { status: newStatus as 'idle' | 'stuck' });
+          db.updateTeamSilent(team.id, { status: newStatus as 'idle' | 'stuck' });
 
           sseBroker.broadcast(
             'team_status_changed',

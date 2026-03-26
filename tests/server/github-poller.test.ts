@@ -23,6 +23,7 @@ const mockDb = {
   getTeams: vi.fn().mockReturnValue([]),
   getPullRequest: vi.fn(),
   updateTeam: vi.fn(),
+  updateTeamSilent: vi.fn(),
   updatePullRequest: vi.fn(),
   insertPullRequest: vi.fn(),
   insertTransition: vi.fn(),
@@ -204,7 +205,7 @@ describe('PR state transitions', () => {
         reason: expect.stringContaining('merged'),
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
       1,
       expect.objectContaining({
         status: 'done',
@@ -586,7 +587,7 @@ describe('CI failure counting', () => {
         reason: expect.stringContaining('CI blocked'),
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
       1,
       expect.objectContaining({ phase: 'blocked', status: 'stuck' }),
     );
@@ -613,7 +614,7 @@ describe('PR detection by branch', () => {
     await githubPoller.poll();
 
     // detectPR now also advances phase to 'pr' when the current phase allows it
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { prNumber: 55, phase: 'pr' });
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { prNumber: 55, phase: 'pr' });
     expect(mockSseBroker.broadcast).toHaveBeenCalledWith(
       'team_status_changed',
       expect.objectContaining({ team_id: 1, phase: 'pr', previous_phase: 'implementing' }),
@@ -632,7 +633,7 @@ describe('PR detection by branch', () => {
 
     await githubPoller.poll();
 
-    expect(mockDb.updateTeam).not.toHaveBeenCalledWith(
+    expect(mockDb.updateTeamSilent).not.toHaveBeenCalledWith(
       1,
       expect.objectContaining({ prNumber: expect.anything() }),
     );
@@ -976,7 +977,7 @@ describe('Branch detection', () => {
 
     await githubPoller.poll();
 
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { branchName: 'new-branch' });
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { branchName: 'new-branch' });
   });
 });
 

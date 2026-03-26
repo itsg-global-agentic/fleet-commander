@@ -72,6 +72,7 @@ export interface EventCollectorDb {
     payload: string;
   }): { id: number };
   updateTeam(teamId: number, fields: Record<string, unknown>): void;
+  updateTeamSilent(teamId: number, fields: Record<string, unknown>): void;
   insertTransition(data: { teamId: number; fromStatus: TeamStatus; toStatus: TeamStatus; trigger: string; reason: string }): void;
   insertAgentMessage(data: {
     teamId: number;
@@ -402,9 +403,9 @@ export function processEvent(
         db.insertTransition(transitionData);
       }
       if (statusUpdateData) {
-        db.updateTeam(statusUpdateData.teamId, statusUpdateData.fields);
+        db.updateTeamSilent(statusUpdateData.teamId, statusUpdateData.fields);
       }
-      db.updateTeam(teamId, { lastEventAt: nowIso });
+      db.updateTeamSilent(teamId, { lastEventAt: nowIso });
       if (previousStatus !== undefined) {
         sse.broadcast('team_status_changed', {
           team_id: teamId,

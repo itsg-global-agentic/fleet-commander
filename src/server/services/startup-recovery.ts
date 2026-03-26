@@ -46,7 +46,7 @@ export async function recoverOnStartup(): Promise<void> {
         trigger: 'system',
         reason: 'Server restart recovery: no PID recorded',
       });
-      db.updateTeam(team.id, { status: 'idle', lastEventAt: new Date().toISOString() });
+      db.updateTeamSilent(team.id, { status: 'idle', lastEventAt: new Date().toISOString() });
       continue;
     }
 
@@ -58,7 +58,7 @@ export async function recoverOnStartup(): Promise<void> {
       console.log(
         `[recovery] Team ${team.worktreeName} (PID ${team.pid}) still running`
       );
-      db.updateTeam(team.id, { lastEventAt: new Date().toISOString() });
+      db.updateTeamSilent(team.id, { lastEventAt: new Date().toISOString() });
     } else {
       // Process is gone.  If it was still launching when we lost track,
       // treat it as a failure; otherwise just mark idle.
@@ -73,7 +73,7 @@ export async function recoverOnStartup(): Promise<void> {
         trigger: 'system',
         reason: `Server restart recovery: process (PID ${team.pid}) no longer alive`,
       });
-      db.updateTeam(team.id, { status: newStatus, pid: null, lastEventAt: new Date().toISOString() });
+      db.updateTeamSilent(team.id, { status: newStatus, pid: null, lastEventAt: new Date().toISOString() });
     }
   }
 

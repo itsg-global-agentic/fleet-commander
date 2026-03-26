@@ -196,7 +196,7 @@ class GitHubPoller {
                 console.log(
                   `[GitHubPoller] Branch name updated for team ${team.id}: "${team.branchName}" -> "${actualBranch}"`
                 );
-                db.updateTeam(team.id, { branchName: actualBranch });
+                db.updateTeamSilent(team.id, { branchName: actualBranch });
                 team.branchName = actualBranch;
               }
             }
@@ -311,7 +311,7 @@ class GitHubPoller {
 
         // PR status changes count as team activity — update lastEventAt
         // so the stuck-detector knows the team is not truly idle.
-        db.updateTeam(teamId, { lastEventAt: new Date().toISOString() });
+        db.updateTeamSilent(teamId, { lastEventAt: new Date().toISOString() });
 
         sseBroker.broadcast(
           'pr_updated',
@@ -458,7 +458,7 @@ class GitHubPoller {
           trigger: 'poller',
           reason: `PR #${prNumber} merged`,
         });
-        db.updateTeam(teamId, { status: 'done', phase: 'done', stoppedAt: new Date().toISOString() });
+        db.updateTeamSilent(teamId, { status: 'done', phase: 'done', stoppedAt: new Date().toISOString() });
         sseBroker.broadcast(
           'team_status_changed',
           {
@@ -503,7 +503,7 @@ class GitHubPoller {
           trigger: 'poller',
           reason: `CI blocked: ${ciFailCount} unique CI failure types on PR #${prNumber}`,
         });
-        db.updateTeam(teamId, { phase: 'blocked', status: 'stuck' });
+        db.updateTeamSilent(teamId, { phase: 'blocked', status: 'stuck' });
 
         sseBroker.broadcast(
           'team_status_changed',
@@ -606,7 +606,7 @@ class GitHubPoller {
           const deps = await fetcher.fetchDependenciesForIssue(team.projectId, team.issueNumber);
           if (deps && deps.resolved) {
             // All blockers resolved — clear blocked_by_json and broadcast
-            db.updateTeam(team.id, { blockedByJson: null });
+            db.updateTeamSilent(team.id, { blockedByJson: null });
 
             sseBroker.broadcast('dependency_resolved', {
               issue_number: team.issueNumber,
@@ -766,7 +766,7 @@ class GitHubPoller {
       if (prevPhase && prevPhase !== 'pr' && prevPhase !== 'done') {
         updateFields.phase = 'pr';
       }
-      db.updateTeam(teamId, updateFields);
+      db.updateTeamSilent(teamId, updateFields);
 
       // Broadcast phase change if it advanced
       if (team && prevPhase && prevPhase !== 'pr' && prevPhase !== 'done') {

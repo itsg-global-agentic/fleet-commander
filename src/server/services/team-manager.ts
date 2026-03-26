@@ -270,7 +270,7 @@ export class TeamManager {
       // Relaunch: reset the existing terminal team record
       console.log(`[TeamManager] Relaunching existing team record: id=${relaunchTeamId}, worktree=${worktreeName}`);
       const prevTeam = db.getTeam(relaunchTeamId);
-      db.updateTeam(relaunchTeamId, {
+      db.updateTeamSilent(relaunchTeamId, {
         status: 'queued',
         phase: 'init',
         pid: null,
@@ -331,7 +331,7 @@ export class TeamManager {
       trigger: 'system',
       reason: 'Worktree created, spawning Claude Code process',
     });
-    db.updateTeam(team.id, { status: 'launching' });
+    db.updateTeamSilent(team.id, { status: 'launching' });
     this.broadcastSnapshot();
 
     // ── Step 3: Copy hook scripts and settings into worktree ──
@@ -367,13 +367,13 @@ export class TeamManager {
         trigger: 'system',
         reason: 'Spawn failed: no PID returned',
       });
-      db.updateTeam(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
+      db.updateTeamSilent(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
       this.broadcastSnapshot();
       throw new Error('Failed to spawn Claude Code process — no PID returned');
     }
 
     console.log(`[TeamManager] Process spawned: PID ${pid} (headless=${isHeadless})`);
-    db.updateTeam(team.id, { pid });
+    db.updateTeamSilent(team.id, { pid });
     this.broadcastSnapshot();
     this.childProcesses.set(team.id, child);
 
@@ -416,7 +416,7 @@ export class TeamManager {
         trigger: 'pm_action',
         reason: 'PM stopped queued team',
       });
-      db.updateTeam(teamId, { status: 'failed', stoppedAt: new Date().toISOString() });
+      db.updateTeamSilent(teamId, { status: 'failed', stoppedAt: new Date().toISOString() });
       this.broadcastSnapshot();
       return db.getTeam(teamId)!;
     }
@@ -518,7 +518,7 @@ export class TeamManager {
         trigger: 'pm_action',
         reason: `Resume queued (${activeCount}/${project.maxActiveTeams} active)`,
       });
-      db.updateTeam(teamId, { status: 'queued' });
+      db.updateTeamSilent(teamId, { status: 'queued' });
       console.log(`[TeamManager] Resume queued for team ${teamId} (${activeCount}/${project.maxActiveTeams} active)`);
       this.broadcastSnapshot();
       return db.getTeam(teamId)!;
@@ -540,7 +540,7 @@ export class TeamManager {
       trigger: 'pm_action',
       reason: 'PM resumed team',
     });
-    db.updateTeam(teamId, {
+    db.updateTeamSilent(teamId, {
       status: 'launching',
       launchedAt: new Date().toISOString(),
       stoppedAt: null,
@@ -566,13 +566,13 @@ export class TeamManager {
         trigger: 'system',
         reason: 'Spawn failed: no PID returned',
       });
-      db.updateTeam(teamId, { status: 'failed', stoppedAt: new Date().toISOString() });
+      db.updateTeamSilent(teamId, { status: 'failed', stoppedAt: new Date().toISOString() });
       this.broadcastSnapshot();
       throw new Error('Failed to spawn Claude Code process — no PID returned');
     }
 
     console.log(`[TeamManager] Resume process spawned: PID ${pid}`);
-    db.updateTeam(teamId, { pid });
+    db.updateTeamSilent(teamId, { pid });
     this.broadcastSnapshot();
     this.childProcesses.set(teamId, child);
 
@@ -743,7 +743,7 @@ export class TeamManager {
       }
       // Terminal state (failed) — reuse the existing team record as queued
       const now = new Date().toISOString();
-      db.updateTeam(existing.id, {
+      db.updateTeamSilent(existing.id, {
         status: 'queued',
         phase: 'init',
         pid: null,
@@ -853,7 +853,7 @@ export class TeamManager {
       }
       // Terminal state (failed) — reuse the existing team record as queued
       const now = new Date().toISOString();
-      db.updateTeam(existing.id, {
+      db.updateTeamSilent(existing.id, {
         status: 'queued',
         phase: 'init',
         pid: null,
@@ -949,7 +949,7 @@ export class TeamManager {
       trigger: 'pm_action',
       reason: 'PM force-launched team',
     });
-    db.updateTeam(teamId, { status: 'launching' });
+    db.updateTeamSilent(teamId, { status: 'launching' });
     this.broadcastSnapshot();
 
     // Delegate to the existing private launch method
@@ -1003,7 +1003,7 @@ export class TeamManager {
           trigger: 'system',
           reason: 'Slot available, dequeuing team',
         });
-        db.updateTeam(team.id, { status: 'launching' });
+        db.updateTeamSilent(team.id, { status: 'launching' });
         try {
           await this.launchQueued(team);
         } catch (err: unknown) {
@@ -1195,7 +1195,7 @@ export class TeamManager {
     console.log(`[TeamManager] Worktree created for dequeued team: ${team.worktreeName}`);
 
     // Clear blocker metadata now that the team is being launched
-    db.updateTeam(team.id, { status: 'launching', blockedByJson: null });
+    db.updateTeamSilent(team.id, { status: 'launching', blockedByJson: null });
     this.broadcastSnapshot();
 
     // ── Step 2: Copy hooks and settings ──
@@ -1231,13 +1231,13 @@ export class TeamManager {
         trigger: 'system',
         reason: 'Spawn failed: no PID returned',
       });
-      db.updateTeam(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
+      db.updateTeamSilent(team.id, { status: 'failed', stoppedAt: new Date().toISOString() });
       this.broadcastSnapshot();
       return;
     }
 
     console.log(`[TeamManager] Dequeued team ${team.id} spawned: PID ${pid} (headless=${isHeadless})`);
-    db.updateTeam(team.id, { pid });
+    db.updateTeamSilent(team.id, { pid });
     this.broadcastSnapshot();
     this.childProcesses.set(team.id, child);
 
@@ -1317,7 +1317,7 @@ export class TeamManager {
       if (!team || ['done', 'failed'].includes(team.status)) continue;
       const lastEventMs = team.lastEventAt ? new Date(team.lastEventAt).getTime() : 0;
       if (lastTs > lastEventMs) {
-        db.updateTeam(teamId, { lastEventAt: new Date(lastTs).toISOString() });
+        db.updateTeamSilent(teamId, { lastEventAt: new Date(lastTs).toISOString() });
       }
     }
   }
@@ -1460,7 +1460,7 @@ export class TeamManager {
 
         // Set stoppedAt and broadcast
         if (team && !team.stoppedAt) {
-          db.updateTeam(teamId, {
+          db.updateTeamSilent(teamId, {
             pid: null,
             stoppedAt: new Date().toISOString(),
           });
@@ -1611,7 +1611,7 @@ export class TeamManager {
       trigger: 'system',
       reason: 'Interactive terminal window opened',
     });
-    db.updateTeam(team.id, { status: 'running' });
+    db.updateTeamSilent(team.id, { status: 'running' });
     this.broadcastSnapshot();
 
     sseBroker.broadcast(
@@ -1649,7 +1649,7 @@ export class TeamManager {
             ? 'Process exited normally (code 0)'
             : `Process exited with code ${code}${signal ? `, signal ${signal}` : ''}`,
         });
-        db.updateTeam(teamId, {
+        db.updateTeamSilent(teamId, {
           status: exitStatus,
           pid: null,
           stoppedAt: new Date().toISOString(),
@@ -1683,7 +1683,7 @@ export class TeamManager {
           trigger: 'system',
           reason: `Process error: ${err.message.slice(0, 200)}`,
         });
-        db.updateTeam(teamId, {
+        db.updateTeamSilent(teamId, {
           status: 'failed',
           pid: null,
           stoppedAt: new Date().toISOString(),
@@ -1774,7 +1774,7 @@ export class TeamManager {
           trigger: 'system',
           reason: `Worktree creation failed: ${msg.slice(0, 200)}`,
         });
-        db.updateTeam(teamId, { status: 'failed', stoppedAt: new Date().toISOString() });
+        db.updateTeamSilent(teamId, { status: 'failed', stoppedAt: new Date().toISOString() });
         this.broadcastSnapshot();
         return false;
       }
@@ -2120,7 +2120,7 @@ export class TeamManager {
                     trigger: 'system',
                     reason: 'Stdout stream event received (hook fallback)',
                   });
-                  db.updateTeam(teamId, { status: 'running', lastEventAt: new Date().toISOString() });
+                  db.updateTeamSilent(teamId, { status: 'running', lastEventAt: new Date().toISOString() });
                   sseBroker.broadcast('team_status_changed', {
                     team_id: teamId,
                     status: 'running',
@@ -2150,7 +2150,7 @@ export class TeamManager {
 
                       if (targetPhase && shouldAdvancePhase(currentTeam.phase, targetPhase)) {
                         const prevPhase = currentTeam.phase;
-                        db.updateTeam(teamId, { phase: targetPhase });
+                        db.updateTeamSilent(teamId, { phase: targetPhase });
                         sseBroker.broadcast('team_status_changed', {
                           team_id: teamId,
                           status: currentTeam.status,
@@ -2298,7 +2298,7 @@ export class TeamManager {
 
     try {
       const db = getDatabase();
-      db.updateTeam(teamId, {
+      db.updateTeamSilent(teamId, {
         totalInputTokens: counter.inputTokens,
         totalOutputTokens: counter.outputTokens,
         totalCacheCreationTokens: counter.cacheCreationTokens,

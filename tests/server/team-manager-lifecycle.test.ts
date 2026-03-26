@@ -22,6 +22,7 @@ const mockDb = vi.hoisted(() => ({
   getActiveTeamCountByProject: vi.fn().mockReturnValue(0),
   getQueuedTeamsByProject: vi.fn().mockReturnValue([]),
   updateTeam: vi.fn(),
+  updateTeamSilent: vi.fn(),
   insertTransition: vi.fn(),
   getPullRequest: vi.fn(),
   insertEvent: vi.fn(),
@@ -161,7 +162,6 @@ describe('TeamManager.stop', () => {
   it('cancels a queued team by marking it failed', async () => {
     const team = makeTeam({ id: 1, status: 'queued', pid: null });
     mockDb.getTeam.mockReturnValue(team);
-    mockDb.updateTeam.mockReturnValue(team);
 
     await tm.stop(1);
 
@@ -173,7 +173,7 @@ describe('TeamManager.stop', () => {
         trigger: 'pm_action',
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
       1,
       expect.objectContaining({ status: 'failed' }),
     );
@@ -354,7 +354,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
         reason: expect.stringContaining('code 0'),
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
       1,
       expect.objectContaining({ status: 'done', pid: null }),
     );
@@ -384,7 +384,7 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
         reason: expect.stringContaining('code 1'),
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
       1,
       expect.objectContaining({ status: 'failed', pid: null }),
     );
@@ -507,7 +507,7 @@ describe('TeamManager.attachProcessHandlers (error)', () => {
         reason: expect.stringContaining('ENOENT'),
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
       1,
       expect.objectContaining({ status: 'failed', pid: null }),
     );

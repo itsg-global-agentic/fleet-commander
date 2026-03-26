@@ -1149,6 +1149,174 @@ describe('Schema includes stream_events', () => {
 
 });
 
+// =============================================================================
+// Statement caching
+// =============================================================================
+
+describe('Statement caching', () => {
+  it('returns the same results on repeated calls (cache hit)', () => {
+    const project = db.insertProject({
+      name: 'cache-test',
+      repoPath: '/tmp/cache-test',
+    });
+
+    // Two sequential calls with the same SQL should both return the project
+    const first = db.getProject(project.id);
+    const second = db.getProject(project.id);
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(first!.id).toBe(second!.id);
+    expect(first!.name).toBe(second!.name);
+  });
+
+  it('close() clears the statement cache without errors', () => {
+    // Insert data to exercise cached statements
+    db.insertProject({ name: 'close-cache', repoPath: '/tmp/close-cache' });
+    db.getProjects();
+
+    // close() should clear cache and close DB without errors
+    expect(() => db.close()).not.toThrow();
+
+    // After close, operations should fail
+    expect(() => db.getProjects()).toThrow();
+  });
+});
+
+// =============================================================================
+// updateTeamSilent
+// =============================================================================
+
+describe('updateTeamSilent', () => {
+  it('updates team fields without returning a value', () => {
+    const project = db.insertProject({
+      name: 'silent-test',
+      repoPath: '/tmp/silent-test',
+    });
+    const team = db.insertTeam({
+      issueNumber: 999,
+      worktreeName: 'silent-test-999',
+      projectId: project.id,
+    });
+
+    // updateTeamSilent returns void
+    const result = db.updateTeamSilent(team.id, { status: 'running', phase: 'implementing' });
+    expect(result).toBeUndefined();
+
+    // Verify the update was persisted
+    const updated = db.getTeam(team.id);
+    expect(updated!.status).toBe('running');
+    expect(updated!.phase).toBe('implementing');
+  });
+
+  it('does nothing when fields are empty', () => {
+    const project = db.insertProject({
+      name: 'silent-empty',
+      repoPath: '/tmp/silent-empty',
+    });
+    const team = db.insertTeam({
+      issueNumber: 998,
+      worktreeName: 'silent-empty-998',
+      projectId: project.id,
+    });
+
+    // Should not throw and should not modify the team
+    const result = db.updateTeamSilent(team.id, {});
+    expect(result).toBeUndefined();
+
+    const unchanged = db.getTeam(team.id);
+    expect(unchanged!.status).toBe('queued');
+  });
+
+  it('updateTeam delegates to updateTeamSilent and returns the team', () => {
+    const project = db.insertProject({
+      name: 'delegate-test',
+      repoPath: '/tmp/delegate-test',
+    });
+    const team = db.insertTeam({
+      issueNumber: 997,
+      worktreeName: 'delegate-test-997',
+      projectId: project.id,
+    });
+
+    // updateTeam should return the updated team
+    const updated = db.updateTeam(team.id, { status: 'launching' });
+    expect(updated).toBeDefined();
+    expect(updated!.status).toBe('launching');
+  });
+});
+
+// =============================================================================
+// processEventTransaction — SQLITE_BUSY behavior
+// =============================================================================
+
+describe('processEventTransaction', () => {
+  it('inserts event and transition atomically', () => {
+    const project = db.insertProject({
+      name: 'txn-test',
+      repoPath: '/tmp/txn-test',
+    });
+    const team = db.insertTeam({
+      issueNumber: 900,
+      worktreeName: 'txn-test-900',
+      projectId: project.id,
+      status: 'launching',
+    });
+
+    const { eventId } = db.processEventTransaction({
+      transition: {
+        teamId: team.id,
+        fromStatus: 'launching',
+        toStatus: 'running',
+        trigger: 'hook',
+        reason: 'First event received',
+      },
+      statusUpdate: {
+        teamId: team.id,
+        fields: { status: 'running' },
+      },
+      heartbeatUpdate: {
+        teamId: team.id,
+        lastEventAt: new Date().toISOString(),
+      },
+      eventInsert: {
+        teamId: team.id,
+        sessionId: 'sess-1',
+        agentName: 'team-lead',
+        eventType: 'session_start',
+        payload: '{}',
+      },
+    });
+
+    expect(eventId).toBeGreaterThan(0);
+
+    // Verify the team status was updated
+    const updated = db.getTeam(team.id);
+    expect(updated!.status).toBe('running');
+
+    // Verify the transition was recorded
+    const transitions = db.getTransitions(team.id);
+    expect(transitions.length).toBe(1);
+    expect(transitions[0]!.fromStatus).toBe('launching');
+    expect(transitions[0]!.toStatus).toBe('running');
+  });
+});
+
+// =============================================================================
+// Redundant index removal
+// =============================================================================
+
+describe('Schema indexes', () => {
+  it('does not create redundant idx_stream_events_team index', () => {
+    const indexes = db.raw
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_stream_events_team'")
+      .all() as { name: string }[];
+
+    // The explicit index should NOT exist because the UNIQUE constraint
+    // on team_id already creates an automatic unique index.
+    expect(indexes).toHaveLength(0);
+  });
+});
+
 describe('Connection management', () => {
   it('closes the database', () => {
     db.close();

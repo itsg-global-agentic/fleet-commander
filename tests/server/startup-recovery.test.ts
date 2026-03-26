@@ -18,6 +18,7 @@ const mockDb = {
   getTeamByWorktree: vi.fn(),
   getQueuedTeamsByProject: vi.fn().mockReturnValue([]),
   updateTeam: vi.fn(),
+  updateTeamSilent: vi.fn(),
   insertTransition: vi.fn(),
 };
 
@@ -140,7 +141,7 @@ describe('Dead PID recovery', () => {
         reason: expect.stringContaining('no longer alive'),
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, expect.objectContaining({
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, expect.objectContaining({
       status: 'idle',
       pid: null,
     }));
@@ -161,7 +162,7 @@ describe('Dead PID recovery', () => {
         trigger: 'system',
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(2, expect.objectContaining({
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(2, expect.objectContaining({
       status: 'failed',
       pid: null,
     }));
@@ -182,7 +183,7 @@ describe('Dead PID recovery', () => {
         trigger: 'system',
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(3, expect.objectContaining({
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(3, expect.objectContaining({
       status: 'idle',
       pid: null,
     }));
@@ -203,7 +204,7 @@ describe('Dead PID recovery', () => {
         trigger: 'system',
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(4, expect.objectContaining({
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(4, expect.objectContaining({
       status: 'idle',
       pid: null,
     }));
@@ -225,11 +226,11 @@ describe('Alive PID recovery', () => {
     // Should not change status
     expect(mockDb.insertTransition).not.toHaveBeenCalled();
     // Should update lastEventAt
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(5, expect.objectContaining({
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(5, expect.objectContaining({
       lastEventAt: expect.any(String),
     }));
     // Should NOT set status or pid
-    const updateCall = mockDb.updateTeam.mock.calls[0]![1];
+    const updateCall = mockDb.updateTeamSilent.mock.calls[0]![1];
     expect(updateCall).not.toHaveProperty('status');
     expect(updateCall).not.toHaveProperty('pid');
   });
@@ -255,7 +256,7 @@ describe('No PID recovery', () => {
         reason: expect.stringContaining('no PID'),
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(6, expect.objectContaining({
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(6, expect.objectContaining({
       status: 'idle',
     }));
   });
@@ -267,7 +268,7 @@ describe('No PID recovery', () => {
     await recoverOnStartup();
 
     expect(mockDb.insertTransition).not.toHaveBeenCalled();
-    expect(mockDb.updateTeam).not.toHaveBeenCalled();
+    expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
   });
 });
 

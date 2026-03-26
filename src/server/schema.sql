@@ -268,7 +268,7 @@ CREATE TABLE IF NOT EXISTS stream_events (
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_stream_events_team ON stream_events(team_id);
+-- Note: no explicit index on team_id — SQLite auto-creates one for the UNIQUE constraint.
 
 -- ---------------------------------------------------------------------------
 -- TEAM TASKS — task items from TL's task list (TaskCreated hook / TodoWrite)

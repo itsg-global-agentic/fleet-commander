@@ -256,6 +256,7 @@ export interface AgentMessageInsert {
 
 export class FleetDatabase {
   private db: Database.Database;
+  private stmtCache = new Map<string, Database.Statement>();
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -266,6 +267,25 @@ export class FleetDatabase {
     // Performance pragmas
     this.db.pragma('foreign_keys = ON');
     this.db.pragma('busy_timeout = 5000');
+  }
+
+  // -------------------------------------------------------------------------
+  // Prepared statement cache
+  // -------------------------------------------------------------------------
+
+  /**
+   * Get a cached prepared statement for a static SQL string.
+   * Avoids re-parsing the same SQL on every call. Only use with constant
+   * SQL strings — dynamic SQL (variable SET clauses) must use db.prepare()
+   * directly.
+   */
+  private stmt(sql: string): Database.Statement {
+    let cached = this.stmtCache.get(sql);
+    if (!cached) {
+      cached = this.db.prepare(sql);
+      this.stmtCache.set(sql, cached);
+    }
+    return cached;
   }
 
   // -------------------------------------------------------------------------
@@ -649,7 +669,6 @@ export class FleetDatabase {
           created_at      TEXT NOT NULL DEFAULT (datetime('now')),
           updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
         );
-        CREATE INDEX IF NOT EXISTS idx_stream_events_team ON stream_events(team_id);
       `);
     } catch {
       // Table may already exist — safe to ignore
@@ -759,7 +778,7 @@ export class FleetDatabase {
 
   insertProject(data: ProjectInsert): Project {
     const now = new Date().toISOString();
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, created_at, updated_at)
       VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @createdAt, @updatedAt)
     `);
@@ -780,13 +799,13 @@ export class FleetDatabase {
   }
 
   getProject(id: number): Project | undefined {
-    const stmt = this.db.prepare('SELECT * FROM projects WHERE id = ?');
+    const stmt = this.stmt('SELECT * FROM projects WHERE id = ?');
     const row = stmt.get(id) as Record<string, unknown> | undefined;
     return row ? this.mapProjectRow(row) : undefined;
   }
 
   getProjectByRepoPath(repoPath: string): Project | undefined {
-    const stmt = this.db.prepare('SELECT * FROM projects WHERE repo_path = ?');
+    const stmt = this.stmt('SELECT * FROM projects WHERE repo_path = ?');
     const row = stmt.get(repoPath) as Record<string, unknown> | undefined;
     return row ? this.mapProjectRow(row) : undefined;
   }
@@ -808,7 +827,7 @@ export class FleetDatabase {
   }
 
   getProjectSummaries(): ProjectSummary[] {
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       SELECT
         p.*,
         COUNT(t.id) AS team_count,
@@ -877,12 +896,12 @@ export class FleetDatabase {
   }
 
   deleteProject(id: number): boolean {
-    const result = this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    const result = this.stmt('DELETE FROM projects WHERE id = ?').run(id);
     return result.changes > 0;
   }
 
   getProjectTeams(projectId: number): TeamDashboardRow[] {
-    const stmt = this.db.prepare('SELECT * FROM v_team_dashboard WHERE project_id = ?');
+    const stmt = this.stmt('SELECT * FROM v_team_dashboard WHERE project_id = ?');
     const rows = stmt.all(projectId) as Record<string, unknown>[];
     return rows.map((r) => this.mapDashboardRow(r));
   }
@@ -893,7 +912,7 @@ export class FleetDatabase {
 
   insertProjectGroup(data: ProjectGroupInsert): ProjectGroup {
     const now = new Date().toISOString();
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       INSERT INTO project_groups (name, description, created_at, updated_at)
       VALUES (@name, @description, @createdAt, @updatedAt)
     `);
@@ -909,13 +928,13 @@ export class FleetDatabase {
   }
 
   getProjectGroup(id: number): ProjectGroup | undefined {
-    const stmt = this.db.prepare('SELECT * FROM project_groups WHERE id = ?');
+    const stmt = this.stmt('SELECT * FROM project_groups WHERE id = ?');
     const row = stmt.get(id) as Record<string, unknown> | undefined;
     return row ? this.mapProjectGroupRow(row) : undefined;
   }
 
   getProjectGroups(): ProjectGroup[] {
-    const stmt = this.db.prepare('SELECT * FROM project_groups ORDER BY name ASC');
+    const stmt = this.stmt('SELECT * FROM project_groups ORDER BY name ASC');
     const rows = stmt.all() as Record<string, unknown>[];
     return rows.map((r) => this.mapProjectGroupRow(r));
   }
@@ -944,8 +963,8 @@ export class FleetDatabase {
 
   deleteProjectGroup(id: number): boolean {
     // Unlink all projects from this group before deleting
-    this.db.prepare('UPDATE projects SET group_id = NULL WHERE group_id = ?').run(id);
-    const result = this.db.prepare('DELETE FROM project_groups WHERE id = ?').run(id);
+    this.stmt('UPDATE projects SET group_id = NULL WHERE group_id = ?').run(id);
+    const result = this.stmt('DELETE FROM project_groups WHERE id = ?').run(id);
     return result.changes > 0;
   }
 
@@ -955,7 +974,7 @@ export class FleetDatabase {
 
   insertTeam(data: TeamInsert): Team {
     const now = new Date().toISOString();
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       INSERT INTO teams (issue_number, issue_title, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, headless, blocked_by_json, launched_at, created_at, updated_at)
       VALUES (@issueNumber, @issueTitle, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @headless, @blockedByJson, @launchedAt, @createdAt, @updatedAt)
     `);
@@ -992,13 +1011,13 @@ export class FleetDatabase {
   }
 
   getTeam(id: number): Team | undefined {
-    const stmt = this.db.prepare('SELECT * FROM teams WHERE id = ?');
+    const stmt = this.stmt('SELECT * FROM teams WHERE id = ?');
     const row = stmt.get(id) as Record<string, unknown> | undefined;
     return row ? this.mapTeamRow(row) : undefined;
   }
 
   getTeamByWorktree(name: string): Team | undefined {
-    const stmt = this.db.prepare('SELECT * FROM teams WHERE worktree_name = ?');
+    const stmt = this.stmt('SELECT * FROM teams WHERE worktree_name = ?');
     const row = stmt.get(name) as Record<string, unknown> | undefined;
     return row ? this.mapTeamRow(row) : undefined;
   }
@@ -1068,7 +1087,7 @@ export class FleetDatabase {
   }
 
   getActiveTeams(): Team[] {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       "SELECT * FROM teams WHERE status IN ('queued', 'launching', 'running', 'idle', 'stuck') ORDER BY created_at DESC"
     );
     const rows = stmt.all() as Record<string, unknown>[];
@@ -1076,7 +1095,7 @@ export class FleetDatabase {
   }
 
   getActiveTeamsByProject(projectId: number): Team[] {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       "SELECT * FROM teams WHERE project_id = ? AND status IN ('queued', 'launching', 'running', 'idle', 'stuck') ORDER BY created_at DESC"
     );
     const rows = stmt.all(projectId) as Record<string, unknown>[];
@@ -1089,7 +1108,7 @@ export class FleetDatabase {
    * because they haven't consumed a slot yet.
    */
   getActiveTeamCountByProject(projectId: number): number {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       "SELECT COUNT(*) AS cnt FROM teams WHERE project_id = ? AND status IN ('launching', 'running', 'idle', 'stuck')"
     );
     const row = stmt.get(projectId) as { cnt: number };
@@ -1100,7 +1119,7 @@ export class FleetDatabase {
    * Get queued teams for a project, ordered by creation time (FIFO).
    */
   getQueuedTeamsByProject(projectId: number): Team[] {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       "SELECT * FROM teams WHERE project_id = ? AND status = 'queued' ORDER BY created_at ASC"
     );
     const rows = stmt.all(projectId) as Record<string, unknown>[];
@@ -1112,14 +1131,19 @@ export class FleetDatabase {
    * Used by the GitHub poller to check DB-persisted blockers for resolution.
    */
   getQueuedBlockedTeams(): Team[] {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       "SELECT * FROM teams WHERE status = 'queued' AND blocked_by_json IS NOT NULL ORDER BY created_at ASC"
     );
     const rows = stmt.all() as Record<string, unknown>[];
     return rows.map((r) => this.mapTeamRow(r));
   }
 
-  updateTeam(id: number, fields: TeamUpdate): Team | undefined {
+  /**
+   * Update team fields without returning the updated record.
+   * Use when the caller discards the return value (fire-and-forget updates).
+   * Skips the trailing SELECT that `updateTeam()` performs.
+   */
+  updateTeamSilent(id: number, fields: TeamUpdate): void {
     const setClauses: string[] = [];
     const params: Record<string, unknown> = { id };
 
@@ -1196,13 +1220,17 @@ export class FleetDatabase {
       params.lastEventAt = fields.lastEventAt;
     }
 
-    if (setClauses.length === 0) return this.getTeam(id);
+    if (setClauses.length === 0) return;
 
     // Always update updated_at
     setClauses.push("updated_at = datetime('now')");
 
     const sql = `UPDATE teams SET ${setClauses.join(', ')} WHERE id = @id`;
     this.db.prepare(sql).run(params);
+  }
+
+  updateTeam(id: number, fields: TeamUpdate): Team | undefined {
+    this.updateTeamSilent(id, fields);
     return this.getTeam(id);
   }
 
@@ -1211,7 +1239,7 @@ export class FleetDatabase {
   // -------------------------------------------------------------------------
 
   insertEvent(data: EventInsert): Event {
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       INSERT INTO events (team_id, session_id, agent_name, event_type, tool_name, payload)
       VALUES (@teamId, @sessionId, @agentName, @eventType, @toolName, @payload)
     `);
@@ -1225,7 +1253,7 @@ export class FleetDatabase {
       payload: data.payload ?? null,
     });
 
-    const row = this.db.prepare('SELECT * FROM events WHERE id = ?').get(
+    const row = this.stmt('SELECT * FROM events WHERE id = ?').get(
       Number(info.lastInsertRowid)
     ) as Record<string, unknown>;
     return this.mapEventRow(row);
@@ -1239,8 +1267,8 @@ export class FleetDatabase {
    * a failure in any write rolls back all of them — preventing partial state
    * (e.g., transition recorded but event lost).
    *
-   * Retries once on SQLITE_BUSY after the configured busy_timeout has
-   * already been exhausted (defense-in-depth).
+   * Logs a warning and re-throws on SQLITE_BUSY (the busy_timeout pragma
+   * is the correct retry mechanism; spin-waiting after it expires wastes CPU).
    */
   processEventTransaction(ops: {
     transition?: { teamId: number; fromStatus: TeamStatus; toStatus: TeamStatus; trigger: string; reason: string };
@@ -1252,7 +1280,7 @@ export class FleetDatabase {
     const runTransaction = this.db.transaction((txOps: typeof ops) => {
       // 1. Insert transition record (if transitioning)
       if (txOps.transition) {
-        this.db.prepare(
+        this.stmt(
           'INSERT INTO team_transitions (team_id, from_status, to_status, trigger, reason) VALUES (?, ?, ?, ?, ?)'
         ).run(
           txOps.transition.teamId,
@@ -1263,16 +1291,16 @@ export class FleetDatabase {
         );
       }
 
-      // 2. Update team status (if transitioning)
+      // 2. Update team status (if transitioning) — skip trailing SELECT
       if (txOps.statusUpdate) {
-        this.updateTeam(txOps.statusUpdate.teamId, txOps.statusUpdate.fields);
+        this.updateTeamSilent(txOps.statusUpdate.teamId, txOps.statusUpdate.fields);
       }
 
-      // 3. Update heartbeat (lastEventAt) — always required
-      this.updateTeam(txOps.heartbeatUpdate.teamId, { lastEventAt: txOps.heartbeatUpdate.lastEventAt });
+      // 3. Update heartbeat (lastEventAt) — always required, skip trailing SELECT
+      this.updateTeamSilent(txOps.heartbeatUpdate.teamId, { lastEventAt: txOps.heartbeatUpdate.lastEventAt });
 
       // 4. Insert event — always required
-      const eventInfo = this.db.prepare(`
+      const eventInfo = this.stmt(`
         INSERT INTO events (team_id, session_id, agent_name, event_type, tool_name, payload)
         VALUES (@teamId, @sessionId, @agentName, @eventType, @toolName, @payload)
       `).run({
@@ -1287,7 +1315,7 @@ export class FleetDatabase {
 
       // 5. Insert agent messages (if any), filling in the eventId
       if (txOps.agentMessages && txOps.agentMessages.length > 0) {
-        const msgStmt = this.db.prepare(`
+        const msgStmt = this.stmt(`
           INSERT INTO agent_messages (team_id, event_id, sender, recipient, summary, content, session_id)
           VALUES (@teamId, @eventId, @sender, @recipient, @summary, @content, @sessionId)
         `);
@@ -1307,18 +1335,12 @@ export class FleetDatabase {
       return { eventId };
     });
 
-    // Execute with single BUSY retry
     try {
       return runTransaction(ops);
     } catch (err: unknown) {
       const sqliteErr = err as { code?: string };
       if (sqliteErr.code === 'SQLITE_BUSY') {
-        // Synchronous spin-wait for 100ms then retry once
-        const start = Date.now();
-        while (Date.now() - start < 100) {
-          // spin
-        }
-        return runTransaction(ops);
+        console.warn('[DB] processEventTransaction: SQLITE_BUSY after busy_timeout exhausted');
       }
       throw err;
     }
@@ -1343,13 +1365,13 @@ export class FleetDatabase {
   }
 
   getEventsByTeamCount(teamId: number): number {
-    const stmt = this.db.prepare('SELECT COUNT(*) AS cnt FROM events WHERE team_id = ?');
+    const stmt = this.stmt('SELECT COUNT(*) AS cnt FROM events WHERE team_id = ?');
     const row = stmt.get(teamId) as { cnt: number };
     return row.cnt;
   }
 
   getLatestEventByTeam(teamId: number): Event | undefined {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       'SELECT * FROM events WHERE team_id = ? ORDER BY id DESC LIMIT 1'
     );
     const row = stmt.get(teamId) as Record<string, unknown> | undefined;
@@ -1447,7 +1469,7 @@ export class FleetDatabase {
       END
       ORDER BY MIN(created_at) ASC
     `;
-    const rows = this.db.prepare(sql).all(teamId) as Record<string, unknown>[];
+    const rows = this.stmt(sql).all(teamId) as Record<string, unknown>[];
     return rows.map((row) => {
       const name = row.name as string;
       const starts = (row.starts as number) ?? 0;
@@ -1469,7 +1491,7 @@ export class FleetDatabase {
   // -------------------------------------------------------------------------
 
   insertAgentMessage(data: AgentMessageInsert): AgentMessage {
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       INSERT INTO agent_messages (team_id, event_id, sender, recipient, summary, content, session_id)
       VALUES (@teamId, @eventId, @sender, @recipient, @summary, @content, @sessionId)
     `);
@@ -1484,7 +1506,7 @@ export class FleetDatabase {
       sessionId: data.sessionId ?? null,
     });
 
-    const row = this.db.prepare('SELECT * FROM agent_messages WHERE id = ?').get(
+    const row = this.stmt('SELECT * FROM agent_messages WHERE id = ?').get(
       Number(info.lastInsertRowid)
     ) as Record<string, unknown>;
     return this.mapAgentMessageRow(row);
@@ -1532,7 +1554,7 @@ export class FleetDatabase {
       GROUP BY norm_sender, norm_recipient
       ORDER BY count DESC
     `;
-    const rows = this.db.prepare(sql).all(teamId) as Array<{
+    const rows = this.stmt(sql).all(teamId) as Array<{
       sender: string;
       recipient: string;
       count: number;
@@ -1551,7 +1573,7 @@ export class FleetDatabase {
   // -------------------------------------------------------------------------
 
   insertPullRequest(data: PRInsert): PullRequest {
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       INSERT INTO pull_requests (pr_number, team_id, title, state, ci_status, merge_status, auto_merge, ci_fail_count, checks_json)
       VALUES (@prNumber, @teamId, @title, @state, @ciStatus, @mergeStatus, @autoMerge, @ciFailCount, @checksJson)
     `);
@@ -1572,13 +1594,13 @@ export class FleetDatabase {
   }
 
   getPullRequest(prNumber: number): PullRequest | undefined {
-    const stmt = this.db.prepare('SELECT * FROM pull_requests WHERE pr_number = ?');
+    const stmt = this.stmt('SELECT * FROM pull_requests WHERE pr_number = ?');
     const row = stmt.get(prNumber) as Record<string, unknown> | undefined;
     return row ? this.mapPRRow(row) : undefined;
   }
 
   getAllPullRequests(): PullRequest[] {
-    const stmt = this.db.prepare('SELECT * FROM pull_requests ORDER BY updated_at DESC');
+    const stmt = this.stmt('SELECT * FROM pull_requests ORDER BY updated_at DESC');
     const rows = stmt.all() as Record<string, unknown>[];
     return rows.map((r) => this.mapPRRow(r));
   }
@@ -1639,7 +1661,7 @@ export class FleetDatabase {
   // -------------------------------------------------------------------------
 
   insertCommand(data: CommandInsert): Command {
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       INSERT INTO commands (team_id, target_agent, message)
       VALUES (@teamId, @targetAgent, @message)
     `);
@@ -1650,14 +1672,14 @@ export class FleetDatabase {
       message: data.message,
     });
 
-    const row = this.db.prepare('SELECT * FROM commands WHERE id = ?').get(
+    const row = this.stmt('SELECT * FROM commands WHERE id = ?').get(
       Number(info.lastInsertRowid)
     ) as Record<string, unknown>;
     return this.mapCommandRow(row);
   }
 
   getPendingCommands(teamId: number): Command[] {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       "SELECT * FROM commands WHERE team_id = ? AND status = 'pending' ORDER BY created_at ASC"
     );
     const rows = stmt.all(teamId) as Record<string, unknown>[];
@@ -1665,11 +1687,11 @@ export class FleetDatabase {
   }
 
   markCommandDelivered(id: number): Command | undefined {
-    this.db.prepare(
+    this.stmt(
       "UPDATE commands SET status = 'delivered', delivered_at = datetime('now') WHERE id = ?"
     ).run(id);
 
-    const row = this.db.prepare('SELECT * FROM commands WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    const row = this.stmt('SELECT * FROM commands WHERE id = ?').get(id) as Record<string, unknown> | undefined;
     return row ? this.mapCommandRow(row) : undefined;
   }
 
@@ -1678,7 +1700,7 @@ export class FleetDatabase {
   // -------------------------------------------------------------------------
 
   insertUsageSnapshot(data: UsageInsert): UsageSnapshot {
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       INSERT INTO usage_snapshots (team_id, project_id, session_id, daily_percent, weekly_percent, sonnet_percent, extra_percent, daily_resets_at, weekly_resets_at, raw_output)
       VALUES (@teamId, @projectId, @sessionId, @dailyPercent, @weeklyPercent, @sonnetPercent, @extraPercent, @dailyResetsAt, @weeklyResetsAt, @rawOutput)
     `);
@@ -1696,14 +1718,14 @@ export class FleetDatabase {
       rawOutput: data.rawOutput ?? null,
     });
 
-    const row = this.db.prepare('SELECT * FROM usage_snapshots WHERE id = ?').get(
+    const row = this.stmt('SELECT * FROM usage_snapshots WHERE id = ?').get(
       Number(info.lastInsertRowid)
     ) as Record<string, unknown>;
     return this.mapUsageRow(row);
   }
 
   getLatestUsage(): UsageSnapshot | undefined {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       'SELECT * FROM usage_snapshots ORDER BY recorded_at DESC, id DESC LIMIT 1'
     );
     const row = stmt.get() as Record<string, unknown> | undefined;
@@ -1711,7 +1733,7 @@ export class FleetDatabase {
   }
 
   getUsageHistory(limit: number = 50): UsageSnapshot[] {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       'SELECT * FROM usage_snapshots ORDER BY recorded_at DESC, id DESC LIMIT ?'
     );
     const rows = stmt.all(limit) as Record<string, unknown>[];
@@ -1720,7 +1742,7 @@ export class FleetDatabase {
 
   getUsageByProject(projectId?: number): UsageSnapshot[] {
     if (projectId !== undefined) {
-      const stmt = this.db.prepare(
+      const stmt = this.stmt(
         'SELECT * FROM usage_snapshots WHERE project_id = ? ORDER BY recorded_at DESC, id DESC LIMIT 1'
       );
       const row = stmt.get(projectId) as Record<string, unknown> | undefined;
@@ -1728,7 +1750,7 @@ export class FleetDatabase {
     }
 
     // Latest snapshot per project_id
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       SELECT u.* FROM usage_snapshots u
       INNER JOIN (
         SELECT project_id, MAX(id) AS max_id
@@ -1750,7 +1772,7 @@ export class FleetDatabase {
    * Get a single message template by ID.
    */
   getMessageTemplate(id: string): { id: string; template: string; enabled: boolean } | undefined {
-    const stmt = this.db.prepare('SELECT id, template, enabled FROM message_templates WHERE id = ?');
+    const stmt = this.stmt('SELECT id, template, enabled FROM message_templates WHERE id = ?');
     const row = stmt.get(id) as { id: string; template: string; enabled: number } | undefined;
     if (!row) return undefined;
     return { id: row.id, template: row.template, enabled: row.enabled === 1 };
@@ -1760,7 +1782,7 @@ export class FleetDatabase {
    * Get all message templates.
    */
   getMessageTemplates(): MessageTemplate[] {
-    const stmt = this.db.prepare('SELECT * FROM message_templates ORDER BY id');
+    const stmt = this.stmt('SELECT * FROM message_templates ORDER BY id');
     const rows = stmt.all() as Array<{ id: string; template: string; enabled: number; updated_at: string }>;
     return rows.map((r) => ({
       id: r.id,
@@ -1804,7 +1826,7 @@ export class FleetDatabase {
     template: string;
     enabled?: boolean;
   }): void {
-    this.db.prepare(
+    this.stmt(
       `INSERT INTO message_templates (id, template, enabled)
        VALUES (@id, @template, @enabled)`
     ).run({
@@ -1819,7 +1841,7 @@ export class FleetDatabase {
    * user-edited templates are preserved across restarts.
    */
   initDefaultTemplates(defaults: { id: string; template: string }[]): void {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       'INSERT OR IGNORE INTO message_templates (id, template) VALUES (@id, @template)'
     );
 
@@ -1855,7 +1877,7 @@ export class FleetDatabase {
    * @param eventData - JSON-serialized array of StreamEvent objects
    */
   upsertStreamEvents(teamId: number, eventData: string): void {
-    this.db.prepare(`
+    this.stmt(`
       INSERT INTO stream_events (team_id, event_data, updated_at)
       VALUES (@teamId, @eventData, datetime('now'))
       ON CONFLICT(team_id) DO UPDATE SET
@@ -1869,7 +1891,7 @@ export class FleetDatabase {
    * Returns the JSON string, or null if no persisted events exist.
    */
   getStreamEvents(teamId: number): string | null {
-    const row = this.db.prepare(
+    const row = this.stmt(
       'SELECT event_data FROM stream_events WHERE team_id = ?'
     ).get(teamId) as { event_data: string } | undefined;
     return row?.event_data ?? null;
@@ -1879,7 +1901,7 @@ export class FleetDatabase {
    * Delete persisted stream events for a specific team.
    */
   deleteStreamEventsByTeam(teamId: number): void {
-    this.db.prepare('DELETE FROM stream_events WHERE team_id = ?').run(teamId);
+    this.stmt('DELETE FROM stream_events WHERE team_id = ?').run(teamId);
   }
 
   // -------------------------------------------------------------------------
@@ -1905,7 +1927,7 @@ export class FleetDatabase {
   }
 
   getTeamDashboardCount(): number {
-    const stmt = this.db.prepare('SELECT COUNT(*) AS cnt FROM v_team_dashboard');
+    const stmt = this.stmt('SELECT COUNT(*) AS cnt FROM v_team_dashboard');
     const row = stmt.get() as { cnt: number };
     return row.cnt;
   }
@@ -1916,7 +1938,7 @@ export class FleetDatabase {
    * @param stuckMinutes - minutes of silence before considered stuck (default: 5)
    */
   getStuckCandidates(idleMinutes: number = 3, stuckMinutes: number = 5): StuckCandidate[] {
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       SELECT
         t.id,
         t.issue_number,
@@ -1980,7 +2002,7 @@ export class FleetDatabase {
       );
       return;
     }
-    this.db.prepare(
+    this.stmt(
       'INSERT INTO team_transitions (team_id, from_status, to_status, trigger, reason) VALUES (?, ?, ?, ?, ?)'
     ).run(data.teamId, data.fromStatus, data.toStatus, data.trigger, data.reason);
   }
@@ -1989,7 +2011,7 @@ export class FleetDatabase {
    * Get all transitions for a team, ordered by creation time ascending.
    */
   getTransitions(teamId: number): TeamTransition[] {
-    const rows = this.db.prepare(
+    const rows = this.stmt(
       'SELECT id, team_id, from_status, to_status, trigger, reason, created_at FROM team_transitions WHERE team_id = ? ORDER BY created_at ASC'
     ).all(teamId) as Array<{
       id: number;
@@ -2013,14 +2035,14 @@ export class FleetDatabase {
 
   deleteTeamsByProject(projectId: number): void {
     this.db.transaction((pid: number) => {
-      this.db.prepare('DELETE FROM stream_events WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
-      this.db.prepare('DELETE FROM agent_messages WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
-      this.db.prepare('DELETE FROM team_transitions WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
-      this.db.prepare('DELETE FROM events WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
-      this.db.prepare('DELETE FROM commands WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
-      this.db.prepare('DELETE FROM usage_snapshots WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
-      this.db.prepare('DELETE FROM pull_requests WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
-      this.db.prepare('DELETE FROM teams WHERE project_id = ?').run(pid);
+      this.stmt('DELETE FROM stream_events WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
+      this.stmt('DELETE FROM agent_messages WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
+      this.stmt('DELETE FROM team_transitions WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
+      this.stmt('DELETE FROM events WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
+      this.stmt('DELETE FROM commands WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
+      this.stmt('DELETE FROM usage_snapshots WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
+      this.stmt('DELETE FROM pull_requests WHERE team_id IN (SELECT id FROM teams WHERE project_id = ?)').run(pid);
+      this.stmt('DELETE FROM teams WHERE project_id = ?').run(pid);
     })(projectId);
   }
 
@@ -2034,14 +2056,14 @@ export class FleetDatabase {
    */
   deleteTeamAndRelated(teamId: number): void {
     this.db.transaction((id: number) => {
-      this.db.prepare('DELETE FROM stream_events WHERE team_id = ?').run(id);
-      this.db.prepare('DELETE FROM agent_messages WHERE team_id = ?').run(id);
-      this.db.prepare('DELETE FROM team_transitions WHERE team_id = ?').run(id);
-      this.db.prepare('DELETE FROM events WHERE team_id = ?').run(id);
-      this.db.prepare('DELETE FROM commands WHERE team_id = ?').run(id);
-      this.db.prepare('DELETE FROM usage_snapshots WHERE team_id = ?').run(id);
-      this.db.prepare('DELETE FROM pull_requests WHERE team_id = ?').run(id);
-      this.db.prepare('DELETE FROM teams WHERE id = ?').run(id);
+      this.stmt('DELETE FROM stream_events WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM agent_messages WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM team_transitions WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM events WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM commands WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM usage_snapshots WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM pull_requests WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM teams WHERE id = ?').run(id);
     })(teamId);
   }
 
@@ -2056,16 +2078,16 @@ export class FleetDatabase {
    */
   factoryReset(defaultTemplates: { id: string; template: string }[]): number {
     this.db.transaction(() => {
-      this.db.prepare('DELETE FROM stream_events').run();
-      this.db.prepare('DELETE FROM agent_messages').run();
-      this.db.prepare('DELETE FROM team_transitions').run();
-      this.db.prepare('DELETE FROM events').run();
-      this.db.prepare('DELETE FROM commands').run();
-      this.db.prepare('DELETE FROM usage_snapshots').run();
-      this.db.prepare('DELETE FROM pull_requests').run();
-      this.db.prepare('DELETE FROM teams').run();
-      this.db.prepare('DELETE FROM message_templates').run();
-      this.db.prepare('DELETE FROM projects').run();
+      this.stmt('DELETE FROM stream_events').run();
+      this.stmt('DELETE FROM agent_messages').run();
+      this.stmt('DELETE FROM team_transitions').run();
+      this.stmt('DELETE FROM events').run();
+      this.stmt('DELETE FROM commands').run();
+      this.stmt('DELETE FROM usage_snapshots').run();
+      this.stmt('DELETE FROM pull_requests').run();
+      this.stmt('DELETE FROM teams').run();
+      this.stmt('DELETE FROM message_templates').run();
+      this.stmt('DELETE FROM projects').run();
     })();
 
     // Re-seed default templates outside the transaction (uses its own)
@@ -2083,7 +2105,7 @@ export class FleetDatabase {
    * Returns total number of rows deleted.
    */
   purgeOldEvents(retentionDays: number, batchSize: number = 5000): number {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       `DELETE FROM events WHERE id IN (
         SELECT id FROM events WHERE created_at < datetime('now', '-' || @days || ' days') LIMIT @limit
       )`
@@ -2103,7 +2125,7 @@ export class FleetDatabase {
    * Returns total number of rows deleted.
    */
   purgeOldUsageSnapshots(retentionDays: number, batchSize: number = 5000): number {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       `DELETE FROM usage_snapshots WHERE id IN (
         SELECT id FROM usage_snapshots WHERE recorded_at < datetime('now', '-' || @days || ' days') LIMIT @limit
       )`
@@ -2123,7 +2145,7 @@ export class FleetDatabase {
    * Returns total number of rows deleted.
    */
   purgeOldCommands(retentionDays: number, batchSize: number = 5000): number {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       `DELETE FROM commands WHERE id IN (
         SELECT id FROM commands WHERE created_at < datetime('now', '-' || @days || ' days') LIMIT @limit
       )`
@@ -2143,7 +2165,7 @@ export class FleetDatabase {
    * Returns total number of rows deleted.
    */
   purgeOldTeamTransitions(retentionDays: number, batchSize: number = 5000): number {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       `DELETE FROM team_transitions WHERE id IN (
         SELECT id FROM team_transitions WHERE created_at < datetime('now', '-' || @days || ' days') LIMIT @limit
       )`
@@ -2163,7 +2185,7 @@ export class FleetDatabase {
    * Returns total number of rows deleted.
    */
   purgeOldAgentMessages(retentionDays: number, batchSize: number = 5000): number {
-    const stmt = this.db.prepare(
+    const stmt = this.stmt(
       `DELETE FROM agent_messages WHERE id IN (
         SELECT id FROM agent_messages WHERE created_at < datetime('now', '-' || @days || ' days') LIMIT @limit
       )`
@@ -2185,7 +2207,7 @@ export class FleetDatabase {
    * Returns total number of rows deleted.
    */
   purgeOldStreamEvents(retentionDays: number): number {
-    const result = this.db.prepare(
+    const result = this.stmt(
       `DELETE FROM stream_events WHERE team_id IN (
         SELECT id FROM teams
         WHERE stopped_at IS NOT NULL
@@ -2201,8 +2223,11 @@ export class FleetDatabase {
 
   /**
    * Properly close the database connection.
+   * Clears the statement cache first since prepared statements become
+   * invalid after the database is closed.
    */
   close(): void {
+    this.stmtCache.clear();
     this.db.close();
   }
 
@@ -2390,7 +2415,7 @@ export class FleetDatabase {
     status: string;
     owner: string;
   }): TeamTask {
-    const stmt = this.db.prepare(`
+    const stmt = this.stmt(`
       INSERT INTO team_tasks (team_id, task_id, subject, description, status, owner)
       VALUES (@teamId, @taskId, @subject, @description, @status, @owner)
       ON CONFLICT(team_id, task_id) DO UPDATE SET
@@ -2410,7 +2435,7 @@ export class FleetDatabase {
       owner: data.owner,
     });
 
-    const row = this.db.prepare(
+    const row = this.stmt(
       'SELECT * FROM team_tasks WHERE team_id = ? AND task_id = ?'
     ).get(data.teamId, data.taskId) as Record<string, unknown>;
 
@@ -2421,7 +2446,7 @@ export class FleetDatabase {
    * Get all tasks for a team, ordered by id ascending.
    */
   getTeamTasks(teamId: number): TeamTask[] {
-    const rows = this.db.prepare(
+    const rows = this.stmt(
       'SELECT * FROM team_tasks WHERE team_id = ? ORDER BY id ASC'
     ).all(teamId) as Record<string, unknown>[];
 

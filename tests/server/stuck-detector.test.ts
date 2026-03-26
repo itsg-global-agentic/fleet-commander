@@ -12,6 +12,7 @@ import type { Team } from '../../src/shared/types.js';
 const mockDb = {
   getActiveTeams: vi.fn<() => Partial<Team>[]>().mockReturnValue([]),
   updateTeam: vi.fn(),
+  updateTeamSilent: vi.fn(),
   insertTransition: vi.fn(),
   getPullRequest: vi.fn(),
 };
@@ -117,7 +118,7 @@ describe('Launch timeout detection', () => {
         reason: expect.stringContaining('Launch timeout'),
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { status: 'failed' });
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { status: 'failed' });
   });
 
   it('does NOT transition launching team with recent launchedAt', () => {
@@ -131,7 +132,7 @@ describe('Launch timeout detection', () => {
     stuckDetector.check();
 
     expect(mockDb.insertTransition).not.toHaveBeenCalled();
-    expect(mockDb.updateTeam).not.toHaveBeenCalled();
+    expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
   });
 
   it('broadcasts SSE on launching -> failed', () => {
@@ -180,7 +181,7 @@ describe('Launch timeout detection', () => {
 
     // Should not throw
     expect(() => stuckDetector.check()).not.toThrow();
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { status: 'failed' });
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { status: 'failed' });
   });
 
   it('guards against launchedAt === null', () => {
@@ -195,7 +196,7 @@ describe('Launch timeout detection', () => {
 
     // Should skip this team entirely
     expect(mockDb.insertTransition).not.toHaveBeenCalled();
-    expect(mockDb.updateTeam).not.toHaveBeenCalled();
+    expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
   });
 });
 
@@ -250,7 +251,7 @@ describe('Existing idle/stuck detection', () => {
         trigger: 'timer',
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { status: 'idle' });
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { status: 'idle' });
   });
 
   it('transitions idle -> stuck when lastEventAt exceeds stuck threshold', () => {
@@ -269,7 +270,7 @@ describe('Existing idle/stuck detection', () => {
         trigger: 'timer',
       }),
     );
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { status: 'stuck' });
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { status: 'stuck' });
   });
 });
 
@@ -314,7 +315,7 @@ describe('Idle nudge message', () => {
     stuckDetector.check();
 
     // Transition should still happen
-    expect(mockDb.updateTeam).toHaveBeenCalledWith(1, { status: 'idle' });
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { status: 'idle' });
     // But no message sent
     expect(mockManager.sendMessage).not.toHaveBeenCalled();
   });
@@ -358,7 +359,7 @@ describe('Idle nudge message', () => {
     stuckDetector.check();
 
     // Transition should be skipped entirely (CI pending)
-    expect(mockDb.updateTeam).not.toHaveBeenCalled();
+    expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
     expect(mockManager.sendMessage).not.toHaveBeenCalled();
 
     // Reset mocks

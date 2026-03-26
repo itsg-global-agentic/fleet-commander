@@ -466,7 +466,7 @@ export class TeamService {
     const delivered = manager.sendMessage(teamId, message.trim(), 'user');
     if (delivered) {
       db.markCommandDelivered(command.id);
-      db.updateTeam(teamId, { lastEventAt: new Date().toISOString() });
+      db.updateTeamSilent(teamId, { lastEventAt: new Date().toISOString() });
     }
 
     return { command, delivered };

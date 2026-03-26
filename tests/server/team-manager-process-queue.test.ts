@@ -20,6 +20,7 @@ const mockDb = {
   getQueuedTeamsByProject: vi.fn(),
   getTeam: vi.fn(),
   updateTeam: vi.fn(),
+  updateTeamSilent: vi.fn(),
   insertTransition: vi.fn(),
 };
 
@@ -176,7 +177,7 @@ describe('TeamManager.processQueue re-drain', () => {
       .mockReturnValueOnce([team2])  // second processQueue (re-drain): find queued teams
       .mockReturnValueOnce([]);      // second finally: re-drain check
 
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     // Run the first processQueue — it should launch team1, then re-drain and launch team2
@@ -204,7 +205,7 @@ describe('TeamManager.processQueue re-drain', () => {
     mockDb.getQueuedTeamsByProject
       .mockReturnValueOnce([team1])  // processQueue: 1 queued
       .mockReturnValueOnce([]);      // finally: no more queued
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     await tm.processQueue(1);
@@ -229,7 +230,7 @@ describe('TeamManager.processQueue re-drain', () => {
     mockDb.getQueuedTeamsByProject
       .mockReturnValueOnce([interactiveTeam, headlessTeam])  // processQueue: 2 queued
       .mockReturnValueOnce([]);  // finally: no more queued
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     await tm.processQueue(1);
@@ -271,7 +272,7 @@ describe('TeamManager.processQueue re-drain', () => {
       .mockReturnValueOnce([team2])  // first finally: re-drain check
       .mockReturnValueOnce([team2])  // second processQueue (re-drain)
       .mockReturnValueOnce([]);      // second finally
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     // Start processQueue — it will start the async filterUnblockedTeams
@@ -350,7 +351,7 @@ describe('TeamManager.processQueue dependency filtering', () => {
       .mockReturnValueOnce([blockedTeam])  // first finally: blocked team still queued
       .mockReturnValueOnce([blockedTeam]); // second processQueue (re-drain)
     // No 4th value needed: re-drain stops when launchedCount=0
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     // unblockedTeam has no open deps; blockedTeam has open deps
@@ -395,7 +396,7 @@ describe('TeamManager.processQueue dependency filtering', () => {
     mockDb.getQueuedTeamsByProject
       .mockReturnValueOnce([team])
       .mockReturnValueOnce([]);
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     // Dependencies exist but are all closed
@@ -425,7 +426,7 @@ describe('TeamManager.processQueue dependency filtering', () => {
     mockDb.getQueuedTeamsByProject
       .mockReturnValueOnce([team])
       .mockReturnValueOnce([]);
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     // Dependency fetch fails — returns null
@@ -450,7 +451,7 @@ describe('TeamManager.processQueue dependency filtering', () => {
     mockDb.getQueuedTeamsByProject
       .mockReturnValueOnce([team])
       .mockReturnValueOnce([]);
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     // Dependency fetch throws
@@ -477,7 +478,7 @@ describe('TeamManager.processQueue dependency filtering', () => {
     mockDb.getQueuedTeamsByProject
       .mockReturnValueOnce([team1, team2, team3])
       .mockReturnValueOnce([team2, team3]);
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     // All teams unblocked
@@ -509,7 +510,7 @@ describe('TeamManager.processQueue dependency filtering', () => {
     mockDb.getQueuedTeamsByProject
       .mockReturnValueOnce([blockedTeam, unblockedTeam1, unblockedTeam2])
       .mockReturnValueOnce([blockedTeam]); // finally: blocked team still queued
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     mockFetchDependenciesForIssue.mockImplementation(async (_projectId: number, issueNumber: number) => {
@@ -545,7 +546,7 @@ describe('TeamManager.processQueue dependency filtering', () => {
     mockDb.getQueuedTeamsByProject
       .mockReturnValueOnce([blockedTeam])
       .mockReturnValueOnce([blockedTeam]);
-    mockDb.updateTeam.mockReturnValue(undefined);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
     mockDb.insertTransition.mockReturnValue(undefined);
 
     mockFetchDependenciesForIssue.mockResolvedValue({
