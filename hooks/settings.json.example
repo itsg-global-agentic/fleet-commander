@@ -115,6 +115,26 @@
           }
         ]
       }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/fleet-commander/run-hook.sh worktree_create on_worktree_create.sh"
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/fleet-commander/run-hook.sh worktree_remove on_worktree_remove.sh"
+          }
+        ]
+      }
     ]
   }
 }

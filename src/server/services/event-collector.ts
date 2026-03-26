@@ -40,6 +40,7 @@ export interface EventPayload {
   error_details?: string;       // StopFailure: reason for the failure (e.g. "rate_limit")
   last_assistant_message?: string; // StopFailure: last thing the agent said before failure
   worktree_root?: string;
+  worktree_path?: string;
   msg_to?: string;
   msg_summary?: string;
   // Raw CC stdin JSON forwarded from send_event.sh (new format)
@@ -224,6 +225,8 @@ function normalizeEventType(raw: string): string {
     'tool_error': 'ToolError',
     'pre_compact': 'PreCompact',
     'teammate_idle': 'TeammateIdle',
+    'worktree_create': 'WorktreeCreate',
+    'worktree_remove': 'WorktreeRemove',
   };
   return map[raw.toLowerCase()] || raw;
 }

@@ -124,6 +124,8 @@ describe('Valid payload processing', () => {
     'teammate_idle',
     'tool_error',
     'pre_compact',
+    'worktree_create',
+    'worktree_remove',
   ];
 
   const normalizedTypes: Record<string, string> = {
@@ -138,6 +140,8 @@ describe('Valid payload processing', () => {
     teammate_idle: 'TeammateIdle',
     tool_error: 'ToolError',
     pre_compact: 'PreCompact',
+    worktree_create: 'WorktreeCreate',
+    worktree_remove: 'WorktreeRemove',
   };
 
   for (const eventType of eventTypes) {
@@ -724,6 +728,8 @@ describe('Non-tool_use events never throttled', () => {
     'notification',
     'teammate_idle',
     'tool_error',
+    'worktree_create',
+    'worktree_remove',
   ];
 
   for (const eventType of nonToolUseEvents) {
@@ -2395,5 +2401,205 @@ describe('Phase transitions (Issue #494)', () => {
       expect(shouldAdvancePhase('blocked', 'implementing')).toBe(true);
       expect(shouldAdvancePhase('blocked', 'pr')).toBe(true);
     });
+  });
+});
+
+// =============================================================================
+// Worktree lifecycle events (Issue #512)
+// =============================================================================
+
+describe('Worktree lifecycle events (Issue #512)', () => {
+  it('worktree_create does NOT transition launching -> running', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'launching', phase: 'init' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'worktree_create' });
+
+    processEvent(payload, db, sse);
+
+    // Should NOT have inserted a transition or changed status
+    expect(db.insertTransition).not.toHaveBeenCalled();
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+  });
+
+  it('worktree_remove does NOT transition launching -> running', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'launching', phase: 'init' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'worktree_remove' });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertTransition).not.toHaveBeenCalled();
+    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    );
+    expect(statusCalls).toHaveLength(0);
+  });
+
+  it('worktree_create DOES wake idle team to running', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'worktree_create' });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'idle',
+        toStatus: 'running',
+        trigger: 'hook',
+      }),
+    );
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'running' }),
+    );
+  });
+
+  it('worktree_remove DOES wake idle team to running', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'worktree_remove' });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'idle',
+        toStatus: 'running',
+        trigger: 'hook',
+      }),
+    );
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'running' }),
+    );
+  });
+
+  it('worktree_create DOES wake stuck team to running', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'stuck', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'worktree_create' });
+
+    processEvent(payload, db, sse);
+
+    expect(db.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'stuck',
+        toStatus: 'running',
+        trigger: 'hook',
+      }),
+    );
+  });
+
+  it('worktree_create stores worktree_path in payload JSON', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'worktree_create',
+      worktree_path: '/path/to/worktree',
+    });
+
+    processEvent(payload, db, sse);
+
+    const insertCall = (db.insertEvent as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const storedPayload = JSON.parse(insertCall.payload);
+    expect(storedPayload.worktree_path).toBe('/path/to/worktree');
+  });
+
+  it('worktree_create is never throttled', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    const r1 = processEvent(makePayload({ event: 'worktree_create' }), db, sse);
+    const r2 = processEvent(makePayload({ event: 'worktree_create' }), db, sse);
+    const r3 = processEvent(makePayload({ event: 'worktree_create' }), db, sse);
+
+    expect(r1.processed).toBe(true);
+    expect(r2.processed).toBe(true);
+    expect(r3.processed).toBe(true);
+  });
+
+  it('worktree_remove is never throttled', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    const r1 = processEvent(makePayload({ event: 'worktree_remove' }), db, sse);
+    const r2 = processEvent(makePayload({ event: 'worktree_remove' }), db, sse);
+    const r3 = processEvent(makePayload({ event: 'worktree_remove' }), db, sse);
+
+    expect(r1.processed).toBe(true);
+    expect(r2.processed).toBe(true);
+    expect(r3.processed).toBe(true);
+  });
+});
+
+// =============================================================================
+// Worktree payload parsing (Issue #512)
+// =============================================================================
+
+describe('Worktree payload parsing (Issue #512)', () => {
+  it('buildPayloadFromCcStdin extracts worktree_path', () => {
+    const ccData = {
+      session_id: 'sess-1',
+      worktree_path: '/home/user/project/.worktrees/feat-123',
+      teammate_name: 'dev',
+    };
+    const body = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.worktree_path).toBe('/home/user/project/.worktrees/feat-123');
+    expect(payload.session_id).toBe('sess-1');
+    expect(payload.teammate_name).toBe('dev');
+  });
+
+  it('buildPayloadFromCcStdin extracts worktree_root', () => {
+    const ccData = {
+      session_id: 'sess-1',
+      worktree_root: '/home/user/project',
+    };
+    const body = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.worktree_root).toBe('/home/user/project');
+  });
+
+  it('buildPayloadFromLegacy extracts worktree_path', () => {
+    const body = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      worktree_path: '/path/to/worktree',
+      worktree_root: '/path/to/root',
+    };
+
+    const payload = buildPayloadFromLegacy(body);
+
+    expect(payload.worktree_path).toBe('/path/to/worktree');
+    expect(payload.worktree_root).toBe('/path/to/root');
   });
 });

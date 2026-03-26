@@ -74,6 +74,10 @@ function buildPayloadFromCcStdin(body: Record<string, unknown>): EventPayload {
     payload.msg_summary = str(toolInput.summary);
   }
 
+  // Worktree fields
+  payload.worktree_root = str(cc.worktree_root);
+  payload.worktree_path = str(cc.worktree_path);
+
   // New fields that CC provides but were previously dropped by shell regex
   payload.model = str(cc.model);
   payload.source = str(cc.source);
@@ -104,6 +108,7 @@ function buildPayloadFromLegacy(body: Record<string, unknown>): EventPayload {
     error_details: str(body.error_details),
     last_assistant_message: str(body.last_assistant_message),
     worktree_root: str(body.worktree_root),
+    worktree_path: str(body.worktree_path),
     msg_to: str(body.msg_to),
     msg_summary: str(body.msg_summary),
   };
