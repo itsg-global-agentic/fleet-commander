@@ -144,6 +144,7 @@ describe('Dead PID recovery', () => {
     expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, expect.objectContaining({
       status: 'idle',
       pid: null,
+      lastEventAt: expect.any(String),
     }));
   });
 
@@ -165,10 +166,11 @@ describe('Dead PID recovery', () => {
     expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(2, expect.objectContaining({
       status: 'failed',
       pid: null,
+      lastEventAt: expect.any(String),
     }));
   });
 
-  it('marks idle team with dead PID as idle (keeps idle)', async () => {
+  it('marks idle team with dead PID as idle and preserves lastEventAt', async () => {
     const team = makeTeam({ id: 3, status: 'idle', pid: 7777 });
     mockDb.getActiveTeams.mockReturnValue([team]);
     mockIsProcessAlive.mockReturnValue(false);
@@ -187,9 +189,12 @@ describe('Dead PID recovery', () => {
       status: 'idle',
       pid: null,
     }));
+    // lastEventAt must NOT be reset for already-idle teams
+    const updateFields = mockDb.updateTeamSilent.mock.calls[0]![1];
+    expect(updateFields).not.toHaveProperty('lastEventAt');
   });
 
-  it('marks stuck team with dead PID as idle', async () => {
+  it('marks stuck team with dead PID as idle and preserves lastEventAt', async () => {
     const team = makeTeam({ id: 4, status: 'stuck', pid: 6666 });
     mockDb.getActiveTeams.mockReturnValue([team]);
     mockIsProcessAlive.mockReturnValue(false);
@@ -208,6 +213,9 @@ describe('Dead PID recovery', () => {
       status: 'idle',
       pid: null,
     }));
+    // lastEventAt must NOT be reset for already-stuck teams
+    const updateFields = mockDb.updateTeamSilent.mock.calls[0]![1];
+    expect(updateFields).not.toHaveProperty('lastEventAt');
   });
 });
 
@@ -241,7 +249,7 @@ describe('Alive PID recovery', () => {
 // =============================================================================
 
 describe('No PID recovery', () => {
-  it('marks team with no PID as idle', async () => {
+  it('marks running team with no PID as idle and resets lastEventAt', async () => {
     const team = makeTeam({ id: 6, status: 'running', pid: null });
     mockDb.getActiveTeams.mockReturnValue([team]);
 
@@ -258,6 +266,7 @@ describe('No PID recovery', () => {
     );
     expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(6, expect.objectContaining({
       status: 'idle',
+      lastEventAt: expect.any(String),
     }));
   });
 
@@ -269,6 +278,52 @@ describe('No PID recovery', () => {
 
     expect(mockDb.insertTransition).not.toHaveBeenCalled();
     expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
+  });
+
+  it('marks idle team with no PID as idle and preserves lastEventAt', async () => {
+    const team = makeTeam({ id: 8, status: 'idle', pid: null });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+
+    await recoverOnStartup();
+
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 8,
+        fromStatus: 'idle',
+        toStatus: 'idle',
+        trigger: 'system',
+        reason: expect.stringContaining('no PID'),
+      }),
+    );
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(8, expect.objectContaining({
+      status: 'idle',
+    }));
+    // lastEventAt must NOT be reset for already-idle teams
+    const updateFields = mockDb.updateTeamSilent.mock.calls[0]![1];
+    expect(updateFields).not.toHaveProperty('lastEventAt');
+  });
+
+  it('marks stuck team with no PID as idle and preserves lastEventAt', async () => {
+    const team = makeTeam({ id: 9, status: 'stuck', pid: null });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+
+    await recoverOnStartup();
+
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 9,
+        fromStatus: 'stuck',
+        toStatus: 'idle',
+        trigger: 'system',
+        reason: expect.stringContaining('no PID'),
+      }),
+    );
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(9, expect.objectContaining({
+      status: 'idle',
+    }));
+    // lastEventAt must NOT be reset for already-stuck teams
+    const updateFields = mockDb.updateTeamSilent.mock.calls[0]![1];
+    expect(updateFields).not.toHaveProperty('lastEventAt');
   });
 });
 
