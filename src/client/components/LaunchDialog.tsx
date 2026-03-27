@@ -542,7 +542,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       setHeadless(true);
       setSelectedProjectId('');
       setLaunchedTeamId(null);
-      setLaunchedIssueNumber(null);
+      setLaunchedIssueKey(null);
       setZone('green');
       setIssues([]);
       setIssuesError(null);
