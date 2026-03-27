@@ -298,4 +298,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_tasks_team_task ON team_tasks(team_id
 CREATE INDEX IF NOT EXISTS idx_team_tasks_team ON team_tasks(team_id);
 
 -- Insert schema version 9 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (11);
+INSERT OR IGNORE INTO schema_version (version) VALUES (12);

@@ -3,10 +3,12 @@
 // =============================================================================
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { FleetDatabase, utcify } from '../../src/server/db.js';
+import { isEncrypted, resetEncryptionKey } from '../../src/server/utils/crypto.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1626,5 +1628,148 @@ describe('Connection management', () => {
   it('reports database file size', () => {
     const size = db.getDbFileSize();
     expect(size).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// Provider Config Encryption
+// =============================================================================
+
+describe('Provider Config Encryption', () => {
+  beforeEach(() => {
+    // Set up a test encryption key
+    resetEncryptionKey();
+    process.env['FLEET_ENCRYPTION_KEY'] = crypto.randomBytes(32).toString('hex');
+  });
+
+  afterEach(() => {
+    resetEncryptionKey();
+    delete process.env['FLEET_ENCRYPTION_KEY'];
+    delete process.env['FLEET_ENCRYPTION_KEY_OLD'];
+  });
+
+  it('should encrypt providerConfig on insert and decrypt on read', () => {
+    const configJson = JSON.stringify({
+      baseUrl: 'https://myco.atlassian.net',
+      apiToken: 'secret-token-12345',
+    });
+
+    const project = db.insertProject({
+      name: 'encrypted-test',
+      repoPath: '/tmp/encrypted-test',
+      providerConfig: configJson,
+    });
+
+    // Verify the returned project has decrypted data
+    expect(project.providerConfig).toBe(configJson);
+
+    // Verify the raw DB value is encrypted (not plaintext)
+    const rawRow = db.raw.prepare('SELECT provider_config FROM projects WHERE id = ?').get(project.id) as { provider_config: string };
+    expect(rawRow.provider_config).not.toBe(configJson);
+    expect(isEncrypted(rawRow.provider_config)).toBe(true);
+
+    // Verify reading back through getProject decrypts properly
+    const fetched = db.getProject(project.id);
+    expect(fetched).toBeDefined();
+    expect(fetched!.providerConfig).toBe(configJson);
+  });
+
+  it('should handle null providerConfig without encryption', () => {
+    const project = db.insertProject({
+      name: 'null-config-test',
+      repoPath: '/tmp/null-config-test',
+      providerConfig: null,
+    });
+
+    expect(project.providerConfig).toBeNull();
+
+    const rawRow = db.raw.prepare('SELECT provider_config FROM projects WHERE id = ?').get(project.id) as { provider_config: string | null };
+    expect(rawRow.provider_config).toBeNull();
+  });
+
+  it('should encrypt providerConfig on update', () => {
+    const project = db.insertProject({
+      name: 'update-encrypt-test',
+      repoPath: '/tmp/update-encrypt-test',
+    });
+
+    const newConfig = JSON.stringify({ apiToken: 'new-secret' });
+    const updated = db.updateProject(project.id, { providerConfig: newConfig });
+    expect(updated).toBeDefined();
+    expect(updated!.providerConfig).toBe(newConfig);
+
+    // Verify raw value is encrypted
+    const rawRow = db.raw.prepare('SELECT provider_config FROM projects WHERE id = ?').get(project.id) as { provider_config: string };
+    expect(rawRow.provider_config).not.toBe(newConfig);
+    expect(isEncrypted(rawRow.provider_config)).toBe(true);
+  });
+
+  it('should handle clearing providerConfig via update (set to null)', () => {
+    const configJson = JSON.stringify({ apiToken: 'to-be-cleared' });
+    const project = db.insertProject({
+      name: 'clear-config-test',
+      repoPath: '/tmp/clear-config-test',
+      providerConfig: configJson,
+    });
+
+    const updated = db.updateProject(project.id, { providerConfig: null });
+    expect(updated).toBeDefined();
+    expect(updated!.providerConfig).toBeNull();
+
+    const rawRow = db.raw.prepare('SELECT provider_config FROM projects WHERE id = ?').get(project.id) as { provider_config: string | null };
+    expect(rawRow.provider_config).toBeNull();
+  });
+
+  it('should return null providerConfig when decryption fails (wrong key)', () => {
+    const configJson = JSON.stringify({ apiToken: 'secret' });
+    const project = db.insertProject({
+      name: 'wrong-key-test',
+      repoPath: '/tmp/wrong-key-test',
+      providerConfig: configJson,
+    });
+
+    // Change the encryption key
+    resetEncryptionKey();
+    process.env['FLEET_ENCRYPTION_KEY'] = crypto.randomBytes(32).toString('hex');
+
+    // Reading should not throw but return null for providerConfig
+    const fetched = db.getProject(project.id);
+    expect(fetched).toBeDefined();
+    expect(fetched!.providerConfig).toBeNull();
+  });
+
+  it('should decrypt correctly in getProjects (list)', () => {
+    const configJson = JSON.stringify({ apiToken: 'list-test' });
+    db.insertProject({
+      name: 'list-encrypt-test',
+      repoPath: '/tmp/list-encrypt-test',
+      providerConfig: configJson,
+    });
+
+    const projects = db.getProjects();
+    const found = projects.find((p) => p.name === 'list-encrypt-test');
+    expect(found).toBeDefined();
+    expect(found!.providerConfig).toBe(configJson);
+  });
+
+  it('should decrypt correctly in getProjectSummaries', () => {
+    const configJson = JSON.stringify({ apiToken: 'summary-test' });
+    db.insertProject({
+      name: 'summary-encrypt-test',
+      repoPath: '/tmp/summary-encrypt-test',
+      providerConfig: configJson,
+    });
+
+    const summaries = db.getProjectSummaries();
+    const found = summaries.find((p) => p.name === 'summary-encrypt-test');
+    expect(found).toBeDefined();
+    expect(found!.providerConfig).toBe(configJson);
+  });
+
+  it('should include schema version 12', () => {
+    const row = db.raw
+      .prepare('SELECT MAX(version) AS version FROM schema_version')
+      .get() as { version: number };
+    expect(row.version).toBeGreaterThanOrEqual(12);
   });
 });
