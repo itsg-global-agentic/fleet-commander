@@ -507,15 +507,16 @@ export class IssueFetcher {
   }
 
   /**
-   * Returns cached issues for a project. If cache is empty, kicks off a
-   * background fetch and returns an empty array immediately (non-blocking).
+   * Returns cached issues for a project. If cache is missing or was only
+   * partially populated (cachedAt is null), kicks off a background fetch
+   * and returns an empty array immediately (non-blocking).
    * The polling loop or initial fetchAllProjects() will populate the cache.
    * For synchronous access, use getIssuesCached() instead.
    */
   async getIssues(projectId?: number): Promise<IssueNode[]> {
     if (projectId !== undefined) {
       const cached = this.cacheByProject.get(projectId);
-      if (!cached || (cached.issues.length === 0 && !cached.cachedAt)) {
+      if (!cached || !cached.cachedAt) {
         // Fire-and-forget background fetch; return empty immediately
         console.info(`[IssueFetcher] Cache miss for project ${projectId}, triggering background fetch`);
         this.fetchIssueHierarchy(projectId).catch((err) => {

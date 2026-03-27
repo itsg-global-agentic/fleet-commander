@@ -270,4 +270,37 @@ describe('getIssues non-blocking cache miss', () => {
     // actually update the internal cache, we test via getIssuesCached path)
     fetchSpy.mockRestore();
   });
+
+  it('triggers refetch when cache has issues but cachedAt is null (partial failure)', async () => {
+    // Directly populate internal cache with partial data (non-empty issues, null cachedAt)
+    const cache = (fetcher as any).cacheByProject as Map<number, { issues: IssueNode[]; cachedAt: string | null }>;
+    cache.set(1, {
+      issues: [
+        {
+          number: 42,
+          title: 'Partial issue',
+          state: 'open',
+          labels: [],
+          url: 'https://github.com/owner/repo/issues/42',
+          children: [],
+          activeTeam: null,
+        },
+      ],
+      cachedAt: null,
+    });
+
+    const fetchSpy = vi.spyOn(fetcher, 'fetchIssueHierarchy').mockImplementation(
+      () => new Promise(() => {
+        // Never resolves -- simulates a slow fetch
+      })
+    );
+
+    const result = await fetcher.getIssues(1);
+
+    // Should return empty immediately and trigger background refetch
+    expect(result).toEqual([]);
+    expect(fetchSpy).toHaveBeenCalledWith(1);
+
+    fetchSpy.mockRestore();
+  });
 });
