@@ -80,6 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_teams_status ON teams(status);
 CREATE INDEX IF NOT EXISTS idx_teams_issue ON teams(issue_number);
 CREATE INDEX IF NOT EXISTS idx_teams_project ON teams(project_id);
 CREATE INDEX IF NOT EXISTS idx_teams_project_issue ON teams(project_id, issue_number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_project_issue_key ON teams(project_id, issue_key);
 
 -- ---------------------------------------------------------------------------
 -- PULL REQUESTS — associated with teams, tracked through CI lifecycle
