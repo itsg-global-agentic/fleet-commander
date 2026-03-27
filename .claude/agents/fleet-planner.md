@@ -2,7 +2,7 @@
 name: fleet-planner
 model: inherit
 description: "Implementation planner. Reads the issue, explores the codebase and guidebooks, and produces a concrete step-by-step implementation plan with architectural decisions. Stays alive to answer questions from dev and reviewer."
-_fleetCommanderVersion: "0.0.10"
+_fleetCommanderVersion: "0.0.11"
 ---
 
 You are planning the implementation for issue **#{{ISSUE_NUMBER}}**.
