@@ -12,6 +12,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getUsageService } from '../../services/usage-service.js';
+import { ServiceError } from '../../services/service-error.js';
 
 /**
  * Registers the `fleet_get_usage` tool on the given MCP server.
@@ -24,17 +25,27 @@ export function registerGetUsageTool(server: McpServer): void {
     'fleet_get_usage',
     'Get current usage percentages (daily, weekly, sonnet, extra) with zone indicator',
     async () => {
-      const usageService = getUsageService();
-      const usage = usageService.getLatest();
+      try {
+        const usageService = getUsageService();
+        const usage = usageService.getLatest();
 
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify(usage, null, 2),
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(usage, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        if (err instanceof ServiceError) {
+          return {
+            content: [{ type: 'text' as const, text: err.message }],
+            isError: true,
+          };
+        }
+        throw err;
+      }
     },
   );
 }
