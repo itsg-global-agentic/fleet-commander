@@ -721,7 +721,7 @@ export class ProjectService {
         installStatus = checkInstallStatus(p.repoPath);
         _installStatusCache.set(p.repoPath, { status: installStatus, cachedAt: now });
       }
-      return { ...p, installStatus };
+      return { ...p, providerConfig: null, installStatus };
     });
   }
 
@@ -884,6 +884,7 @@ export class ProjectService {
 
     return {
       ...project,
+      providerConfig: project.providerConfig ? '[configured]' : null,
       teamCount: teams.length,
       activeTeamCount: activeCount,
       queuedTeamCount: queuedCount,

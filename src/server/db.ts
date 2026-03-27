@@ -29,6 +29,7 @@ import type {
   MessageEdge,
   TeamTask,
 } from '../shared/types.js';
+import { encrypt, decrypt, isEncrypted, decryptWithKey } from './utils/crypto.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -368,6 +369,9 @@ export class FleetDatabase {
 
     // Update v_team_dashboard view to include issue_key/issue_provider (v11 migration)
     this.migrateToV11();
+
+    // Encrypt existing plaintext provider_config values (v12 migration)
+    this.migrateProviderConfigEncryption();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -838,6 +842,104 @@ export class FleetDatabase {
   }
 
   /**
+   * v12 migration: Encrypt existing plaintext provider_config values and
+   * handle key rotation when FLEET_ENCRYPTION_KEY_OLD is set.
+   *
+   * On first run after upgrade: plaintext values are detected (not matching
+   * encrypted format) and encrypted with the current key.
+   *
+   * On key rotation: if FLEET_ENCRYPTION_KEY_OLD is set, encrypted values are
+   * decrypted with the old key and re-encrypted with the new key.
+   */
+  private migrateProviderConfigEncryption(): void {
+    try {
+      const row = this.db.prepare(
+        'SELECT MAX(version) AS version FROM schema_version'
+      ).get() as { version: number } | undefined;
+      const version = row?.version ?? 0;
+
+      const oldKeyHex = process.env['FLEET_ENCRYPTION_KEY_OLD'] || null;
+
+      // If already at v12 and no key rotation needed, skip
+      if (version >= 12 && !oldKeyHex) return;
+
+      const rows = this.db.prepare(
+        'SELECT id, provider_config FROM projects WHERE provider_config IS NOT NULL'
+      ).all() as Array<{ id: number; provider_config: string }>;
+
+      if (rows.length === 0) {
+        if (version < 12) {
+          this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (12)');
+        }
+        return;
+      }
+
+      // Handle key rotation (old key -> new key)
+      if (oldKeyHex) {
+        if (!/^[0-9a-fA-F]{64}$/.test(oldKeyHex)) {
+          console.warn('[DB] FLEET_ENCRYPTION_KEY_OLD is not valid 64-char hex — skipping key rotation');
+        } else {
+          const oldKey = Buffer.from(oldKeyHex, 'hex');
+          let rotated = 0;
+          for (const r of rows) {
+            if (isEncrypted(r.provider_config)) {
+              try {
+                const plaintext = decryptWithKey(r.provider_config, oldKey);
+                const newCiphertext = encrypt(plaintext);
+                this.db.prepare(
+                  "UPDATE projects SET provider_config = ?, updated_at = datetime('now') WHERE id = ?"
+                ).run(newCiphertext, r.id);
+                rotated++;
+              } catch (err) {
+                console.warn(
+                  `[DB] Key rotation failed for project ${r.id}: ${err instanceof Error ? err.message : String(err)}`
+                );
+              }
+            }
+          }
+          if (rotated > 0) {
+            console.log(`[DB] Key rotation: re-encrypted ${rotated} provider_config value(s)`);
+          }
+        }
+      }
+
+      // Encrypt any remaining plaintext values (first-time migration)
+      let encrypted = 0;
+      // Re-read rows after potential key rotation
+      const currentRows = this.db.prepare(
+        'SELECT id, provider_config FROM projects WHERE provider_config IS NOT NULL'
+      ).all() as Array<{ id: number; provider_config: string }>;
+
+      for (const r of currentRows) {
+        if (!isEncrypted(r.provider_config)) {
+          try {
+            const ciphertext = encrypt(r.provider_config);
+            this.db.prepare(
+              "UPDATE projects SET provider_config = ?, updated_at = datetime('now') WHERE id = ?"
+            ).run(ciphertext, r.id);
+            encrypted++;
+          } catch (err) {
+            console.warn(
+              `[DB] Failed to encrypt provider_config for project ${r.id}: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
+      }
+
+      if (encrypted > 0) {
+        console.log(`[DB] Encrypted ${encrypted} plaintext provider_config value(s)`);
+      }
+
+      if (version < 12) {
+        this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (12)');
+        console.log('[DB] Migrated to v12: provider_config encryption');
+      }
+    } catch {
+      // Tables may not exist yet (fresh database) — schema.sql will create them
+    }
+  }
+
+  /**
    * Migrate any projects with status 'paused' to 'active'.
    * The paused status was removed in issue #228.
    */
@@ -875,7 +977,7 @@ export class FleetDatabase {
       model: data.model ?? null,
       issueProvider: data.issueProvider ?? 'github',
       projectKey: data.projectKey ?? null,
-      providerConfig: data.providerConfig ?? null,
+      providerConfig: data.providerConfig ? encrypt(data.providerConfig) : null,
       createdAt: now,
       updatedAt: now,
     });
@@ -979,7 +1081,7 @@ export class FleetDatabase {
     }
     if (fields.providerConfig !== undefined) {
       setClauses.push('provider_config = @providerConfig');
-      params.providerConfig = fields.providerConfig;
+      params.providerConfig = fields.providerConfig ? encrypt(fields.providerConfig) : fields.providerConfig;
     }
 
     if (setClauses.length === 0) return this.getProject(id);
@@ -2404,6 +2506,17 @@ export class FleetDatabase {
   // -------------------------------------------------------------------------
 
   private mapProjectRow(row: Record<string, unknown>): Project {
+    const rawConfig = (row.provider_config as string | null) ?? null;
+    let providerConfig: string | null = null;
+    if (rawConfig) {
+      try {
+        providerConfig = isEncrypted(rawConfig) ? decrypt(rawConfig) : rawConfig;
+      } catch (err) {
+        console.warn(`[DB] Failed to decrypt provider_config for project ${row.id}: ${err instanceof Error ? err.message : String(err)}`);
+        providerConfig = null;
+      }
+    }
+
     return {
       id: row.id as number,
       name: row.name as string,
@@ -2417,7 +2530,7 @@ export class FleetDatabase {
       model: (row.model as string | null) ?? null,
       issueProvider: (row.issue_provider as string | null) ?? 'github',
       projectKey: (row.project_key as string | null) ?? null,
-      providerConfig: (row.provider_config as string | null) ?? null,
+      providerConfig,
       createdAt: utcify(row.created_at as string),
       updatedAt: utcify(row.updated_at as string),
     };

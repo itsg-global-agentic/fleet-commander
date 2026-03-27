@@ -178,6 +178,12 @@ const config = Object.freeze({
 
   /** Root directory for filesystem browsing. Defaults to user home dir. */
   browseRoot: path.resolve(process.env['FLEET_BROWSE_ROOT'] || os.homedir()),
+
+  /** Hex-encoded 32-byte encryption key for provider credentials. Auto-generated if not set. */
+  encryptionKey: process.env['FLEET_ENCRYPTION_KEY'] || null,
+
+  /** Previous encryption key (hex) for key rotation. Set alongside FLEET_ENCRYPTION_KEY to re-encrypt. */
+  encryptionKeyOld: process.env['FLEET_ENCRYPTION_KEY_OLD'] || null,
 });
 
 // Ensure the database directory exists before any DB access
