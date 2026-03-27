@@ -20,6 +20,7 @@ import { sseBroker } from './sse-broker.js';
 import type { StreamEvent } from './sse-broker.js';
 import { spawnHeadless, spawnInteractive } from '../utils/cc-spawn.js';
 import type { Team, Project } from '../../shared/types.js';
+import { sanitizeIssueKeyForPath } from '../../shared/issue-provider.js';
 import { getUsageZone } from './usage-tracker.js';
 import { resolveMessage } from '../utils/resolve-message.js';
 import { CircularBuffer } from '../utils/circular-buffer.js';
@@ -197,6 +198,7 @@ export class TeamManager {
     prompt?: string,
     headless?: boolean,
     force?: boolean,
+    issueKey?: string,
   ): Promise<Team> {
     const db = getDatabase();
 
@@ -206,23 +208,28 @@ export class TeamManager {
       throw new Error(`Project ${projectId} not found`);
     }
 
-    console.log(`[TeamManager] Launch started: project=${project.name} issue=#${issueNumber}`);
+    // Derive issueKey from issueNumber if not provided
+    const effectiveIssueKey = issueKey ?? String(issueNumber);
+    // Derive issueProvider from project or default to 'github'
+    const issueProvider = project.issueProvider ?? 'github';
+
+    console.log(`[TeamManager] Launch started: project=${project.name} issue=${effectiveIssueKey}`);
 
     // Usage gate: if in red zone and not forced, queue instead of launching
     if (!force && getUsageZone() === 'red') {
-      console.log(`[TeamManager] Usage zone is RED — queueing team for issue #${issueNumber}`);
-      return this.queueTeam(db, project, projectId, issueNumber, issueTitle, headless, prompt);
+      console.log(`[TeamManager] Usage zone is RED — queueing team for issue ${effectiveIssueKey}`);
+      return this.queueTeam(db, project, projectId, issueNumber, issueTitle, headless, prompt, effectiveIssueKey);
     }
 
     // Check active team limit before proceeding
     const activeCount = db.getActiveTeamCountByProject(projectId);
     if (activeCount >= project.maxActiveTeams) {
       // Queue this team instead of launching
-      return this.queueTeam(db, project, projectId, issueNumber, issueTitle, headless, prompt);
+      return this.queueTeam(db, project, projectId, issueNumber, issueTitle, headless, prompt, effectiveIssueKey);
     }
 
-    // If no title provided, fetch from GitHub
-    if (!issueTitle && project.githubRepo && isValidGithubRepo(project.githubRepo)) {
+    // If no title provided, fetch from GitHub (only for GitHub provider)
+    if (!issueTitle && issueProvider === 'github' && project.githubRepo && isValidGithubRepo(project.githubRepo)) {
       try {
         const { stdout } = await execAsync(
           `gh issue view ${issueNumber} --repo "${project.githubRepo}" --json title --jq .title`,
@@ -235,16 +242,16 @@ export class TeamManager {
         }
       } catch {
         // GitHub fetch failed, use fallback
-        issueTitle = `Issue #${issueNumber}`;
+        issueTitle = `Issue ${effectiveIssueKey}`;
         console.log(`[TeamManager] GitHub title fetch failed, using fallback: "${issueTitle}"`);
       }
     } else if (!issueTitle) {
-      issueTitle = `Issue #${issueNumber}`;
+      issueTitle = `Issue ${effectiveIssueKey}`;
     }
 
     // Derive worktree naming from project
     const { worktreeName, branchName, worktreeRelPath, worktreeAbsPath } =
-      this.deriveWorktreeNames(project, issueNumber);
+      this.deriveWorktreeNames(project, issueNumber, effectiveIssueKey);
 
     // Check if a team already exists for this worktree name
     const existing = db.getTeamByWorktree(worktreeName);
@@ -252,10 +259,10 @@ export class TeamManager {
 
     if (existing) {
       if (['running', 'launching', 'idle', 'stuck', 'queued'].includes(existing.status)) {
-        throw new Error(`Team already active for issue ${issueNumber} (status: ${existing.status})`);
+        throw new Error(`Team already active for issue ${effectiveIssueKey} (status: ${existing.status})`);
       }
       if (existing.status === 'done') {
-        throw new Error(`Team already completed for issue ${issueNumber} — completed teams cannot be relaunched`);
+        throw new Error(`Team already completed for issue ${effectiveIssueKey} — completed teams cannot be relaunched`);
       }
       // Terminal state (failed) — reuse the existing team record
       relaunchTeamId = existing.id;
@@ -296,6 +303,8 @@ export class TeamManager {
         projectId,
         issueNumber,
         issueTitle: issueTitle ?? null,
+        issueKey: effectiveIssueKey,
+        issueProvider,
         worktreeName,
         branchName,
         status: 'queued',
@@ -344,7 +353,7 @@ export class TeamManager {
     this.copyFCFiles(worktreeAbsPath);
 
     // ── Step 4: Spawn Claude Code process ──
-    const resolvedPrompt = prompt || this.resolvePromptFromFile(project, issueNumber);
+    const resolvedPrompt = prompt || this.resolvePromptFromFile(project, effectiveIssueKey);
     const isHeadless = headless !== false;
 
     if (!isHeadless && process.platform === 'win32') {
@@ -388,7 +397,7 @@ export class TeamManager {
 
     sseBroker.broadcast(
       'team_launched',
-      { team_id: team.id, issue_number: issueNumber, project_id: projectId },
+      { team_id: team.id, issue_number: issueNumber, issue_key: effectiveIssueKey, project_id: projectId },
       team.id,
     );
 
@@ -593,7 +602,7 @@ export class TeamManager {
 
     sseBroker.broadcast(
       'team_launched',
-      { team_id: teamId, issue_number: team.issueNumber },
+      { team_id: teamId, issue_number: team.issueNumber, issue_key: team.issueKey ?? String(team.issueNumber) },
       teamId,
     );
 
@@ -723,9 +732,13 @@ export class TeamManager {
     issueTitle?: string,
     headless?: boolean,
     prompt?: string,
+    issueKey?: string,
   ): Promise<Team> {
-    // Fetch title from GitHub if needed
-    if (!issueTitle && project.githubRepo && isValidGithubRepo(project.githubRepo)) {
+    const effectiveIssueKey = issueKey ?? String(issueNumber);
+    const issueProvider = project.issueProvider ?? 'github';
+
+    // Fetch title from GitHub if needed (only for GitHub provider)
+    if (!issueTitle && issueProvider === 'github' && project.githubRepo && isValidGithubRepo(project.githubRepo)) {
       try {
         const { stdout } = await execAsync(
           `gh issue view ${issueNumber} --repo "${project.githubRepo}" --json title --jq .title`,
@@ -734,22 +747,22 @@ export class TeamManager {
         const result = stdout.trim();
         if (result) issueTitle = result;
       } catch {
-        issueTitle = `Issue #${issueNumber}`;
+        issueTitle = `Issue ${effectiveIssueKey}`;
       }
     } else if (!issueTitle) {
-      issueTitle = `Issue #${issueNumber}`;
+      issueTitle = `Issue ${effectiveIssueKey}`;
     }
 
-    const { worktreeName, branchName } = this.deriveWorktreeNames(project, issueNumber);
+    const { worktreeName, branchName } = this.deriveWorktreeNames(project, issueNumber, effectiveIssueKey);
 
     // Check for existing team
     const existing = db.getTeamByWorktree(worktreeName);
     if (existing) {
       if (['running', 'launching', 'idle', 'stuck', 'queued'].includes(existing.status)) {
-        throw new Error(`Team already active for issue ${issueNumber} (status: ${existing.status})`);
+        throw new Error(`Team already active for issue ${effectiveIssueKey} (status: ${existing.status})`);
       }
       if (existing.status === 'done') {
-        throw new Error(`Team already completed for issue ${issueNumber} — completed teams cannot be relaunched`);
+        throw new Error(`Team already completed for issue ${effectiveIssueKey} — completed teams cannot be relaunched`);
       }
       // Terminal state (failed) — reuse the existing team record as queued
       const now = new Date().toISOString();
@@ -785,6 +798,8 @@ export class TeamManager {
       projectId,
       issueNumber,
       issueTitle: issueTitle ?? null,
+      issueKey: effectiveIssueKey,
+      issueProvider,
       worktreeName,
       branchName,
       status: 'queued',
@@ -826,6 +841,7 @@ export class TeamManager {
     issueTitle?: string,
     headless?: boolean,
     prompt?: string,
+    issueKey?: string,
   ): Promise<Team> {
     const db = getDatabase();
     const project = db.getProject(projectId);
@@ -833,8 +849,11 @@ export class TeamManager {
       throw new Error(`Project ${projectId} not found`);
     }
 
-    // Fetch title from GitHub if needed
-    if (!issueTitle && project.githubRepo && isValidGithubRepo(project.githubRepo)) {
+    const effectiveIssueKey = issueKey ?? String(issueNumber);
+    const issueProvider = project.issueProvider ?? 'github';
+
+    // Fetch title from GitHub if needed (only for GitHub provider)
+    if (!issueTitle && issueProvider === 'github' && project.githubRepo && isValidGithubRepo(project.githubRepo)) {
       try {
         const { stdout } = await execAsync(
           `gh issue view ${issueNumber} --repo "${project.githubRepo}" --json title --jq .title`,
@@ -843,23 +862,23 @@ export class TeamManager {
         const result = stdout.trim();
         if (result) issueTitle = result;
       } catch {
-        issueTitle = `Issue #${issueNumber}`;
+        issueTitle = `Issue ${effectiveIssueKey}`;
       }
     } else if (!issueTitle) {
-      issueTitle = `Issue #${issueNumber}`;
+      issueTitle = `Issue ${effectiveIssueKey}`;
     }
 
-    const { worktreeName, branchName } = this.deriveWorktreeNames(project, issueNumber);
+    const { worktreeName, branchName } = this.deriveWorktreeNames(project, issueNumber, effectiveIssueKey);
     const blockedByJson = JSON.stringify(blockerNumbers);
 
     // Check for existing team
     const existing = db.getTeamByWorktree(worktreeName);
     if (existing) {
       if (['running', 'launching', 'idle', 'stuck', 'queued'].includes(existing.status)) {
-        throw new Error(`Team already active for issue ${issueNumber} (status: ${existing.status})`);
+        throw new Error(`Team already active for issue ${effectiveIssueKey} (status: ${existing.status})`);
       }
       if (existing.status === 'done') {
-        throw new Error(`Team already completed for issue ${issueNumber} — completed teams cannot be relaunched`);
+        throw new Error(`Team already completed for issue ${effectiveIssueKey} — completed teams cannot be relaunched`);
       }
       // Terminal state (failed) — reuse the existing team record as queued
       const now = new Date().toISOString();
@@ -895,6 +914,8 @@ export class TeamManager {
       projectId,
       issueNumber,
       issueTitle: issueTitle ?? null,
+      issueKey: effectiveIssueKey,
+      issueProvider,
       worktreeName,
       branchName,
       status: 'queued',
@@ -1218,7 +1239,8 @@ export class TeamManager {
     this.copyFCFiles(worktreeAbsPath);
 
     // ── Step 3: Spawn Claude Code ──
-    const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, team.issueNumber);
+    const effectiveIssueKey = team.issueKey ?? String(team.issueNumber);
+    const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, effectiveIssueKey);
     const isHeadless = team.headless;
 
     if (!isHeadless && process.platform === 'win32') {
@@ -1262,7 +1284,7 @@ export class TeamManager {
 
     sseBroker.broadcast(
       'team_launched',
-      { team_id: team.id, issue_number: team.issueNumber, project_id: projectId },
+      { team_id: team.id, issue_number: team.issueNumber, issue_key: effectiveIssueKey, project_id: projectId },
       team.id,
     );
   }
@@ -1519,15 +1541,18 @@ export class TeamManager {
 
   /**
    * Read the project's prompt file and replace {{ISSUE_NUMBER}} placeholder.
+   * Accepts issueKey (string) which replaces the placeholder even for non-numeric keys.
    * Fallback chain: project prompt file > prompts/default-prompt.md > hardcoded default.
    */
-  private resolvePromptFromFile(project: Project, issueNumber: number): string {
+  private resolvePromptFromFile(project: Project, issueKey: string): string {
     if (project.promptFile) {
       const absPath = path.join(config.fleetCommanderRoot, project.promptFile);
       if (fs.existsSync(absPath)) {
         try {
           const template = fs.readFileSync(absPath, 'utf-8');
-          const resolved = template.replace(/\{\{ISSUE_NUMBER\}\}/g, String(issueNumber));
+          const resolved = template
+            .replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey)
+            .replace(/\{\{ISSUE_KEY\}\}/g, issueKey);
           console.log(`[TeamManager] Resolved prompt from file: ${project.promptFile}`);
           return resolved;
         } catch (err: unknown) {
@@ -1543,7 +1568,9 @@ export class TeamManager {
     if (fs.existsSync(defaultPath)) {
       try {
         const template = fs.readFileSync(defaultPath, 'utf-8');
-        const resolved = template.replace(/\{\{ISSUE_NUMBER\}\}/g, String(issueNumber));
+        const resolved = template
+          .replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey)
+          .replace(/\{\{ISSUE_KEY\}\}/g, issueKey);
         console.log(`[TeamManager] Resolved prompt from default: prompts/default-prompt.md`);
         return resolved;
       } catch {
@@ -1552,7 +1579,7 @@ export class TeamManager {
     }
 
     // Hardcoded fallback (should not normally be reached)
-    const fallback = `Read the ENTIRE file .claude/prompts/fleet-workflow.md before taking any actions.\nYou are the TL. There is NO coordinator — you orchestrate the Diamond team directly.\nPhase 0: Spawn fleet-planner. Wait for plan. Phase 1: Spawn fleet-dev WITH the planner's plan. Wait for ready. Phase 2: Spawn fleet-reviewer. Dev and reviewer communicate p2p. Planner stays alive for p2p questions.\nIssue: #${issueNumber}`;
+    const fallback = `Read the ENTIRE file .claude/prompts/fleet-workflow.md before taking any actions.\nYou are the TL. There is NO coordinator — you orchestrate the Diamond team directly.\nPhase 0: Spawn fleet-planner. Wait for plan. Phase 1: Spawn fleet-dev WITH the planner's plan. Wait for ready. Phase 2: Spawn fleet-reviewer. Dev and reviewer communicate p2p. Planner stays alive for p2p questions.\nIssue: #${issueKey}`;
     console.log(`[TeamManager] Using hardcoded fallback prompt`);
     return fallback;
   }
@@ -1563,7 +1590,7 @@ export class TeamManager {
 
   async launchBatch(
     projectId: number,
-    issues: Array<{ number: number; title?: string }>,
+    issues: Array<{ number: number; title?: string; issueKey?: string }>,
     prompt?: string,
     delayMs?: number,
     headless?: boolean,
@@ -1574,13 +1601,14 @@ export class TeamManager {
     for (let i = 0; i < issues.length; i++) {
       const issue = issues[i]!;
       try {
-        const team = await this.launch(projectId, issue.number, issue.title, prompt, headless);
+        const team = await this.launch(projectId, issue.number, issue.title, prompt, headless, undefined, issue.issueKey);
         results.push(team);
       } catch (err: unknown) {
         // Log error and continue — don't stop the batch
         const msg = err instanceof Error ? err.message : String(err);
+        const displayKey = issue.issueKey ?? `#${issue.number}`;
         console.error(
-          `[TeamManager] Batch launch failed at issue #${issue.number} (${i + 1}/${issues.length}): ${msg}`,
+          `[TeamManager] Batch launch failed at issue ${displayKey} (${i + 1}/${issues.length}): ${msg}`,
         );
       }
 
@@ -1630,7 +1658,7 @@ export class TeamManager {
 
     sseBroker.broadcast(
       'team_launched',
-      { team_id: team.id, issue_number: team.issueNumber, project_id: team.projectId! },
+      { team_id: team.id, issue_number: team.issueNumber, issue_key: team.issueKey ?? String(team.issueNumber), project_id: team.projectId! },
       team.id,
     );
   }
@@ -1887,9 +1915,11 @@ export class TeamManager {
   }
 
   /**
-   * Derive worktree naming from a project and issue number.
+   * Derive worktree naming from a project and issue identifier.
+   * Accepts either issueKey (string, preferred) or issueNumber (number, backward compat).
+   * For non-numeric keys like "PROJ-123", sanitizeIssueKeyForPath produces "proj-123".
    */
-  private deriveWorktreeNames(project: Project, issueNumber: number): {
+  private deriveWorktreeNames(project: Project, issueNumber: number, issueKey?: string): {
     slug: string;
     worktreeName: string;
     branchName: string;
@@ -1897,8 +1927,9 @@ export class TeamManager {
     worktreeAbsPath: string;
   } {
     const slug = project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const worktreeName = `${slug}-${issueNumber}`;
-    const branchName = `worktree-${slug}-${issueNumber}`;
+    const sanitizedKey = issueKey ? sanitizeIssueKeyForPath(issueKey) : String(issueNumber);
+    const worktreeName = `${slug}-${sanitizedKey}`;
+    const branchName = `worktree-${slug}-${sanitizedKey}`;
     const worktreeRelPath = path.posix.join(config.worktreeDir, worktreeName);
     const worktreeAbsPath = path.join(project.repoPath, config.worktreeDir, worktreeName);
     return { slug, worktreeName, branchName, worktreeRelPath, worktreeAbsPath };

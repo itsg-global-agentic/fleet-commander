@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS teams (
 CREATE INDEX IF NOT EXISTS idx_teams_status ON teams(status);
 CREATE INDEX IF NOT EXISTS idx_teams_issue ON teams(issue_number);
 CREATE INDEX IF NOT EXISTS idx_teams_project ON teams(project_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_project_issue ON teams(project_id, issue_number);
+CREATE INDEX IF NOT EXISTS idx_teams_project_issue ON teams(project_id, issue_number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_project_issue_key ON teams(project_id, issue_key);
 
 -- ---------------------------------------------------------------------------
 -- PULL REQUESTS — associated with teams, tracked through CI lifecycle
@@ -145,10 +146,13 @@ SELECT
   t.id,
   t.issue_number,
   t.issue_title,
+  t.issue_key,
+  t.issue_provider,
   t.project_id,
   p.name AS project_name,
   p.model AS model,
   p.github_repo AS github_repo,
+  p.issue_provider AS project_issue_provider,
   t.status,
   t.phase,
   t.worktree_name,
@@ -294,4 +298,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_tasks_team_task ON team_tasks(team_id
 CREATE INDEX IF NOT EXISTS idx_team_tasks_team ON team_tasks(team_id);
 
 -- Insert schema version 9 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (10);
+INSERT OR IGNORE INTO schema_version (version) VALUES (11);

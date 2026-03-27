@@ -87,6 +87,7 @@ function deriveRole(name: string): string {
 export interface TeamFilter {
   status?: TeamStatus;
   issueNumber?: number;
+  issueKey?: string;
   projectId?: number;
   limit?: number;
   offset?: number;
@@ -364,6 +365,9 @@ export class FleetDatabase {
 
     // Add issue provider columns to projects and teams (v10 migration)
     this.addIssueProviderColumns();
+
+    // Update v_team_dashboard view to include issue_key/issue_provider (v11 migration)
+    this.migrateToV11();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -798,6 +802,42 @@ export class FleetDatabase {
   }
 
   /**
+   * v11 migration: Recreate v_team_dashboard view to include issue_key,
+   * issue_provider, and project_issue_provider columns.
+   * Also adds UNIQUE index on (project_id, issue_key).
+   */
+  private migrateToV11(): void {
+    try {
+      const row = this.db.prepare(
+        'SELECT MAX(version) AS version FROM schema_version'
+      ).get() as { version: number } | undefined;
+      const version = row?.version ?? 0;
+      if (version >= 11) return; // Already migrated
+
+      // Recreate the view (will be done again by schema.sql, but ensure order)
+      this.db.exec('DROP VIEW IF EXISTS v_team_dashboard');
+
+      // Drop the old UNIQUE index on (project_id, issue_number) — non-numeric
+      // issue keys (e.g. Jira PROJ-123) all map to issueNumber=0, which would
+      // violate the UNIQUE constraint. The new idx_teams_project_issue_key index
+      // (on issue_key) replaces its purpose.
+      this.db.exec('DROP INDEX IF EXISTS idx_teams_project_issue');
+
+      // Add UNIQUE index on (project_id, issue_key) for non-numeric key support
+      // First, check if issue_key column exists (it should from v10)
+      const teamCols = this.db.prepare("PRAGMA table_info(teams)").all() as Array<{ name: string }>;
+      if (teamCols.some(c => c.name === 'issue_key')) {
+        this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_project_issue_key ON teams(project_id, issue_key)');
+      }
+
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (11)');
+      console.log('[DB] Migrated to v11: v_team_dashboard view updated with issue_key/issue_provider');
+    } catch {
+      // Tables may not exist yet (fresh database) — schema.sql will create them
+    }
+  }
+
+  /**
    * Migrate any projects with status 'paused' to 'active'.
    * The paused status was removed in issue #228.
    */
@@ -1094,6 +1134,10 @@ export class FleetDatabase {
       conditions.push('issue_number = @issueNumber');
       params.issueNumber = filter.issueNumber;
     }
+    if (filter?.issueKey) {
+      conditions.push('issue_key = @issueKey');
+      params.issueKey = filter.issueKey;
+    }
     if (filter?.projectId) {
       conditions.push('project_id = @projectId');
       params.projectId = filter.projectId;
@@ -1130,6 +1174,10 @@ export class FleetDatabase {
     if (filter?.issueNumber) {
       conditions.push('issue_number = @issueNumber');
       params.issueNumber = filter.issueNumber;
+    }
+    if (filter?.issueKey) {
+      conditions.push('issue_key = @issueKey');
+      params.issueKey = filter.issueKey;
     }
     if (filter?.projectId) {
       conditions.push('project_id = @projectId');
@@ -2479,6 +2527,8 @@ export class FleetDatabase {
       id: row.id as number,
       issueNumber: row.issue_number as number,
       issueTitle: row.issue_title as string | null,
+      issueKey: (row.issue_key as string | null) ?? null,
+      issueProvider: (row.issue_provider as string | null) ?? (row.project_issue_provider as string | null) ?? null,
       projectId: (row.project_id as number | null) ?? null,
       projectName: (row.project_name as string | null) ?? null,
       model: (row.model as string | null) ?? null,

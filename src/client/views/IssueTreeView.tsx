@@ -215,6 +215,7 @@ export function IssueTreeView() {
     try {
       await api.post('teams/launch', {
         issueNumber,
+        issueKey: String(issueNumber),
         issueTitle: title,
         projectId: resolvedProjectId,
       });
@@ -291,6 +292,7 @@ export function IssueTreeView() {
     try {
       await api.post('teams/launch', {
         issueNumber,
+        issueKey: String(issueNumber),
         issueTitle: title,
         projectId,
         force: true,
@@ -339,6 +341,7 @@ export function IssueTreeView() {
     try {
       await api.post('teams/launch', {
         issueNumber,
+        issueKey: String(issueNumber),
         issueTitle: title,
         projectId,
         queue: true,

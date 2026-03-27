@@ -233,7 +233,7 @@ describe('TeamService.launchTeam', () => {
     const result = await service.launchTeam({ projectId: 1, issueNumber: 42 });
 
     expect(result).toEqual({ id: 99, status: 'launching' });
-    expect(mockLaunch).toHaveBeenCalledWith(1, 42, undefined, undefined, undefined, undefined);
+    expect(mockLaunch).toHaveBeenCalledWith(1, 42, undefined, undefined, undefined, undefined, undefined);
   });
 });
 
@@ -346,7 +346,7 @@ describe('TeamService.launchBatch', () => {
 
     // queueTeamWithBlockers should be called for the blocked issue
     expect(mockQueueTeamWithBlockers).toHaveBeenCalledWith(
-      1, 11, [5], 'Blocked issue', undefined, undefined,
+      1, 11, [5], 'Blocked issue', undefined, undefined, undefined,
     );
   });
 

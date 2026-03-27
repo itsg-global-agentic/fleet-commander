@@ -162,6 +162,43 @@ export interface IssueProvider {
 // Type Guards
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Display & Path Utilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Format an issue key for display based on the provider.
+ * GitHub (or null/default): "#42"
+ * Other providers (jira, linear): "PROJ-123" unchanged
+ */
+export function formatIssueKey(issueKey: string, issueProvider: string | null): string {
+  if (!issueProvider || issueProvider === 'github') {
+    return `#${issueKey}`;
+  }
+  return issueKey;
+}
+
+/**
+ * Sanitize an issue key for use in filesystem paths (worktree names, branches).
+ * Lowercases and replaces non-alphanumeric characters (except hyphens) with "-",
+ * then trims leading/trailing hyphens.
+ *
+ * Examples:
+ *   "PROJ-123" -> "proj-123"
+ *   "42"       -> "42"
+ *   "ENG_456"  -> "eng-456"
+ */
+export function sanitizeIssueKeyForPath(issueKey: string): string {
+  return issueKey
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// ---------------------------------------------------------------------------
+// Type Guards
+// ---------------------------------------------------------------------------
+
 /** Check if a value is a valid NormalizedStatus. */
 export function isNormalizedStatus(value: unknown): value is NormalizedStatus {
   return typeof value === 'string' && NORMALIZED_STATUSES.has(value);

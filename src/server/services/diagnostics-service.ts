@@ -24,6 +24,7 @@ export interface BlockedTeam {
   teamId: number;
   worktreeName: string;
   issueNumber: number;
+  issueKey: string | null;
   issueTitle: string | null;
   status: string;
   phase: string;
@@ -75,6 +76,7 @@ export class DiagnosticsService {
           teamId: team.id,
           worktreeName: team.worktreeName,
           issueNumber: team.issueNumber,
+          issueKey: team.issueKey,
           issueTitle: team.issueTitle,
           status: team.status,
           phase: team.phase,

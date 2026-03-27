@@ -25,6 +25,7 @@ import type { TeamPhase } from '../../shared/types.js';
 interface LaunchBody {
   projectId: number;
   issueNumber: number;
+  issueKey?: string;
   issueTitle?: string;
   prompt?: string;
   headless?: boolean;
@@ -34,7 +35,7 @@ interface LaunchBody {
 
 interface LaunchBatchBody {
   projectId: number;
-  issues: Array<{ number: number; title?: string }>;
+  issues: Array<{ number: number; title?: string; issueKey?: string }>;
   prompt?: string;
   delayMs?: number;
   headless?: boolean;

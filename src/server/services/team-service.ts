@@ -18,6 +18,7 @@ import type { TeamPhase, IssueDependencyInfo, PaginatedResponse, TeamDashboardRo
 import { buildTimeline } from '../utils/build-timeline.js';
 import { ServiceError, validationError, notFoundError, conflictError, projectNotReadyError } from './service-error.js';
 import { getProjectService } from './project-service.js';
+import { formatIssueKey } from '../../shared/issue-provider.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -66,20 +67,22 @@ export class TeamService {
   async launchTeam(params: {
     projectId: number;
     issueNumber: number;
+    issueKey?: string;
     issueTitle?: string;
     prompt?: string;
     headless?: boolean;
     force?: boolean;
     queue?: boolean;
   }): Promise<unknown> {
-    const { projectId, issueNumber, issueTitle, prompt, headless, force, queue } = params;
+    const { projectId, issueNumber, issueKey, issueTitle, prompt, headless, force, queue } = params;
 
     if (!projectId || typeof projectId !== 'number' || projectId < 1) {
       throw validationError('projectId is required and must be a positive integer');
     }
 
-    if (!issueNumber || typeof issueNumber !== 'number' || issueNumber < 1) {
-      throw validationError('issueNumber is required and must be a positive integer');
+    // issueKey takes precedence; issueNumber required only when issueKey is absent
+    if (!issueKey && (!issueNumber || typeof issueNumber !== 'number' || issueNumber < 1)) {
+      throw validationError('issueNumber is required (and must be a positive integer) when issueKey is not provided');
     }
 
     // Project readiness check -- block launch if install health checks fail
@@ -94,7 +97,7 @@ export class TeamService {
     }
 
     // Dependency check -- block launch if unresolved dependencies exist
-    if (!force) {
+    if (!force && issueNumber > 0) {
       const depInfo = await checkDependencies(projectId, issueNumber);
       if (depInfo && !depInfo.resolved) {
         const blockerNumbers = depInfo.blockedBy
@@ -106,14 +109,15 @@ export class TeamService {
           githubPoller.trackBlockedIssue(projectId, issueNumber, blockerNumbers);
           const manager = getTeamManager();
           return await manager.queueTeamWithBlockers(
-            projectId, issueNumber, blockerNumbers, issueTitle, headless, prompt,
+            projectId, issueNumber, blockerNumbers, issueTitle, headless, prompt, issueKey,
           );
         }
 
         githubPoller.trackBlockedIssue(projectId, issueNumber, blockerNumbers);
 
+        const displayKey = issueKey ?? `#${issueNumber}`;
         throw new ServiceError(
-          `Issue #${issueNumber} is blocked by ${depInfo.openCount} unresolved dependency${depInfo.openCount !== 1 ? 'ies' : ''}`,
+          `Issue ${displayKey} is blocked by ${depInfo.openCount} unresolved dependency${depInfo.openCount !== 1 ? 'ies' : ''}`,
           'BLOCKED_BY_DEPENDENCIES',
           409,
         );
@@ -122,7 +126,7 @@ export class TeamService {
 
     // If queue was requested but no dependencies exist, just launch normally
     const manager = getTeamManager();
-    return await manager.launch(projectId, issueNumber, issueTitle, prompt, headless, force);
+    return await manager.launch(projectId, issueNumber, issueTitle, prompt, headless, force, issueKey);
   }
 
   /**
@@ -137,7 +141,7 @@ export class TeamService {
    */
   async launchBatch(params: {
     projectId: number;
-    issues: Array<{ number: number; title?: string }>;
+    issues: Array<{ number: number; title?: string; issueKey?: string }>;
     prompt?: string;
     delayMs?: number;
     headless?: boolean;
@@ -168,8 +172,8 @@ export class TeamService {
     }
 
     // Dependency check for batch launch — separate launchable from queueable
-    const launchable: Array<{ number: number; title?: string }> = [];
-    const queueable: Array<{ issue: { number: number; title?: string }; blockerNumbers: number[] }> = [];
+    const launchable: Array<{ number: number; title?: string; issueKey?: string }> = [];
+    const queueable: Array<{ issue: { number: number; title?: string; issueKey?: string }; blockerNumbers: number[] }> = [];
 
     for (const issue of issues) {
       const depInfo = await checkDependencies(projectId, issue.number);
@@ -205,7 +209,7 @@ export class TeamService {
         try {
           githubPoller.trackBlockedIssue(projectId, issue.number, blockerNumbers);
           const team = await manager.queueTeamWithBlockers(
-            projectId, issue.number, blockerNumbers, issue.title, headless, prompt,
+            projectId, issue.number, blockerNumbers, issue.title, headless, prompt, issue.issueKey,
           );
           queued.push({ issueNumber: issue.number, team, blockedBy: blockerNumbers });
         } catch (err: unknown) {
@@ -305,6 +309,8 @@ export class TeamService {
       id: team.id,
       issueNumber: team.issueNumber,
       issueTitle: team.issueTitle,
+      issueKey: team.issueKey,
+      issueProvider: team.issueProvider,
       model: projectModel,
       githubRepo: projectGithubRepo,
       status: team.status,
@@ -359,6 +365,8 @@ export class TeamService {
     return {
       id: team.id,
       issueNumber: team.issueNumber,
+      issueKey: team.issueKey,
+      issueProvider: team.issueProvider,
       worktreeName: team.worktreeName,
       status: team.status,
       phase: team.phase,
@@ -418,7 +426,7 @@ export class TeamService {
 
     if (format === 'txt') {
       let text = `# Team ${team.worktreeName} - Export\n`;
-      text += `Issue: #${team.issueNumber} ${team.issueTitle ?? ''}\n`;
+      text += `Issue: ${formatIssueKey(team.issueKey ?? String(team.issueNumber), team.issueProvider)} ${team.issueTitle ?? ''}\n`;
       text += `Status: ${team.status}\n`;
       text += `Launched: ${team.launchedAt ?? 'N/A'}\n\n`;
       text += `## Stream Events\n`;

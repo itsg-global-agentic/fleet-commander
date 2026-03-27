@@ -17,22 +17,34 @@ import { ServiceError } from '../../services/service-error.js';
 /**
  * Registers the `fleet_launch_team` tool on the given MCP server.
  *
- * This tool launches a new agent team for a GitHub issue within a project.
+ * This tool launches a new agent team for an issue within a project.
+ * Accepts either issueNumber (GitHub) or issueKey (any provider).
+ * When issueKey is provided, it takes precedence over issueNumber.
  */
 export function registerLaunchTeamTool(server: McpServer): void {
   server.tool(
     'fleet_launch_team',
-    'Launches a new agent team for a GitHub issue within a project',
+    'Launches a new agent team for an issue within a project. Supports GitHub issue numbers and generic issue keys (e.g. Jira PROJ-123).',
     {
       projectId: z.number().describe('Numeric ID of the project to launch the team in'),
-      issueNumber: z.number().describe('GitHub issue number to assign the team to'),
+      issueNumber: z.number().optional().describe('Issue number (required for GitHub, optional when issueKey is provided)'),
+      issueKey: z.string().optional().describe('Universal issue key (e.g. "42" for GitHub, "PROJ-123" for Jira). Takes precedence over issueNumber.'),
       headless: z.boolean().optional().describe('Run without a visible terminal window'),
       force: z.boolean().optional().describe('Bypass dependency checks and force launch'),
     },
-    async ({ projectId, issueNumber, headless, force }) => {
+    async ({ projectId, issueNumber, issueKey, headless, force }) => {
       try {
+        // Derive issueNumber from issueKey if not provided
+        const effectiveIssueNumber = issueNumber ?? (issueKey ? parseInt(issueKey, 10) || 0 : 0);
+        if (!effectiveIssueNumber && !issueKey) {
+          return {
+            content: [{ type: 'text' as const, text: 'Either issueNumber or issueKey must be provided' }],
+            isError: true,
+          };
+        }
+
         const service = getTeamService();
-        const result = await service.launchTeam({ projectId, issueNumber, headless, force });
+        const result = await service.launchTeam({ projectId, issueNumber: effectiveIssueNumber, issueKey, headless, force });
 
         return {
           content: [

@@ -172,7 +172,7 @@ export function getCleanupPreview(projectId: number, resetTeams: boolean = false
     for (const team of teams) {
       items.push({
         type: 'team_record',
-        name: `Team #${team.issueNumber} (${team.worktreeName}) \u2014 ${team.status}`,
+        name: `Team ${team.issueKey ?? '#' + team.issueNumber} (${team.worktreeName}) \u2014 ${team.status}`,
         path: `db:teams:${team.id}`,
         reason: `Database record (status: ${team.status})`,
       });

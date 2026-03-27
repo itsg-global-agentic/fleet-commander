@@ -212,7 +212,8 @@ class StuckDetector {
           // When a team transitions to stuck, send a nudge message to the TL
           if (newStatus === 'stuck') {
             const msg = resolveMessage('stuck_nudge', {
-              ISSUE_NUMBER: String(team.issueNumber),
+              ISSUE_NUMBER: team.issueKey ?? String(team.issueNumber),
+              ISSUE_KEY: team.issueKey ?? String(team.issueNumber),
             });
             if (msg) {
               try {

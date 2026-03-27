@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
 import type { ProjectSummary, Team, TeamStatus, InstallStatus } from '../../shared/types';
 import { TERMINAL_STATUSES } from '../../shared/types';
+import { formatIssueKey } from '../../shared/issue-provider';
 
 // ---------------------------------------------------------------------------
 // Flattened issue item used in the issue picker
@@ -200,11 +201,11 @@ function summarizeStreamEvent(event: StreamEvent): string {
 
 interface LaunchLogProps {
   teamId: number;
-  issueNumber: number;
+  issueKey: string;
   onClose: () => void;
 }
 
-function LaunchLog({ teamId, issueNumber, onClose }: LaunchLogProps) {
+function LaunchLog({ teamId, issueKey, onClose }: LaunchLogProps) {
   const api = useApi();
   const [teamStatus, setTeamStatus] = useState<TeamStatus>('queued');
   const [outputLines, setOutputLines] = useState<string[]>([]);
@@ -328,7 +329,7 @@ function LaunchLog({ teamId, issueNumber, onClose }: LaunchLogProps) {
           {statusLabel(teamStatus)}
         </span>
         <span className="text-xs text-dark-muted ml-auto">
-          Issue #{issueNumber} &middot; Team #{teamId}
+          {formatIssueKey(issueKey, null)} &middot; Team #{teamId}
         </span>
       </div>
 
@@ -459,7 +460,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
 
   // --- Launch log state ---
   const [launchedTeamId, setLaunchedTeamId] = useState<number | null>(null);
-  const [launchedIssueNumber, setLaunchedIssueNumber] = useState<number | null>(null);
+  const [launchedIssueKey, setLaunchedIssueKey] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -541,7 +542,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       setHeadless(true);
       setSelectedProjectId('');
       setLaunchedTeamId(null);
-      setLaunchedIssueNumber(null);
+      setLaunchedIssueKey(null);
       setZone('green');
       setIssues([]);
       setIssuesError(null);
@@ -616,11 +617,15 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       return;
     }
 
-    const num = parseInt(issueNumber.trim(), 10);
-    if (isNaN(num) || num < 1) {
-      setError('Issue number must be a positive integer');
+    const trimmed = issueNumber.trim();
+    if (!trimmed) {
+      setError('Issue key is required');
       return;
     }
+
+    // Try to parse as number; if not numeric, treat as string issue key
+    const num = parseInt(trimmed, 10);
+    const isNumeric = !isNaN(num) && num > 0 && String(num) === trimmed;
 
     const effectivePrompt = prompt.trim() || undefined;
     const projectId = selectedProjectId ? parseInt(selectedProjectId, 10) : undefined;
@@ -628,7 +633,8 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     setLoading(true);
     try {
       const team = await api.post<Team>('teams/launch', {
-        issueNumber: num,
+        issueNumber: isNumeric ? num : 0,
+        issueKey: trimmed,
         prompt: effectivePrompt,
         projectId,
         headless,
@@ -636,7 +642,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       });
       // Switch to launch log view instead of closing
       setLaunchedTeamId(team.id);
-      setLaunchedIssueNumber(num);
+      setLaunchedIssueKey(trimmed);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message || 'Failed to launch team');
@@ -722,7 +728,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
   if (!open && !toast) return null;
 
   // Are we showing the launch log view?
-  const showingLog = launchedTeamId !== null && launchedIssueNumber !== null;
+  const showingLog = launchedTeamId !== null && launchedIssueKey !== null;
 
   return (
     <>
@@ -766,7 +772,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
             {showingLog ? (
               <LaunchLog
                 teamId={launchedTeamId}
-                issueNumber={launchedIssueNumber}
+                issueKey={launchedIssueKey}
                 onClose={onClose}
               />
             ) : (
@@ -979,10 +985,10 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
                       </div>
                     )}
 
-                    {/* Manual issue number input (always available as fallback) */}
+                    {/* Manual issue key input (always available as fallback) */}
                     <div>
                       <label className="block text-sm text-dark-muted mb-1">
-                        Issue number <span className="text-[#F85149]">*</span>
+                        Issue key <span className="text-[#F85149]">*</span>
                         {selectedProjectId && issues.length > 0 && (
                           <span className="text-dark-muted/50 text-xs ml-1">(or type manually)</span>
                         )}
@@ -990,12 +996,10 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
                       <input
                         ref={inputRef}
                         type="text"
-                        inputMode="numeric"
-                        pattern="[0-9]*"
                         value={issueNumber}
                         onChange={(e) => setIssueNumber(e.target.value)}
                         onKeyDown={handleKeyDown}
-                        placeholder="e.g. 763"
+                        placeholder="e.g. 763 or PROJ-123"
                         className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
                         disabled={loading}
                       />

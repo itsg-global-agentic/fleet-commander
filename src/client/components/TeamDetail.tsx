@@ -9,6 +9,7 @@ import { UnifiedTimeline } from './UnifiedTimeline';
 import { CommandInput } from './CommandInput';
 import { CommGraph } from './CommGraph';
 import { STATUS_COLORS } from '../utils/constants';
+import { formatIssueKey } from '../../shared/issue-provider';
 import type { TeamTask } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -177,7 +178,7 @@ export function TeamDetail() {
 
         // Replace placeholders
         let message = tmpl.template;
-        message = message.replace(/\{\{ISSUE_NUMBER\}\}/g, String(detail.issueNumber));
+        message = message.replace(/\{\{ISSUE_NUMBER\}\}/g, detail.issueKey ?? String(detail.issueNumber));
         if (detail.prNumber) {
           message = message.replace(/\{\{PR_NUMBER\}\}/g, String(detail.prNumber));
         }
@@ -275,7 +276,7 @@ export function TeamDetail() {
                   onClick={() => setMetadataCollapsed((c) => !c)}
                 >
                   <h3 className="text-base font-semibold text-dark-text">
-                    <span className="text-dark-muted mr-1.5">#{detail.issueNumber}</span>
+                    <span className="text-dark-muted mr-1.5">{formatIssueKey(detail.issueKey ?? String(detail.issueNumber), detail.issueProvider ?? null)}</span>
                     {detail.issueTitle ?? 'Untitled'}
                   </h3>
                   <div className="flex items-center gap-2 shrink-0">

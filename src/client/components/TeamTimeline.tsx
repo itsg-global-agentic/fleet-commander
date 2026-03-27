@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { TeamDashboardRow } from '../../shared/types';
+import { formatIssueKey } from '../../shared/issue-provider';
 import { STATUS_COLORS } from '../utils/constants';
 
 // ---------------------------------------------------------------------------
@@ -130,7 +131,7 @@ export function TeamTimeline({ teams }: TeamTimelineProps) {
             >
               {/* Team label */}
               <div className="w-[120px] min-w-[120px] pr-2 text-right text-xs text-dark-muted truncate shrink-0">
-                #{team.issueNumber}
+                {formatIssueKey(team.issueKey ?? String(team.issueNumber), team.issueProvider)}
               </div>
 
               {/* Bar track */}
@@ -150,7 +151,7 @@ export function TeamTimeline({ teams }: TeamTimelineProps) {
                   {/* Label on bar if wide enough */}
                   {clampedWidth > 8 && (
                     <span className="absolute inset-0 flex items-center px-1.5 text-[10px] font-medium text-dark-base truncate">
-                      #{team.issueNumber} {formatDuration(team.durationMin ?? 0)}
+                      {formatIssueKey(team.issueKey ?? String(team.issueNumber), team.issueProvider)} {formatDuration(team.durationMin ?? 0)}
                     </span>
                   )}
                 </div>
@@ -165,7 +166,7 @@ export function TeamTimeline({ teams }: TeamTimelineProps) {
                     }}
                   >
                     <div className="font-medium">
-                      #{team.issueNumber} {title}
+                      {formatIssueKey(team.issueKey ?? String(team.issueNumber), team.issueProvider)} {title}
                     </div>
                     <div className="text-dark-muted mt-0.5">
                       {team.status} &middot; {formatDuration(team.durationMin ?? 0)}

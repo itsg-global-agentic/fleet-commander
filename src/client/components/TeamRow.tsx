@@ -1,5 +1,6 @@
 import { memo, useState } from 'react';
 import type { TeamDashboardRow } from '../../shared/types';
+import { formatIssueKey } from '../../shared/issue-provider';
 import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
 import { useApi } from '../hooks/useApi';
@@ -75,6 +76,8 @@ function areTeamRowPropsEqual(prev: TeamRowProps, next: TeamRowProps): boolean {
     a.issueTitle === b.issueTitle &&
     a.projectName === b.projectName &&
     a.issueNumber === b.issueNumber &&
+    a.issueKey === b.issueKey &&
+    a.issueProvider === b.issueProvider &&
     a.githubRepo === b.githubRepo
   );
 }
@@ -167,7 +170,7 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
       {/* Issue */}
       <td className="px-4 whitespace-nowrap">
         <span className="text-sm">
-          <span className="text-dark-muted mr-1.5">#{team.issueNumber}</span>
+          <span className="text-dark-muted mr-1.5">{formatIssueKey(team.issueKey ?? String(team.issueNumber), team.issueProvider)}</span>
           <span className="text-dark-text">{title}</span>
         </span>
       </td>

@@ -66,6 +66,8 @@ function makeTeam(overrides: Partial<Team>): Partial<Team> {
   return {
     id: 1,
     issueNumber: 100,
+    issueKey: '100',
+    issueProvider: 'github',
     issueTitle: 'Test issue',
     projectId: 1,
     status: 'running',
@@ -341,6 +343,7 @@ describe('Idle nudge message', () => {
 
     expect(mockedResolveMessage).toHaveBeenCalledWith('stuck_nudge', {
       ISSUE_NUMBER: '100',
+      ISSUE_KEY: '100',
     });
     expect(mockManager.sendMessage).toHaveBeenCalledWith(1, 'Hey, you have been idle for a while', 'fc', 'stuck_nudge');
 

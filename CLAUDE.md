@@ -188,7 +188,7 @@ Plus one view: `v_team_dashboard` (joins teams + projects + PRs for the grid).
 | `idle` -> `stuck` | No events for 10 minutes |
 | `stuck` -> `running` | New event received |
 
-Team ID format: `{project_slug}-{issue_number}` (used as worktree name).
+Team ID format: `{project_slug}-{sanitized_issue_key}` (used as worktree name). For GitHub issues, the key is the issue number (e.g. `my-project-42`). For Jira/Linear, the key is sanitized (e.g. `my-project-proj-123` from `PROJ-123`).
 
 ## SSE Event Types
 
@@ -237,7 +237,7 @@ The SSE broker emits 17 event types:
 
 1. **Read the PRD** -- `docs/prd.md` (in worktree archives) has full specifications.
 2. **Projects are per-repo, teams are per-issue** -- one project = one git repository, one team = one issue being worked on.
-3. **Team ID = `{project_slug}-{issue_number}`** -- this is the worktree name and must be unique.
+3. **Team ID = `{project_slug}-{sanitized_issue_key}`** -- this is the worktree name and must be unique. For GitHub, the key is the issue number. For other providers (Jira, Linear), the key is sanitized (e.g. `PROJ-123` becomes `proj-123`).
 4. **Use `gh` CLI, not Octokit** -- all GitHub operations go through the `gh` command-line tool.
 5. **SQLite WAL mode, synchronous API** -- use better-sqlite3's synchronous methods. No async DB calls.
 6. **Hooks must never block CC** -- all hook scripts are fire-and-forget, must `exit 0` regardless of POST success/failure.

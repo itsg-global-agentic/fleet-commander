@@ -419,6 +419,8 @@ export interface DependencyRef {
 export interface IssueDependencyInfo {
   /** The issue these dependencies belong to */
   issueNumber: number;
+  /** Universal issue key (e.g. "42", "PROJ-123") */
+  issueKey?: string;
   /** Issues that block this one */
   blockedBy: DependencyRef[];
   /** Whether all blockers are resolved (closed) */
@@ -436,6 +438,8 @@ export interface TeamDashboardRow {
   id: number;
   issueNumber: number;
   issueTitle: string | null;
+  issueKey: string | null;
+  issueProvider: string | null;
   projectId: number | null;
   projectName: string | null;
   model: string | null;
@@ -475,6 +479,8 @@ export interface TeamDetail {
   id: number;
   issueNumber: number;
   issueTitle: string | null;
+  issueKey: string | null;
+  issueProvider: string | null;
   model?: string | null;
   status: TeamStatus;
   phase: TeamPhase;
