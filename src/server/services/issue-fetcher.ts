@@ -316,7 +316,11 @@ export class IssueFetcher {
   // Whether the GitHub GraphQL schema supports blockedBy/issueDependenciesSummary.
   // Starts true; set to false on first query failure caused by unsupported fields,
   // after which all subsequent queries use the basic query without those fields.
+  // Recovery: after `blockedByRetryCountdown` poll cycles, re-tests the full query.
   private blockedBySupported = true;
+  // Countdown to retry the full query after blockedBySupported was set to false.
+  // When this reaches 0, the next fetchAllProjects() cycle re-enables blockedBySupported.
+  private blockedByRetryCountdown = 0;
 
   // -------------------------------------------------------------------------
   // Public API
@@ -547,6 +551,19 @@ export class IssueFetcher {
    * serial iteration, significantly reducing total wall-clock time.
    */
   async fetchAllProjects(): Promise<void> {
+    // Recovery mechanism: if blockedBySupported was disabled, periodically re-test
+    // the full query (circuit-breaker pattern: trip on failure, retry after N polls).
+    if (!this.blockedBySupported) {
+      this.blockedByRetryCountdown--;
+      if (this.blockedByRetryCountdown <= 0) {
+        console.warn(
+          '[IssueFetcher] blockedBySupported recovery: re-enabling full query ' +
+          'to re-test GraphQL schema support'
+        );
+        this.blockedBySupported = true;
+      }
+    }
+
     const db = getDatabase();
     const projects = db.getProjects({ status: 'active' });
 
@@ -726,6 +743,7 @@ export class IssueFetcher {
     this.stop();
     this.clearAll();
     this.blockedBySupported = true;
+    this.blockedByRetryCountdown = 0;
   }
 
   /**
@@ -870,8 +888,9 @@ export class IssueFetcher {
 
       const blockedBy: DependencyRef[] = [];
 
-      // 1. Process blockedBy nodes FIRST (GitHub's native issue dependencies)
-      const blockedByNodes = issue.blockedBy?.nodes ?? [];
+      // 1. Process blockedBy nodes FIRST (GitHub's native issue dependencies).
+      //    Skip nodes where repository is null/undefined (cross-repo edge case).
+      const blockedByNodes = (issue.blockedBy?.nodes ?? []).filter((n) => n.repository);
       for (const node of blockedByNodes) {
         blockedBy.push({
           number: node.number,
@@ -882,8 +901,9 @@ export class IssueFetcher {
         });
       }
 
-      // 2. Process trackedInIssues, deduplicating against blockedBy
-      const trackedNodes = issue.trackedInIssues?.nodes ?? [];
+      // 2. Process trackedInIssues, deduplicating against blockedBy.
+      //    Skip nodes where repository is null/undefined.
+      const trackedNodes = (issue.trackedInIssues?.nodes ?? []).filter((n) => n.repository);
       for (const node of trackedNodes) {
         const exists = blockedBy.some(
           (b) => b.number === node.number &&
@@ -955,9 +975,10 @@ export class IssueFetcher {
     // If the full query failed and blockedBy was enabled, downgrade and retry
     if (this.blockedBySupported) {
       this.blockedBySupported = false;
+      this.blockedByRetryCountdown = 5;
       console.warn(
-        '[IssueFetcher] Single-issue deps query with blockedBy failed; ' +
-        'falling back to basic query without blockedBy field'
+        '[IssueFetcher] blockedBySupported changed: true -> false ' +
+        '(single-issue deps query field error; will retry after 5 poll cycles)'
       );
       return this.runSingleIssueDepsQuery(SINGLE_ISSUE_DEPS_QUERY_BASIC, owner, repo, issueNumber);
     }
@@ -967,7 +988,9 @@ export class IssueFetcher {
 
   /**
    * Run a single-issue dependency GraphQL query and return the parsed issue data.
-   * Returns null on error (gh CLI failure, missing data, or GraphQL errors).
+   * Returns null only on field-not-found errors (triggering fallback to BASIC).
+   * Non-field GraphQL errors (rate limits, deprecation warnings) are logged as
+   * warnings but the response data is still used if present.
    */
   private async runSingleIssueDepsQuery(
     query: string,
@@ -995,9 +1018,21 @@ export class IssueFetcher {
       };
 
       if (parsed.errors?.length) {
-        const msg = parsed.errors.map((e) => e.message).join('; ');
-        console.error(`[IssueFetcher] Single-issue deps GraphQL errors: ${msg}`);
-        return null;
+        const hasFieldError = parsed.errors.some(
+          (e) => /field\b.*\bdoesn't exist/i.test(e.message) ||
+                 /field\b.*\bblockedBy\b.*\bdoesn't exist/i.test(e.message) ||
+                 /field\b.*\bissueDependenciesSummary\b.*\bdoesn't exist/i.test(e.message)
+        );
+        if (hasFieldError) {
+          console.error(
+            `[IssueFetcher] Single-issue deps GraphQL field errors: ${parsed.errors.map((e) => e.message).join('; ')}`
+          );
+          return null;
+        }
+        // Non-field errors (rate limits, deprecation warnings, etc.): log but still use data
+        console.warn(
+          `[IssueFetcher] Single-issue deps GraphQL non-field errors (data still used): ${parsed.errors.map((e) => e.message).join('; ')}`
+        );
       }
 
       return parsed.data?.repository?.issue ?? null;
@@ -1207,9 +1242,10 @@ export class IssueFetcher {
     // If the full query failed and blockedBy was enabled, downgrade and retry
     if (this.blockedBySupported) {
       this.blockedBySupported = false;
+      this.blockedByRetryCountdown = 5;
       console.warn(
-        '[IssueFetcher] Full query with blockedBy fields failed; ' +
-        'falling back to basic query without dependency fields'
+        '[IssueFetcher] blockedBySupported changed: true -> false ' +
+        '(batch query field error; will retry after 5 poll cycles)'
       );
       return this.runGraphQLQuery(ISSUES_QUERY_BASIC, owner, repo, cursor);
     }
@@ -1290,12 +1326,14 @@ export class IssueFetcher {
 
       const parsed = JSON.parse(stdout) as GraphQLResponse;
 
-      // Check for GraphQL-level errors indicating unsupported fields
+      // Check for GraphQL-level errors indicating unsupported fields.
+      // Only match field-not-found errors; non-field errors (rate limits,
+      // deprecation warnings) should not discard valid data.
       if (parsed.errors?.length) {
         const hasFieldError = parsed.errors.some(
           (e) => /field\b.*\bdoesn't exist/i.test(e.message) ||
-                 /blockedBy/i.test(e.message) ||
-                 /issueDependenciesSummary/i.test(e.message)
+                 /field\b.*\bblockedBy\b.*\bdoesn't exist/i.test(e.message) ||
+                 /field\b.*\bissueDependenciesSummary\b.*\bdoesn't exist/i.test(e.message)
         );
         if (hasFieldError) {
           console.error(
@@ -1303,6 +1341,10 @@ export class IssueFetcher {
           );
           return null;
         }
+        // Non-field errors: log but still return the data
+        console.warn(
+          `[IssueFetcher] GraphQL non-field errors (data still used): ${parsed.errors.map((e) => e.message).join('; ')}`
+        );
       }
 
       return parsed;
@@ -1348,8 +1390,9 @@ export class IssueFetcher {
       issueNode.prReferences = prRefs;
     }
 
-    // Map inline blockedBy nodes to DependencyRef[] and populate dependencies
-    const blockedByNodes = node.blockedBy?.nodes ?? [];
+    // Map inline blockedBy nodes to DependencyRef[] and populate dependencies.
+    // Skip nodes where repository is null/undefined (can happen with cross-repo deps).
+    const blockedByNodes = (node.blockedBy?.nodes ?? []).filter((dep) => dep.repository);
     if (blockedByNodes.length > 0) {
       const blockedBy: DependencyRef[] = blockedByNodes.map((dep) => ({
         number: dep.number,
