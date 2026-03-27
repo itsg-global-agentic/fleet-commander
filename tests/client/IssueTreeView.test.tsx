@@ -766,6 +766,71 @@ describe('IssueTreeView', () => {
     );
   });
 
+  it('renders issue nodes inside project groups when groups are present', async () => {
+    // Restore any spies from previous tests to get a clean useCollapseState mock
+    vi.restoreAllMocks();
+
+    const issueA = { number: 51, title: 'Issue Alpha-1', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueB = { number: 52, title: 'Issue Alpha-2', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueC = { number: 61, title: 'Issue Beta-1', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueD = { number: 62, title: 'Issue Beta-2', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issueA, issueB, issueC, issueD],
+          groups: [
+            {
+              projectId: 10,
+              projectName: 'project-alpha',
+              groupId: 300,
+              groupName: 'Alpha Group',
+              tree: [issueA, issueB],
+              cachedAt: null,
+              count: 2,
+            },
+            {
+              projectId: 20,
+              projectName: 'project-beta',
+              groupId: 400,
+              groupName: 'Beta Group',
+              tree: [issueC, issueD],
+              cachedAt: null,
+              count: 2,
+            },
+          ],
+          cachedAt: '2026-03-27T10:00:00Z',
+          count: 4,
+        });
+      }
+      if (path === 'projects') {
+        return Promise.resolve([
+          { id: 10, name: 'project-alpha', githubRepo: 'user/alpha', maxActiveTeams: 5, activeTeamCount: 0, queuedTeamCount: 0, status: 'active' },
+          { id: 20, name: 'project-beta', githubRepo: 'user/beta', maxActiveTeams: 5, activeTeamCount: 0, queuedTeamCount: 0, status: 'active' },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      // Group headers should be rendered
+      expect(screen.getByText('Alpha Group')).toBeInTheDocument();
+      expect(screen.getByText('Beta Group')).toBeInTheDocument();
+    });
+
+    // Issue nodes from BOTH groups should be rendered (not just headers)
+    await waitFor(() => {
+      expect(screen.getByTestId('tree-node-51')).toBeInTheDocument();
+      expect(screen.getByTestId('tree-node-52')).toBeInTheDocument();
+      expect(screen.getByTestId('tree-node-61')).toBeInTheDocument();
+      expect(screen.getByTestId('tree-node-62')).toBeInTheDocument();
+    });
+
+    // Project names should also be visible
+    expect(screen.getByText('project-alpha')).toBeInTheDocument();
+    expect(screen.getByText('project-beta')).toBeInTheDocument();
+  });
+
   it('clicking a group header toggles the group collapse state', async () => {
     const issueA = { number: 10, title: 'Issue A', state: 'open', labels: [], children: [], activeTeam: null };
     mockGet.mockImplementation((path: string) => {
