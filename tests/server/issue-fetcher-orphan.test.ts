@@ -39,6 +39,7 @@ const {
       providerConfig: null,
     }),
     getProjects: vi.fn().mockReturnValue([]),
+    getIssueSources: vi.fn().mockReturnValue([]),
     getActiveTeams: vi.fn().mockReturnValue([]),
     getActiveTeamsByProject: vi.fn().mockReturnValue([]),
   },

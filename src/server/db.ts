@@ -22,6 +22,7 @@ import type {
   ProjectGroup,
   ProjectSummary,
   ProjectStatus,
+  ProjectIssueSource,
   MessageTemplate,
   TeamTransition,
   TeamMember,
@@ -246,6 +247,22 @@ export interface ProjectGroupUpdate {
   description?: string | null;
 }
 
+export interface ProjectIssueSourceInsert {
+  projectId: number;
+  provider: string;
+  label?: string | null;
+  configJson: string;
+  credentialsJson?: string | null;
+  enabled?: boolean;
+}
+
+export interface ProjectIssueSourceUpdate {
+  label?: string | null;
+  configJson?: string;
+  credentialsJson?: string | null;
+  enabled?: boolean;
+}
+
 export interface ProjectFilter {
   status?: ProjectStatus;
 }
@@ -372,6 +389,9 @@ export class FleetDatabase {
 
     // Encrypt existing plaintext provider_config values (v12 migration)
     this.migrateProviderConfigEncryption();
+
+    // Add project_issue_sources table and backfill from projects (v13 migration)
+    this.addProjectIssueSourcesTable();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -940,6 +960,63 @@ export class FleetDatabase {
   }
 
   /**
+   * v13 migration: Add project_issue_sources table and backfill from existing
+   * projects that have a non-null github_repo. Each project gets one row with
+   * provider='github' and config_json='{"owner":"X","repo":"Y"}'.
+   */
+  private addProjectIssueSourcesTable(): void {
+    try {
+      const row = this.db.prepare(
+        'SELECT MAX(version) AS version FROM schema_version'
+      ).get() as { version: number } | undefined;
+      const version = row?.version ?? 0;
+      if (version >= 13) return; // Already migrated
+
+      // Create the table if it does not exist
+      const tableCols = this.db.prepare("PRAGMA table_info(project_issue_sources)").all() as Array<{ name: string }>;
+      if (tableCols.length === 0) {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS project_issue_sources (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id      INTEGER NOT NULL REFERENCES projects(id),
+            provider        TEXT NOT NULL,
+            label           TEXT,
+            config_json     TEXT NOT NULL,
+            credentials_json TEXT,
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            UNIQUE(project_id, provider, config_json)
+          );
+          CREATE INDEX IF NOT EXISTS idx_issue_sources_project ON project_issue_sources(project_id);
+        `);
+      }
+
+      // Backfill: create a github source for every project with a github_repo
+      const projects = this.db.prepare(
+        'SELECT id, github_repo FROM projects WHERE github_repo IS NOT NULL'
+      ).all() as Array<{ id: number; github_repo: string }>;
+
+      const insertStmt = this.db.prepare(
+        `INSERT OR IGNORE INTO project_issue_sources (project_id, provider, label, config_json, enabled)
+         VALUES (?, 'github', 'GitHub Issues', ?, 1)`
+      );
+
+      for (const proj of projects) {
+        const parts = proj.github_repo.split('/');
+        if (parts.length === 2) {
+          const configJson = JSON.stringify({ owner: parts[0], repo: parts[1] });
+          insertStmt.run(proj.id, configJson);
+        }
+      }
+
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (13)');
+      console.log(`[DB] Migrated to v13: project_issue_sources table created, backfilled ${projects.length} project(s)`);
+    } catch {
+      // Tables may not exist yet (fresh database) — schema.sql will create them
+    }
+  }
+
+  /**
    * Migrate any projects with status 'paused' to 'active'.
    * The paused status was removed in issue #228.
    */
@@ -1095,6 +1172,8 @@ export class FleetDatabase {
   }
 
   deleteProject(id: number): boolean {
+    // Delete associated issue sources first (foreign key constraint)
+    this.deleteIssueSourcesByProject(id);
     const result = this.stmt('DELETE FROM projects WHERE id = ?').run(id);
     return result.changes > 0;
   }
@@ -1165,6 +1244,88 @@ export class FleetDatabase {
     this.stmt('UPDATE projects SET group_id = NULL WHERE group_id = ?').run(id);
     const result = this.stmt('DELETE FROM project_groups WHERE id = ?').run(id);
     return result.changes > 0;
+  }
+
+  // -------------------------------------------------------------------------
+  // Project Issue Sources
+  // -------------------------------------------------------------------------
+
+  insertIssueSource(data: ProjectIssueSourceInsert): ProjectIssueSource {
+    const stmt = this.stmt(`
+      INSERT INTO project_issue_sources (project_id, provider, label, config_json, credentials_json, enabled)
+      VALUES (@projectId, @provider, @label, @configJson, @credentialsJson, @enabled)
+    `);
+
+    const info = stmt.run({
+      projectId: data.projectId,
+      provider: data.provider,
+      label: data.label ?? null,
+      configJson: data.configJson,
+      credentialsJson: data.credentialsJson ?? null,
+      enabled: (data.enabled ?? true) ? 1 : 0,
+    });
+
+    return this.getIssueSource(Number(info.lastInsertRowid))!;
+  }
+
+  getIssueSources(projectId: number, enabledOnly?: boolean): ProjectIssueSource[] {
+    if (enabledOnly) {
+      const stmt = this.stmt(
+        'SELECT * FROM project_issue_sources WHERE project_id = ? AND enabled = 1 ORDER BY id ASC'
+      );
+      const rows = stmt.all(projectId) as Record<string, unknown>[];
+      return rows.map((r) => this.mapIssueSourceRow(r));
+    }
+
+    const stmt = this.stmt(
+      'SELECT * FROM project_issue_sources WHERE project_id = ? ORDER BY id ASC'
+    );
+    const rows = stmt.all(projectId) as Record<string, unknown>[];
+    return rows.map((r) => this.mapIssueSourceRow(r));
+  }
+
+  getIssueSource(id: number): ProjectIssueSource | undefined {
+    const stmt = this.stmt('SELECT * FROM project_issue_sources WHERE id = ?');
+    const row = stmt.get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapIssueSourceRow(row) : undefined;
+  }
+
+  updateIssueSource(id: number, fields: ProjectIssueSourceUpdate): ProjectIssueSource | undefined {
+    const setClauses: string[] = [];
+    const params: Record<string, unknown> = { id };
+
+    if (fields.label !== undefined) {
+      setClauses.push('label = @label');
+      params.label = fields.label;
+    }
+    if (fields.configJson !== undefined) {
+      setClauses.push('config_json = @configJson');
+      params.configJson = fields.configJson;
+    }
+    if (fields.credentialsJson !== undefined) {
+      setClauses.push('credentials_json = @credentialsJson');
+      params.credentialsJson = fields.credentialsJson;
+    }
+    if (fields.enabled !== undefined) {
+      setClauses.push('enabled = @enabled');
+      params.enabled = fields.enabled ? 1 : 0;
+    }
+
+    if (setClauses.length === 0) return this.getIssueSource(id);
+
+    const sql = `UPDATE project_issue_sources SET ${setClauses.join(', ')} WHERE id = @id`;
+    this.db.prepare(sql).run(params);
+    return this.getIssueSource(id);
+  }
+
+  deleteIssueSource(id: number): boolean {
+    const result = this.stmt('DELETE FROM project_issue_sources WHERE id = ?').run(id);
+    return result.changes > 0;
+  }
+
+  deleteIssueSourcesByProject(projectId: number): number {
+    const result = this.stmt('DELETE FROM project_issue_sources WHERE project_id = ?').run(projectId);
+    return result.changes;
   }
 
   // -------------------------------------------------------------------------
@@ -2350,6 +2511,7 @@ export class FleetDatabase {
       this.stmt('DELETE FROM pull_requests').run();
       this.stmt('DELETE FROM teams').run();
       this.stmt('DELETE FROM message_templates').run();
+      this.stmt('DELETE FROM project_issue_sources').run();
       this.stmt('DELETE FROM projects').run();
     })();
 
@@ -2543,6 +2705,19 @@ export class FleetDatabase {
       description: (row.description as string | null) ?? null,
       createdAt: utcify(row.created_at as string),
       updatedAt: utcify(row.updated_at as string),
+    };
+  }
+
+  private mapIssueSourceRow(row: Record<string, unknown>): ProjectIssueSource {
+    return {
+      id: row.id as number,
+      projectId: row.project_id as number,
+      provider: row.provider as string,
+      label: (row.label as string | null) ?? null,
+      configJson: row.config_json as string,
+      credentialsJson: (row.credentials_json as string | null) ?? null,
+      enabled: (row.enabled as number) === 1,
+      createdAt: utcify(row.created_at as string),
     };
   }
 

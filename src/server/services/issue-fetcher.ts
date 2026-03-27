@@ -224,15 +224,80 @@ export class IssueFetcher {
       return this.fetchIssueHierarchyGeneric(projectId, project, provider);
     }
 
-    // GitHub path requires githubRepo
-    if (!project.githubRepo) {
-      console.error(`[IssueFetcher] Project ${projectId} has no githubRepo configured`);
+    // Resolve issue sources: prefer project_issue_sources table, fall back to project.githubRepo
+    const sources = db.getIssueSources(projectId, true);
+
+    let allNodes: GraphQLIssueNode[] = [];
+    let fetchComplete = true;
+    let owner = '';
+    let repo = '';
+
+    if (sources.length > 0) {
+      // Iterate all enabled sources and merge results
+      for (const source of sources) {
+        if (source.provider === 'github') {
+          let sourceConfig: { owner: string; repo: string };
+          try {
+            sourceConfig = JSON.parse(source.configJson) as { owner: string; repo: string };
+          } catch (parseErr) {
+            console.warn(
+              `[IssueFetcher] Malformed config_json for source ${source.id} (project ${projectId}), skipping:`,
+              parseErr instanceof Error ? parseErr.message : parseErr,
+            );
+            continue;
+          }
+
+          if (!sourceConfig.owner || !sourceConfig.repo) {
+            console.warn(`[IssueFetcher] Missing owner/repo in source ${source.id} config, skipping`);
+            continue;
+          }
+
+          // Use the first GitHub source's owner/repo as the primary context for
+          // body-based dependency parsing (subsequent sources add to the node list)
+          if (!owner) {
+            owner = sourceConfig.owner;
+            repo = sourceConfig.repo;
+          }
+
+          const ghProvider = getIssueProvider(project);
+          if (!(ghProvider instanceof GitHubIssueProvider)) {
+            console.warn(`[IssueFetcher] Provider for source ${source.id} is not a GitHubIssueProvider, skipping`);
+            continue;
+          }
+
+          try {
+            const result = await ghProvider.fetchRawIssueHierarchy(sourceConfig.owner, sourceConfig.repo);
+            allNodes = allNodes.concat(result.nodes);
+            if (!result.fetchComplete) fetchComplete = false;
+          } catch (err) {
+            console.error(
+              `[IssueFetcher] Failed to fetch from source ${source.id} (${source.provider}):`,
+              err instanceof Error ? err.message : err,
+            );
+            fetchComplete = false;
+          }
+        } else {
+          console.warn(`[IssueFetcher] Unsupported provider '${source.provider}' for source ${source.id}, skipping`);
+        }
+      }
+
+      if (!owner) {
+        // No usable sources produced an owner/repo — return empty
+        console.error(`[IssueFetcher] No valid issue sources for project ${projectId}`);
+        return [];
+      }
+    } else if (project.githubRepo) {
+      // Fallback: no issue sources configured, use project.githubRepo directly
+      console.warn(`[IssueFetcher] No issue sources configured for project ${projectId}, falling back to project.githubRepo`);
+      [owner, repo] = parseRepo(project.githubRepo);
+
+      const result = await provider.fetchRawIssueHierarchy(owner, repo);
+      allNodes = result.nodes;
+      fetchComplete = result.fetchComplete;
+    } else {
+      console.error(`[IssueFetcher] Project ${projectId} has no githubRepo or issue sources configured`);
       return [];
     }
-
-    const [owner, repo] = parseRepo(project.githubRepo);
-
-    const { nodes: allNodes, fetchComplete } = await provider.fetchRawIssueHierarchy(owner, repo);
 
     // Convert GraphQL nodes to our IssueNode format (flat, no children yet)
     const flatIssues = allNodes.map((node) => mapGraphQLNodeToIssueNode(node));
@@ -269,9 +334,11 @@ export class IssueFetcher {
     // Fetch missing (closed) parents so their open children stay visible
     // in the tree instead of being silently hidden.
     if (orphanParentNumbers.size > 0) {
-      const fetchedParentNodes = await provider.fetchMissingParents(
-        owner, repo, Array.from(orphanParentNumbers),
-      );
+      const parentProvider = getIssueProvider(project);
+      let fetchedParentNodes: GraphQLIssueNode[] = [];
+      if (parentProvider instanceof GitHubIssueProvider) {
+        fetchedParentNodes = await parentProvider.fetchMissingParents(owner, repo, Array.from(orphanParentNumbers));
+      }
 
       const fetchedParents = fetchedParentNodes.map((n) => mapParentNodeToIssueNode(n));
 
@@ -878,9 +945,22 @@ export class IssueFetcher {
       }
     }
 
-    // GitHub path requires githubRepo
-    if (!project.githubRepo) return null;
+    // Try issue sources first, fall back to project.githubRepo
+    const sources = db.getIssueSources(projectId, true);
+    const ghSource = sources.find((s) => s.provider === 'github');
 
+    if (ghSource) {
+      try {
+        const config = JSON.parse(ghSource.configJson) as { owner: string; repo: string };
+        if (config.owner && config.repo) {
+          return this.fetchDependencies(config.owner, config.repo, issueNumber);
+        }
+      } catch {
+        // Fall through to project.githubRepo
+      }
+    }
+
+    if (!project.githubRepo) return null;
     const [owner, repo] = parseRepo(project.githubRepo);
     return this.fetchDependencies(owner, repo, issueNumber);
   }

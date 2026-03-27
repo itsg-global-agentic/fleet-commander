@@ -881,6 +881,23 @@ export class ProjectService {
       providerConfig: resolvedProviderConfig,
     });
 
+    // Auto-create a GitHub issue source if githubRepo is resolved
+    if (resolvedGithubRepo) {
+      const parts = resolvedGithubRepo.split('/');
+      if (parts.length === 2) {
+        try {
+          db.insertIssueSource({
+            projectId: project.id,
+            provider: 'github',
+            label: 'GitHub Issues',
+            configJson: JSON.stringify({ owner: parts[0], repo: parts[1] }),
+          });
+        } catch (sourceErr: unknown) {
+          console.warn('[ProjectService] Failed to create issue source (non-fatal):', sourceErr);
+        }
+      }
+    }
+
     // Install hooks (non-fatal)
     const installResult = installHooks(normalizedPath, _minimalLogger);
     if (!installResult.ok) {

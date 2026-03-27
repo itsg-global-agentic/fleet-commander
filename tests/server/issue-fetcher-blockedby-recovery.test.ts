@@ -26,6 +26,7 @@ const mockDb = {
     githubRepo: 'owner/repo',
   }),
   getProjects: vi.fn().mockReturnValue([]),
+  getIssueSources: vi.fn().mockReturnValue([]),
   getActiveTeams: vi.fn().mockReturnValue([]),
   getActiveTeamsByProject: vi.fn().mockReturnValue([]),
 };

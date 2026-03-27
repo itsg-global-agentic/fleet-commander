@@ -17,6 +17,7 @@ import projectsRoutes from './routes/projects.js';
 import projectGroupsRoutes from './routes/project-groups.js';
 import stateMachineRoutes from './routes/state-machine.js';
 import queryRoutes from './routes/query.js';
+import issueSourcesRoutes from './routes/issue-sources.js';
 import { sseBroker } from './services/sse-broker.js';
 import { getIssueFetcher } from './services/issue-fetcher.js';
 import { stuckDetector } from './services/stuck-detector.js';
@@ -72,6 +73,7 @@ async function main() {
   await server.register(projectGroupsRoutes);
   await server.register(stateMachineRoutes);
   await server.register(queryRoutes);
+  await server.register(issueSourcesRoutes);
 
   // Static file serving for production builds
   const clientDistPath = path.resolve(__dirname, '..', 'client');

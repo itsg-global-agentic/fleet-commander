@@ -44,6 +44,23 @@ CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status);
 CREATE INDEX IF NOT EXISTS idx_projects_group ON projects(group_id);
 
 -- ---------------------------------------------------------------------------
+-- PROJECT ISSUE SOURCES — multiple issue providers per project
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS project_issue_sources (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id      INTEGER NOT NULL REFERENCES projects(id),
+  provider        TEXT NOT NULL,
+  label           TEXT,
+  config_json     TEXT NOT NULL,
+  credentials_json TEXT,
+  enabled         INTEGER NOT NULL DEFAULT 1,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(project_id, provider, config_json)
+);
+
+CREATE INDEX IF NOT EXISTS idx_issue_sources_project ON project_issue_sources(project_id);
+
+-- ---------------------------------------------------------------------------
 -- TEAMS — a Claude Code worktree session working on an issue
 -- ---------------------------------------------------------------------------
 -- Lifecycle: queued -> launching -> running -> idle (3min) -> stuck (5min) -> done/failed
@@ -298,4 +315,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_tasks_team_task ON team_tasks(team_id
 CREATE INDEX IF NOT EXISTS idx_team_tasks_team ON team_tasks(team_id);
 
 -- Insert schema version 9 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (12);
+INSERT OR IGNORE INTO schema_version (version) VALUES (13);

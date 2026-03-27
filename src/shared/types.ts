@@ -62,6 +62,18 @@ export interface Project {
   updatedAt: string;
 }
 
+/** An issue source configuration for a project (multi-provider support) */
+export interface ProjectIssueSource {
+  id: number;
+  projectId: number;
+  provider: string;        // 'github' | 'jira' | 'linear'
+  label: string | null;
+  configJson: string;      // JSON: provider-specific config
+  credentialsJson: string | null;
+  enabled: boolean;
+  createdAt: string;
+}
+
 /** Detailed file-level info for a single install artifact */
 export interface InstallFileStatus {
   name: string;
