@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS projects (
   max_active_teams INTEGER NOT NULL DEFAULT 5,        -- max concurrent active teams before queueing
   prompt_file     TEXT,                               -- relative path to launch prompt .md file
   model           TEXT,                               -- Claude model override e.g. "opus", "sonnet", "claude-opus-4-6"
+  issue_provider  TEXT DEFAULT 'github',              -- issue provider: github | jira | linear
+  project_key     TEXT,                               -- provider-specific project key (e.g. Jira project key)
+  provider_config TEXT,                               -- JSON blob of provider-specific configuration
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -48,6 +51,8 @@ CREATE TABLE IF NOT EXISTS teams (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   issue_number    INTEGER NOT NULL,
   issue_title     TEXT,
+  issue_key       TEXT,                              -- universal issue key (e.g. "123", "PROJ-456")
+  issue_provider  TEXT DEFAULT 'github',             -- issue provider: github | jira | linear
   project_id      INTEGER REFERENCES projects(id),
   worktree_name   TEXT NOT NULL UNIQUE,           -- e.g. "my-project-763"
   branch_name     TEXT,
@@ -289,4 +294,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_tasks_team_task ON team_tasks(team_id
 CREATE INDEX IF NOT EXISTS idx_team_tasks_team ON team_tasks(team_id);
 
 -- Insert schema version 9 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (9);
+INSERT OR IGNORE INTO schema_version (version) VALUES (10);

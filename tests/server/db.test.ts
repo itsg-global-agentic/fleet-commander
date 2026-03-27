@@ -1477,6 +1477,145 @@ describe('Schema indexes', () => {
   });
 });
 
+// =============================================================================
+// Issue Provider Migration (v10)
+// =============================================================================
+
+describe('Issue Provider Migration', () => {
+  it('should add issue_provider, project_key, provider_config columns to projects', () => {
+    const cols = db.raw
+      .prepare("PRAGMA table_info(projects)")
+      .all() as Array<{ name: string }>;
+    const colNames = cols.map(c => c.name);
+
+    expect(colNames).toContain('issue_provider');
+    expect(colNames).toContain('project_key');
+    expect(colNames).toContain('provider_config');
+  });
+
+  it('should add issue_key, issue_provider columns to teams', () => {
+    const cols = db.raw
+      .prepare("PRAGMA table_info(teams)")
+      .all() as Array<{ name: string }>;
+    const colNames = cols.map(c => c.name);
+
+    expect(colNames).toContain('issue_key');
+    expect(colNames).toContain('issue_provider');
+  });
+
+  it('should backfill issue_key from issue_number for existing teams', () => {
+    // Insert a team — insertTeam now auto-derives issue_key
+    const project = db.insertProject({ name: 'backfill-test', repoPath: '/tmp/backfill-test' });
+    const team = db.insertTeam({
+      issueNumber: 999,
+      worktreeName: 'backfill-test-999',
+      projectId: project.id,
+    });
+
+    expect(team.issueKey).toBe('999');
+    expect(team.issueProvider).toBe('github');
+  });
+
+  it('should store and retrieve issueProvider on projects', () => {
+    const project = db.insertProject({
+      name: 'jira-project',
+      repoPath: '/tmp/jira-project',
+      issueProvider: 'jira',
+      projectKey: 'PROJ',
+    });
+
+    expect(project.issueProvider).toBe('jira');
+    expect(project.projectKey).toBe('PROJ');
+
+    const fetched = db.getProject(project.id);
+    expect(fetched?.issueProvider).toBe('jira');
+    expect(fetched?.projectKey).toBe('PROJ');
+  });
+
+  it('should store and retrieve providerConfig JSON on projects', () => {
+    const config = JSON.stringify({ baseUrl: 'https://myco.atlassian.net', apiToken: 'xxx' });
+    const project = db.insertProject({
+      name: 'config-test',
+      repoPath: '/tmp/config-test',
+      providerConfig: config,
+    });
+
+    expect(project.providerConfig).toBe(config);
+
+    const parsed = JSON.parse(project.providerConfig!);
+    expect(parsed.baseUrl).toBe('https://myco.atlassian.net');
+  });
+
+  it('should default issueProvider to github when not specified', () => {
+    const project = db.insertProject({
+      name: 'default-provider',
+      repoPath: '/tmp/default-provider',
+    });
+    expect(project.issueProvider).toBe('github');
+
+    const team = db.insertTeam({
+      issueNumber: 1,
+      worktreeName: 'default-provider-1',
+      projectId: project.id,
+    });
+    expect(team.issueProvider).toBe('github');
+  });
+
+  it('should update issueProvider, projectKey, providerConfig via updateProject', () => {
+    const project = db.insertProject({
+      name: 'update-test',
+      repoPath: '/tmp/update-test',
+    });
+
+    const updated = db.updateProject(project.id, {
+      issueProvider: 'linear',
+      projectKey: 'ENG',
+      providerConfig: '{"teamId":"team_123"}',
+    });
+
+    expect(updated?.issueProvider).toBe('linear');
+    expect(updated?.projectKey).toBe('ENG');
+    expect(updated?.providerConfig).toBe('{"teamId":"team_123"}');
+  });
+
+  it('should store explicit issueKey on team insert', () => {
+    const project = db.insertProject({ name: 'key-test', repoPath: '/tmp/key-test' });
+    const team = db.insertTeam({
+      issueNumber: 42,
+      issueKey: 'PROJ-42',
+      issueProvider: 'jira',
+      worktreeName: 'key-test-42',
+      projectId: project.id,
+    });
+
+    expect(team.issueKey).toBe('PROJ-42');
+    expect(team.issueProvider).toBe('jira');
+  });
+
+  it('should be idempotent — running initSchema twice does not fail', () => {
+    // initSchema was already called in beforeEach; calling again should not throw
+    expect(() => db.initSchema()).not.toThrow();
+
+    // Verify columns still exist
+    const projectCols = db.raw
+      .prepare("PRAGMA table_info(projects)")
+      .all() as Array<{ name: string }>;
+    expect(projectCols.map(c => c.name)).toContain('issue_provider');
+
+    const teamCols = db.raw
+      .prepare("PRAGMA table_info(teams)")
+      .all() as Array<{ name: string }>;
+    expect(teamCols.map(c => c.name)).toContain('issue_key');
+  });
+
+  it('should include schema version 10', () => {
+    const row = db.raw
+      .prepare('SELECT MAX(version) AS version FROM schema_version')
+      .get() as { version: number };
+    expect(row.version).toBeGreaterThanOrEqual(10);
+  });
+});
+
 describe('Connection management', () => {
   it('closes the database', () => {
     db.close();

@@ -55,6 +55,9 @@ export interface Project {
   maxActiveTeams: number;
   promptFile: string | null;
   model?: string | null;
+  issueProvider: string | null;
+  projectKey: string | null;
+  providerConfig: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -160,6 +163,8 @@ export interface Team {
   id: number;
   issueNumber: number;
   issueTitle: string | null;
+  issueKey: string | null;
+  issueProvider: string | null;
   projectId: number | null;
   status: TeamStatus;
   phase: TeamPhase;

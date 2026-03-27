@@ -103,6 +103,8 @@ export interface EventFilter {
 export interface TeamInsert {
   issueNumber: number;
   issueTitle?: string | null;
+  issueKey?: string | null;
+  issueProvider?: string | null;
   projectId?: number | null;
   worktreeName: string;
   branchName?: string | null;
@@ -213,6 +215,9 @@ export interface ProjectInsert {
   maxActiveTeams?: number;
   promptFile?: string | null;
   model?: string | null;
+  issueProvider?: string | null;
+  projectKey?: string | null;
+  providerConfig?: string | null;
 }
 
 export interface ProjectUpdate {
@@ -224,6 +229,9 @@ export interface ProjectUpdate {
   maxActiveTeams?: number;
   promptFile?: string | null;
   model?: string | null;
+  issueProvider?: string | null;
+  projectKey?: string | null;
+  providerConfig?: string | null;
 }
 
 export interface ProjectGroupInsert {
@@ -353,6 +361,9 @@ export class FleetDatabase {
 
     // Add team_tasks table if missing (v9 migration — TaskCreated hook)
     this.addTeamTasksTable();
+
+    // Add issue provider columns to projects and teams (v10 migration)
+    this.addIssueProviderColumns();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -756,6 +767,37 @@ export class FleetDatabase {
   }
 
   /**
+   * Add issue provider columns to projects and teams tables.
+   * v10 migration — supports multi-provider issue tracking.
+   */
+  private addIssueProviderColumns(): void {
+    try {
+      // Check if projects table needs migration
+      const projectCols = this.db.prepare("PRAGMA table_info(projects)").all() as Array<{ name: string }>;
+      if (!projectCols.some(c => c.name === 'issue_provider')) {
+        this.db.exec("ALTER TABLE projects ADD COLUMN issue_provider TEXT DEFAULT 'github'");
+        this.db.exec('ALTER TABLE projects ADD COLUMN project_key TEXT');
+        this.db.exec('ALTER TABLE projects ADD COLUMN provider_config TEXT');
+      }
+
+      // Check if teams table needs migration
+      const teamCols = this.db.prepare("PRAGMA table_info(teams)").all() as Array<{ name: string }>;
+      if (!teamCols.some(c => c.name === 'issue_key')) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN issue_key TEXT');
+        this.db.exec("ALTER TABLE teams ADD COLUMN issue_provider TEXT DEFAULT 'github'");
+
+        // Backfill issue_key from issue_number for existing rows
+        this.db.exec("UPDATE teams SET issue_key = CAST(issue_number AS TEXT) WHERE issue_key IS NULL");
+      }
+
+      // Insert schema version 10
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (10)');
+    } catch {
+      // Tables may not exist yet (fresh database) — schema.sql will create them
+    }
+  }
+
+  /**
    * Migrate any projects with status 'paused' to 'active'.
    * The paused status was removed in issue #228.
    */
@@ -779,8 +821,8 @@ export class FleetDatabase {
   insertProject(data: ProjectInsert): Project {
     const now = new Date().toISOString();
     const stmt = this.stmt(`
-      INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, created_at, updated_at)
-      VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @createdAt, @updatedAt)
+      INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, issue_provider, project_key, provider_config, created_at, updated_at)
+      VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @issueProvider, @projectKey, @providerConfig, @createdAt, @updatedAt)
     `);
 
     const info = stmt.run({
@@ -791,6 +833,9 @@ export class FleetDatabase {
       maxActiveTeams: data.maxActiveTeams ?? 5,
       promptFile: data.promptFile ?? null,
       model: data.model ?? null,
+      issueProvider: data.issueProvider ?? 'github',
+      projectKey: data.projectKey ?? null,
+      providerConfig: data.providerConfig ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -884,6 +929,18 @@ export class FleetDatabase {
       setClauses.push('model = @model');
       params.model = fields.model;
     }
+    if (fields.issueProvider !== undefined) {
+      setClauses.push('issue_provider = @issueProvider');
+      params.issueProvider = fields.issueProvider;
+    }
+    if (fields.projectKey !== undefined) {
+      setClauses.push('project_key = @projectKey');
+      params.projectKey = fields.projectKey;
+    }
+    if (fields.providerConfig !== undefined) {
+      setClauses.push('provider_config = @providerConfig');
+      params.providerConfig = fields.providerConfig;
+    }
 
     if (setClauses.length === 0) return this.getProject(id);
 
@@ -975,14 +1032,16 @@ export class FleetDatabase {
   insertTeam(data: TeamInsert): Team {
     const now = new Date().toISOString();
     const stmt = this.stmt(`
-      INSERT INTO teams (issue_number, issue_title, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, headless, blocked_by_json, launched_at, created_at, updated_at)
-      VALUES (@issueNumber, @issueTitle, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @headless, @blockedByJson, @launchedAt, @createdAt, @updatedAt)
+      INSERT INTO teams (issue_number, issue_title, issue_key, issue_provider, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, headless, blocked_by_json, launched_at, created_at, updated_at)
+      VALUES (@issueNumber, @issueTitle, @issueKey, @issueProvider, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @headless, @blockedByJson, @launchedAt, @createdAt, @updatedAt)
     `);
 
     try {
       const info = stmt.run({
         issueNumber: data.issueNumber,
         issueTitle: data.issueTitle ?? null,
+        issueKey: data.issueKey ?? String(data.issueNumber),
+        issueProvider: data.issueProvider ?? 'github',
         projectId: data.projectId ?? null,
         worktreeName: data.worktreeName,
         branchName: data.branchName ?? null,
@@ -2308,6 +2367,9 @@ export class FleetDatabase {
       maxActiveTeams: (row.max_active_teams as number | undefined) ?? 5,
       promptFile: (row.prompt_file as string | null) ?? null,
       model: (row.model as string | null) ?? null,
+      issueProvider: (row.issue_provider as string | null) ?? 'github',
+      projectKey: (row.project_key as string | null) ?? null,
+      providerConfig: (row.provider_config as string | null) ?? null,
       createdAt: utcify(row.created_at as string),
       updatedAt: utcify(row.updated_at as string),
     };
@@ -2328,6 +2390,8 @@ export class FleetDatabase {
       id: row.id as number,
       issueNumber: row.issue_number as number,
       issueTitle: row.issue_title as string | null,
+      issueKey: (row.issue_key as string | null) ?? null,
+      issueProvider: (row.issue_provider as string | null) ?? 'github',
       projectId: (row.project_id as number | null) ?? null,
       status: row.status as TeamStatus,
       phase: row.phase as TeamPhase,
