@@ -484,6 +484,50 @@ describe('executeCleanup', () => {
     expect(branchDeleteCalls.length).toBe(0);
   });
 
+  it('skips worktree removal when team becomes active between preview and execute', () => {
+    const project = makeProject();
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([]);
+
+    // Setup: worktree dir has an orphan directory
+    mockFs.existsSync.mockImplementation((p: string) => {
+      if (pathContains(p, '.claude/worktrees')) return true;
+      return false;
+    });
+    mockFs.readdirSync.mockImplementation((p: string, opts?: unknown) => {
+      if (pathContains(p, '.claude/worktrees') && opts) {
+        return [makeDirent('test-project-42')];
+      }
+      return [];
+    });
+    mockExecSync.mockReturnValue('');
+
+    // The preview re-scan (getCleanupPreview inside executeCleanup) returns the
+    // worktree as an orphan because getTeamByWorktree returns undefined during
+    // the preview phase. But the just-before-delete guard finds the team is now queued.
+    let callCount = 0;
+    mockDb.getTeamByWorktree.mockImplementation(() => {
+      callCount++;
+      // First call is from getCleanupPreview (worktree scan) — no team yet
+      if (callCount <= 1) return undefined;
+      // Second call is from executeCleanup just-before-delete guard — team is now queued
+      return makeTeam({ id: 42, status: 'queued', worktreeName: 'test-project-42' });
+    });
+
+    const normalizedPath = '/tmp/repo/.claude/worktrees/test-project-42';
+    const result = executeCleanup(1, [normalizedPath]);
+
+    // Worktree should NOT be removed
+    expect(result.removed).not.toContain('test-project-42');
+    // Verify git worktree remove was NOT called
+    const worktreeRemoveCalls = mockExecSync.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('worktree remove'),
+    );
+    expect(worktreeRemoveCalls.length).toBe(0);
+    // Verify fs.rmSync was NOT called
+    expect(mockFs.rmSync).not.toHaveBeenCalled();
+  });
+
   it('deletes team records when included in itemPaths', () => {
     const project = makeProject();
     const team = makeTeam({ id: 10, status: 'done' });

@@ -13,6 +13,11 @@ import { getDatabase } from '../db.js';
 import config from '../config.js';
 import type { CleanupItem, CleanupPreview, CleanupResult } from '../../shared/types.js';
 
+// Statuses that indicate a team is actively using its worktree/branch.
+// Used in both preview (to exclude active teams) and execute (to re-check
+// before destructive operations in case a team was re-queued between phases).
+const ACTIVE_STATUSES = ['queued', 'launching', 'running', 'idle', 'stuck'] as const;
+
 // ---------------------------------------------------------------------------
 // Preview (dry run)
 // ---------------------------------------------------------------------------
@@ -38,10 +43,9 @@ export function getCleanupPreview(projectId: number, resetTeams: boolean = false
 
   // Build set of worktree names belonging to active teams
   const allTeams = db.getTeams({ projectId });
-  const activeStatuses = ['queued', 'launching', 'running', 'idle', 'stuck'];
   const activeWorktreeNames = new Set(
     allTeams
-      .filter((t) => activeStatuses.includes(t.status))
+      .filter((t) => (ACTIVE_STATUSES as readonly string[]).includes(t.status))
       .map((t) => t.worktreeName),
   );
 
@@ -140,7 +144,7 @@ export function getCleanupPreview(projectId: number, resetTeams: boolean = false
 
       // Defense-in-depth: direct DB check in case activeWorktreeNames is stale
       const branchTeam = db.getTeamByWorktree(worktreeName);
-      if (branchTeam && activeStatuses.includes(branchTeam.status)) continue;
+      if (branchTeam && (ACTIVE_STATUSES as readonly string[]).includes(branchTeam.status)) continue;
       // Skip branches belonging to a different project
       if (branchTeam && branchTeam.projectId !== projectId) continue;
 
@@ -211,6 +215,12 @@ export function executeCleanup(
 
     try {
       if (item.type === 'worktree') {
+        // Re-check: skip if this worktree now belongs to an active/re-queued team
+        const ownerTeam = db.getTeamByWorktree(item.name);
+        if (ownerTeam && (ACTIVE_STATUSES as readonly string[]).includes(ownerTeam.status)) {
+          console.log(`[Cleanup] Skipping worktree ${item.name} — team ${ownerTeam.id} is now ${ownerTeam.status}`);
+          continue;
+        }
         // Try git worktree remove first (properly unlinks)
         try {
           execSync(
@@ -245,7 +255,7 @@ export function executeCleanup(
           ? item.name.slice('worktree-'.length)
           : item.name;
         const ownerTeam = db.getTeamByWorktree(branchWorktree);
-        if (ownerTeam && ['queued', 'launching', 'running', 'idle', 'stuck'].includes(ownerTeam.status)) {
+        if (ownerTeam && (ACTIVE_STATUSES as readonly string[]).includes(ownerTeam.status)) {
           console.log(`[Cleanup] Skipping branch ${item.name} — team ${ownerTeam.id} is now ${ownerTeam.status}`);
           continue;
         }
