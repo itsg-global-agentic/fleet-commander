@@ -72,7 +72,7 @@ export const VirtualizedTreeList = React.memo(function VirtualizedTreeList({
     <div
       ref={parentRef}
       className={`overflow-auto ${className ?? ''}`}
-      style={{ contain: 'strict' }}
+      style={{ contain: 'content' }}
     >
       <div
         style={{
