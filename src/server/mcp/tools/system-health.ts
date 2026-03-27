@@ -11,6 +11,7 @@
 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { getDiagnosticsService } from '../../services/diagnostics-service.js';
+import { ServiceError } from '../../services/service-error.js';
 
 /**
  * Registers the `fleet_system_health` tool on the given MCP server.
@@ -23,17 +24,27 @@ export function registerSystemHealthTool(server: McpServer): void {
     'fleet_system_health',
     'Returns a fleet health summary with team counts by status and phase',
     async () => {
-      const diagnostics = getDiagnosticsService();
-      const summary = diagnostics.getHealthSummary();
+      try {
+        const diagnostics = getDiagnosticsService();
+        const summary = diagnostics.getHealthSummary();
 
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify(summary, null, 2),
-          },
-        ],
-      };
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(summary, null, 2),
+            },
+          ],
+        };
+      } catch (err) {
+        if (err instanceof ServiceError) {
+          return {
+            content: [{ type: 'text' as const, text: err.message }],
+            isError: true,
+          };
+        }
+        throw err;
+      }
     },
   );
 }

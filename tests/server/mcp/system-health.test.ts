@@ -6,6 +6,7 @@
 // =============================================================================
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ServiceError } from '../../../src/server/services/service-error.js';
 import type { HealthSummary } from '../../../src/server/services/diagnostics-service.js';
 
 // ---------------------------------------------------------------------------
@@ -140,15 +141,32 @@ describe('fleet_system_health MCP tool', () => {
     expect(parsed.byPhase).toEqual({});
   });
 
-  it('handler propagates service errors (no try/catch in zero-arg tool)', async () => {
+  it('handler returns isError on ServiceError', async () => {
     mockGetHealthSummary.mockImplementationOnce(() => {
-      throw new Error('diagnostics unavailable');
+      throw new ServiceError('diagnostics unavailable', 'EXTERNAL_ERROR', 502);
     });
 
     registerSystemHealthTool(mockMcpServer as any);
 
     const handler = registeredTools[0]!.handler;
-    await expect(handler()).rejects.toThrow('diagnostics unavailable');
+    const result = (await handler()) as {
+      content: Array<{ type: string; text: string }>;
+      isError: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe('diagnostics unavailable');
+  });
+
+  it('handler re-throws non-ServiceError exceptions', async () => {
+    mockGetHealthSummary.mockImplementationOnce(() => {
+      throw new Error('unexpected');
+    });
+
+    registerSystemHealthTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await expect(handler()).rejects.toThrow('unexpected');
   });
 
   it('handler includes byStatus and byPhase breakdowns', async () => {

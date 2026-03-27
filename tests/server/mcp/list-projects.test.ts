@@ -6,6 +6,7 @@
 // =============================================================================
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ServiceError } from '../../../src/server/services/service-error.js';
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before imports
@@ -125,15 +126,32 @@ describe('fleet_list_projects MCP tool', () => {
     expect(parsed).toEqual([]);
   });
 
-  it('handler propagates service errors (no try/catch in zero-arg tool)', async () => {
+  it('handler returns isError on ServiceError', async () => {
     mockListProjects.mockImplementationOnce(() => {
-      throw new Error('DB connection lost');
+      throw new ServiceError('DB connection lost', 'EXTERNAL_ERROR', 502);
     });
 
     registerListProjectsTool(mockMcpServer as any);
 
     const handler = registeredTools[0]!.handler;
-    await expect(handler()).rejects.toThrow('DB connection lost');
+    const result = (await handler()) as {
+      content: Array<{ type: string; text: string }>;
+      isError: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe('DB connection lost');
+  });
+
+  it('handler re-throws non-ServiceError exceptions', async () => {
+    mockListProjects.mockImplementationOnce(() => {
+      throw new Error('unexpected');
+    });
+
+    registerListProjectsTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await expect(handler()).rejects.toThrow('unexpected');
   });
 
   it('handler calls listProjects exactly once per invocation', async () => {

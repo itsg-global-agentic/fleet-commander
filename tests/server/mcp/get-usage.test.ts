@@ -6,6 +6,7 @@
 // =============================================================================
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { ServiceError } from '../../../src/server/services/service-error.js';
 
 // ---------------------------------------------------------------------------
 // Mocks — must be declared before imports
@@ -154,15 +155,32 @@ describe('fleet_get_usage MCP tool', () => {
     expect(parsed).toBeNull();
   });
 
-  it('handler propagates service errors (no try/catch in zero-arg tool)', async () => {
+  it('handler returns isError on ServiceError', async () => {
     mockGetLatest.mockImplementationOnce(() => {
-      throw new Error('DB read failure');
+      throw new ServiceError('DB read failure', 'EXTERNAL_ERROR', 502);
     });
 
     registerGetUsageTool(mockMcpServer as any);
 
     const handler = registeredTools[0]!.handler;
-    await expect(handler()).rejects.toThrow('DB read failure');
+    const result = (await handler()) as {
+      content: Array<{ type: string; text: string }>;
+      isError: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toBe('DB read failure');
+  });
+
+  it('handler re-throws non-ServiceError exceptions', async () => {
+    mockGetLatest.mockImplementationOnce(() => {
+      throw new Error('unexpected');
+    });
+
+    registerGetUsageTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await expect(handler()).rejects.toThrow('unexpected');
   });
 
   it('handler serializes all percentage fields in output', async () => {
