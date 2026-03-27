@@ -113,6 +113,7 @@ describe('AddProjectDialog', () => {
         githubRepo: 'user/test',
         maxActiveTeams: 5,
         model: undefined,
+        issueProvider: 'github',
       });
     });
   });

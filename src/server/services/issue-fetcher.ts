@@ -13,6 +13,7 @@
 import config from '../config.js';
 import { getDatabase } from '../db.js';
 import type { DependencyRef, IssueDependencyInfo } from '../../shared/types.js';
+import type { GenericIssue, GenericDependencyRef } from '../../shared/issue-provider.js';
 import { getIssueProvider, resetProviders } from '../providers/index.js';
 import {
   type GraphQLIssueNode,
@@ -21,6 +22,7 @@ import {
   runWithConcurrency,
   parseRepo,
 } from '../providers/github-issue-provider.js';
+import { JiraIssueProvider } from '../providers/jira-issue-provider.js';
 
 // ---------------------------------------------------------------------------
 // Re-exports for backward compatibility
@@ -47,6 +49,10 @@ export interface IssueNode {
   children: IssueNode[];
   activeTeam?: { id: number; status: string } | null;
   dependencies?: IssueDependencyInfo;
+  /** Universal issue key (e.g. "42" for GitHub, "PROJ-123" for Jira) */
+  issueKey?: string;
+  /** Provider name (e.g. 'github', 'jira') */
+  issueProvider?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +144,53 @@ function mapParentNodeToIssueNode(node: GraphQLIssueNode): IssueNode {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: map a GenericIssue (from any provider) to our IssueNode format
+// ---------------------------------------------------------------------------
+
+/**
+ * Map a GenericIssue from a non-GitHub provider to our IssueNode format.
+ * For Jira, issue.key is "PROJ-123" and is stored in issueKey.
+ * The `number` field uses a hash of the key for compatibility with
+ * numeric-only consumers (e.g. activeTeam enrichment).
+ */
+function mapGenericIssueToIssueNode(issue: GenericIssue): IssueNode {
+  // For Jira/Linear, we need a numeric "number" for backward compat.
+  // Extract trailing digits from the key (e.g. "PROJ-123" -> 123).
+  const numMatch = issue.key.match(/(\d+)$/);
+  const number = numMatch ? parseInt(numMatch[1], 10) : 0;
+
+  return {
+    number,
+    title: issue.title,
+    state: issue.status === 'closed' ? 'closed' : 'open',
+    labels: issue.labels,
+    url: issue.url ?? '',
+    children: [],
+    activeTeam: null,
+    issueKey: issue.key,
+    issueProvider: issue.provider,
+  };
+}
+
+/**
+ * Convert a GenericDependencyRef to a DependencyRef (for backward compat).
+ * Jira deps use key-based identification; the DependencyRef structure
+ * is GitHub-centric (owner/repo), so we set placeholder values.
+ */
+function genericDepToDepRef(dep: GenericDependencyRef): DependencyRef {
+  const numMatch = dep.key.match(/(\d+)$/);
+  const number = numMatch ? parseInt(numMatch[1], 10) : 0;
+
+  return {
+    number,
+    owner: dep.projectKey ?? dep.provider,
+    repo: dep.provider,
+    state: dep.status === 'closed' ? 'closed' : 'open',
+    title: dep.title,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Issue Fetcher class
 // ---------------------------------------------------------------------------
 
@@ -163,19 +216,21 @@ export class IssueFetcher {
       return [];
     }
 
+    // Get the provider and delegate based on type
+    const provider = getIssueProvider(project);
+
+    // Non-GitHub providers use the generic fetch path
+    if (!(provider instanceof GitHubIssueProvider)) {
+      return this.fetchIssueHierarchyGeneric(projectId, project, provider);
+    }
+
+    // GitHub path requires githubRepo
     if (!project.githubRepo) {
       console.error(`[IssueFetcher] Project ${projectId} has no githubRepo configured`);
       return [];
     }
 
     const [owner, repo] = parseRepo(project.githubRepo);
-
-    // Get the provider and delegate the raw issue fetch
-    const provider = getIssueProvider(project);
-    if (!(provider instanceof GitHubIssueProvider)) {
-      console.error(`[IssueFetcher] Provider for project ${projectId} is not a GitHubIssueProvider`);
-      return [];
-    }
 
     const { nodes: allNodes, fetchComplete } = await provider.fetchRawIssueHierarchy(owner, repo);
 
@@ -364,11 +419,16 @@ export class IssueFetcher {
    * serial iteration, significantly reducing total wall-clock time.
    */
   async fetchAllProjects(): Promise<void> {
-    // Recovery mechanism: tick the provider's retry countdown so it re-enables
-    // blockedBy support after a few poll cycles (circuit-breaker pattern).
-    const provider = getIssueProvider({ issueProvider: 'github' } as Parameters<typeof getIssueProvider>[0]);
-    if (provider instanceof GitHubIssueProvider) {
-      provider.tickRetryCountdown();
+    // Recovery mechanism: tick the GitHub provider's retry countdown so it
+    // re-enables blockedBy support after a few poll cycles (circuit-breaker pattern).
+    // Only applies to GitHub providers; Jira/Linear do not have this mechanism.
+    try {
+      const ghProvider = getIssueProvider({ issueProvider: 'github' } as Parameters<typeof getIssueProvider>[0]);
+      if (ghProvider instanceof GitHubIssueProvider) {
+        ghProvider.tickRetryCountdown();
+      }
+    } catch {
+      // No GitHub provider configured -- that's fine, Jira-only setups skip this
     }
 
     const db = getDatabase();
@@ -386,6 +446,120 @@ export class IssueFetcher {
     });
 
     await runWithConcurrency(tasks, 3);
+  }
+
+  /**
+   * Generic fetch path for non-GitHub providers (Jira, Linear, etc.).
+   * Calls the standard IssueProvider interface methods (queryIssues,
+   * getDependencies) and maps GenericIssue[] to IssueNode[], then
+   * builds the parent-child hierarchy tree.
+   */
+  private async fetchIssueHierarchyGeneric(
+    projectId: number,
+    project: { id: number; name: string; issueProvider: string | null },
+    provider: import('../../shared/issue-provider.js').IssueProvider,
+  ): Promise<IssueNode[]> {
+    let fetchComplete = true;
+
+    // Fetch all open issues via the provider's queryIssues (paginated)
+    let allGenericIssues: GenericIssue[] = [];
+
+    // If the provider is a JiraIssueProvider, use the dedicated fetchAllOpenIssues
+    if (provider instanceof JiraIssueProvider) {
+      try {
+        allGenericIssues = await provider.fetchAllOpenIssues();
+      } catch (err) {
+        console.error(
+          `[IssueFetcher] Generic fetch failed for project ${projectId}:`,
+          err instanceof Error ? err.message : err,
+        );
+        fetchComplete = false;
+      }
+    } else {
+      // Fallback: page through queryIssues for any other provider
+      let cursor: string | undefined;
+      let hasMore = true;
+      try {
+        while (hasMore && allGenericIssues.length < 1000) {
+          const result = await provider.queryIssues({ cursor, limit: 100 });
+          allGenericIssues.push(...result.issues);
+          cursor = result.cursor ?? undefined;
+          hasMore = result.hasMore;
+        }
+      } catch (err) {
+        console.error(
+          `[IssueFetcher] Generic fetch failed for project ${projectId}:`,
+          err instanceof Error ? err.message : err,
+        );
+        fetchComplete = false;
+      }
+    }
+
+    // Convert GenericIssue to IssueNode (flat, no children yet)
+    const flatIssues = allGenericIssues.map((gi) => mapGenericIssueToIssueNode(gi));
+
+    // Build parent-child hierarchy from parentKey references
+    const issueByKey = new Map<string, IssueNode>();
+    for (const issue of flatIssues) {
+      issueByKey.set(issue.issueKey ?? String(issue.number), issue);
+    }
+
+    const childKeys = new Set<string>();
+    for (const gi of allGenericIssues) {
+      if (gi.parentKey) {
+        const childKey = gi.key;
+        const parentNode = issueByKey.get(gi.parentKey);
+        const childNode = issueByKey.get(childKey);
+        if (parentNode && childNode) {
+          parentNode.children.push(childNode);
+          childKeys.add(childKey);
+        }
+      }
+    }
+
+    // Root issues are those with no parent (or parent not in fetched set)
+    const rootIssues = flatIssues.filter(
+      (issue) => !childKeys.has(issue.issueKey ?? String(issue.number)),
+    );
+
+    // Fetch dependencies for each issue
+    if (provider.capabilities.dependencies) {
+      const depTasks = flatIssues.map((issue) => async () => {
+        const key = issue.issueKey ?? String(issue.number);
+        try {
+          const deps = await provider.getDependencies(key);
+          if (deps.length > 0) {
+            const openCount = deps.filter((d) => d.status === 'open').length;
+            issue.dependencies = {
+              issueNumber: issue.number,
+              issueKey: key,
+              blockedBy: deps.map((d) => genericDepToDepRef(d)),
+              resolved: openCount === 0,
+              openCount,
+            };
+          }
+        } catch {
+          // Non-fatal: skip dependency info for this issue
+        }
+      });
+
+      await runWithConcurrency(depTasks, 5);
+    }
+
+    // Update the per-project cache
+    if (fetchComplete) {
+      this.cacheByProject.set(projectId, {
+        issues: rootIssues,
+        cachedAt: new Date().toISOString(),
+      });
+    } else if (!this.cacheByProject.has(projectId)) {
+      this.cacheByProject.set(projectId, {
+        issues: rootIssues,
+        cachedAt: null,
+      });
+    }
+
+    return rootIssues;
   }
 
   /**
@@ -672,13 +846,40 @@ export class IssueFetcher {
   }
 
   /**
-   * Fetch dependencies for a specific project + issue number.
-   * Convenience wrapper that resolves owner/repo from projectId.
+   * Fetch dependencies for a specific project + issue number (or issue key).
+   * For GitHub: resolves owner/repo and delegates to fetchDependenciesFromProvider.
+   * For non-GitHub providers: calls the provider's getDependencies directly.
    */
-  async fetchDependenciesForIssue(projectId: number, issueNumber: number): Promise<IssueDependencyInfo | null> {
+  async fetchDependenciesForIssue(projectId: number, issueNumber: number, issueKey?: string): Promise<IssueDependencyInfo | null> {
     const db = getDatabase();
     const project = db.getProject(projectId);
-    if (!project?.githubRepo) return null;
+    if (!project) return null;
+
+    const provider = getIssueProvider(project);
+
+    // Non-GitHub providers: use the generic getDependencies interface
+    if (!(provider instanceof GitHubIssueProvider)) {
+      const key = issueKey ?? String(issueNumber);
+      try {
+        const deps = await provider.getDependencies(key);
+        if (deps.length === 0) {
+          return { issueNumber, issueKey: key, blockedBy: [], resolved: true, openCount: 0 };
+        }
+        const openCount = deps.filter((d) => d.status === 'open').length;
+        return {
+          issueNumber,
+          issueKey: key,
+          blockedBy: deps.map((d) => genericDepToDepRef(d)),
+          resolved: openCount === 0,
+          openCount,
+        };
+      } catch {
+        return null;
+      }
+    }
+
+    // GitHub path requires githubRepo
+    if (!project.githubRepo) return null;
 
     const [owner, repo] = parseRepo(project.githubRepo);
     return this.fetchDependencies(owner, repo, issueNumber);

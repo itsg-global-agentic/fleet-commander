@@ -760,8 +760,11 @@ export class ProjectService {
     githubRepo?: string;
     maxActiveTeams?: number;
     model?: string;
+    issueProvider?: string;
+    projectKey?: string;
+    providerConfig?: string;
   }): Promise<unknown> {
-    const { name, repoPath, githubRepo, maxActiveTeams, model } = data;
+    const { name, repoPath, githubRepo, maxActiveTeams, model, issueProvider, projectKey, providerConfig } = data;
 
     // Validate name
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -784,8 +787,53 @@ export class ProjectService {
       );
     }
 
-    // Auto-detect githubRepo if not provided
-    const resolvedGithubRepo = githubRepo || await detectGithubRepo(normalizedPath);
+    // Validate Jira-specific fields when issueProvider is 'jira'
+    const resolvedIssueProvider = issueProvider || 'github';
+    let resolvedProjectKey = projectKey || null;
+    let resolvedProviderConfig = providerConfig || null;
+
+    if (resolvedIssueProvider === 'jira') {
+      // Parse and validate the provider config JSON
+      if (!providerConfig) {
+        throw validationError('providerConfig is required for Jira projects');
+      }
+
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(providerConfig) as Record<string, unknown>;
+      } catch {
+        throw validationError('providerConfig must be valid JSON for Jira projects');
+      }
+
+      if (!parsed.baseUrl || typeof parsed.baseUrl !== 'string') {
+        throw validationError('Jira baseUrl is required in providerConfig');
+      }
+      if (!parsed.email || typeof parsed.email !== 'string') {
+        throw validationError('Jira email is required in providerConfig');
+      }
+      if (!parsed.apiToken || typeof parsed.apiToken !== 'string') {
+        throw validationError('Jira apiToken is required in providerConfig');
+      }
+
+      // Resolve projectKey from the explicit field or from providerConfig
+      resolvedProjectKey = projectKey || (parsed.projectKey as string) || null;
+      if (!resolvedProjectKey) {
+        throw validationError('projectKey is required for Jira projects');
+      }
+
+      // Validate project key format: uppercase letters followed optionally by more
+      if (!/^[A-Z][A-Z0-9]*$/.test(resolvedProjectKey)) {
+        throw validationError('Jira projectKey must match [A-Z][A-Z0-9]* pattern (e.g. "PROJ")');
+      }
+
+      // Store the resolved providerConfig as-is (already valid JSON)
+      resolvedProviderConfig = providerConfig;
+    }
+
+    // Auto-detect githubRepo if not provided (only for GitHub projects)
+    const resolvedGithubRepo = resolvedIssueProvider === 'github'
+      ? (githubRepo || await detectGithubRepo(normalizedPath))
+      : (githubRepo || null);
 
     // Validate maxActiveTeams if provided
     if (maxActiveTeams !== undefined) {
@@ -828,6 +876,9 @@ export class ProjectService {
       maxActiveTeams: maxActiveTeams ?? 5,
       promptFile: promptRelPath,
       model: model?.trim() || null,
+      issueProvider: resolvedIssueProvider,
+      projectKey: resolvedProjectKey,
+      providerConfig: resolvedProviderConfig,
     });
 
     // Install hooks (non-fatal)

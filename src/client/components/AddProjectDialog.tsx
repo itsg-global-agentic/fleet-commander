@@ -37,6 +37,13 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Issue provider state
+  const [issueProvider, setIssueProvider] = useState<'github' | 'jira'>('github');
+  const [jiraBaseUrl, setJiraBaseUrl] = useState('');
+  const [jiraEmail, setJiraEmail] = useState('');
+  const [jiraApiToken, setJiraApiToken] = useState('');
+  const [jiraProjectKey, setJiraProjectKey] = useState('');
+
   // Path picker state
   const [suggestions, setSuggestions] = useState<DirEntry[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -86,6 +93,11 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
       setShowSuggestions(false);
       setSelectedSuggestion(-1);
       setParentPath('');
+      setIssueProvider('github');
+      setJiraBaseUrl('');
+      setJiraEmail('');
+      setJiraApiToken('');
+      setJiraProjectKey('');
     }
   }, [open]);
 
@@ -238,15 +250,52 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
       return;
     }
 
+    // Validate Jira fields
+    if (issueProvider === 'jira') {
+      if (!jiraBaseUrl.trim()) {
+        setError('Jira Base URL is required');
+        return;
+      }
+      if (!jiraEmail.trim()) {
+        setError('Jira Email is required');
+        return;
+      }
+      if (!jiraApiToken.trim()) {
+        setError('Jira API Token is required');
+        return;
+      }
+      if (!jiraProjectKey.trim()) {
+        setError('Jira Project Key is required');
+        return;
+      }
+      if (!/^[A-Z][A-Z0-9]*$/.test(jiraProjectKey.trim())) {
+        setError('Jira Project Key must be uppercase letters/numbers (e.g. "PROJ")');
+        return;
+      }
+    }
+
     setLoading(true);
     try {
-      await api.post('projects', {
+      const body: Record<string, unknown> = {
         name: name.trim(),
         repoPath: repoPath.trim(),
         githubRepo: githubRepo.trim() || undefined,
         maxActiveTeams,
         model: model.trim() || undefined,
-      });
+        issueProvider,
+      };
+
+      if (issueProvider === 'jira') {
+        body.projectKey = jiraProjectKey.trim();
+        body.providerConfig = JSON.stringify({
+          baseUrl: jiraBaseUrl.trim(),
+          email: jiraEmail.trim(),
+          apiToken: jiraApiToken.trim(),
+          projectKey: jiraProjectKey.trim(),
+        });
+      }
+
+      await api.post('projects', body);
       onAdded();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -254,7 +303,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
     } finally {
       setLoading(false);
     }
-  }, [name, repoPath, githubRepo, maxActiveTeams, model, api, onAdded]);
+  }, [name, repoPath, githubRepo, maxActiveTeams, model, issueProvider, jiraBaseUrl, jiraEmail, jiraApiToken, jiraProjectKey, api, onAdded]);
 
   // Keyboard navigation for suggestions + Enter to submit
   const handlePathKeyDown = useCallback(
@@ -455,21 +504,124 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
             )}
           </div>
 
-          {/* GitHub repo (optional) */}
+          {/* Issue Provider selector */}
           <div>
             <label className="block text-sm text-dark-muted mb-1">
-              GitHub Repo <span className="text-dark-muted/50">(optional)</span>
+              Issue Provider
             </label>
-            <input
-              type="text"
-              value={githubRepo}
-              onChange={(e) => setGithubRepo(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="org/repo (auto-detected)"
-              className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
-              disabled={loading}
-            />
+            <div className="flex gap-4">
+              <label className="inline-flex items-center gap-1.5 text-sm text-dark-text cursor-pointer">
+                <input
+                  type="radio"
+                  name="issueProvider"
+                  value="github"
+                  checked={issueProvider === 'github'}
+                  onChange={() => setIssueProvider('github')}
+                  className="accent-dark-accent"
+                  disabled={loading}
+                />
+                GitHub
+              </label>
+              <label className="inline-flex items-center gap-1.5 text-sm text-dark-text cursor-pointer">
+                <input
+                  type="radio"
+                  name="issueProvider"
+                  value="jira"
+                  checked={issueProvider === 'jira'}
+                  onChange={() => setIssueProvider('jira')}
+                  className="accent-dark-accent"
+                  disabled={loading}
+                />
+                Jira
+              </label>
+            </div>
           </div>
+
+          {/* GitHub repo (optional, shown for GitHub provider) */}
+          {issueProvider === 'github' && (
+            <div>
+              <label className="block text-sm text-dark-muted mb-1">
+                GitHub Repo <span className="text-dark-muted/50">(optional)</span>
+              </label>
+              <input
+                type="text"
+                value={githubRepo}
+                onChange={(e) => setGithubRepo(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="org/repo (auto-detected)"
+                className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+                disabled={loading}
+              />
+            </div>
+          )}
+
+          {/* Jira configuration fields */}
+          {issueProvider === 'jira' && (
+            <>
+              <div>
+                <label className="block text-sm text-dark-muted mb-1">
+                  Jira Base URL <span className="text-[#F85149]">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={jiraBaseUrl}
+                  onChange={(e) => setJiraBaseUrl(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="https://mycompany.atlassian.net"
+                  className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+                  disabled={loading}
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-dark-muted mb-1">
+                  Jira Email <span className="text-[#F85149]">*</span>
+                </label>
+                <input
+                  type="email"
+                  value={jiraEmail}
+                  onChange={(e) => setJiraEmail(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="user@example.com"
+                  className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+                  disabled={loading}
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-dark-muted mb-1">
+                  Jira API Token <span className="text-[#F85149]">*</span>
+                </label>
+                <input
+                  type="password"
+                  value={jiraApiToken}
+                  onChange={(e) => setJiraApiToken(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Your Jira API token"
+                  className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+                  disabled={loading}
+                />
+                <p className="mt-1 text-xs text-dark-muted/60">
+                  Generate at <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener noreferrer" className="text-dark-accent hover:underline">Atlassian API tokens</a>
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm text-dark-muted mb-1">
+                  Jira Project Key <span className="text-[#F85149]">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={jiraProjectKey}
+                  onChange={(e) => setJiraProjectKey(e.target.value.toUpperCase())}
+                  onKeyDown={handleKeyDown}
+                  placeholder="PROJ"
+                  className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/50 focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+                  disabled={loading}
+                />
+                <p className="mt-1 text-xs text-dark-muted/60">
+                  The Jira project key (e.g. "PROJ"). Must be uppercase.
+                </p>
+              </div>
+            </>
+          )}
 
           {/* Max Active Teams */}
           <div>
