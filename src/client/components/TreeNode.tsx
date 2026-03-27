@@ -3,6 +3,7 @@ import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
 import { PlayIcon, LockIcon } from './Icons';
 import type { TeamStatus, PrioritizedIssue, IssueDependencyInfo, CIStatus } from '../../shared/types';
+import { formatIssueKey } from '../../shared/issue-provider';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors IssueNode from the server issue-fetcher)
@@ -20,6 +21,10 @@ export interface IssueNode {
   children: IssueNode[];
   activeTeam?: { id: number; status: string } | null;
   dependencies?: IssueDependencyInfo;
+  /** Universal issue key (e.g. "42" for GitHub, "PROJ-123" for Jira) */
+  issueKey?: string;
+  /** Provider name (e.g. 'github', 'jira') */
+  issueProvider?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,14 +234,14 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
               onCheckChange(node.number, e.target.checked);
             }}
             className="w-3.5 h-3.5 shrink-0 accent-dark-accent cursor-pointer"
-            aria-label={`Select issue #${node.number}`}
+            aria-label={`Select issue ${formatIssueKey(node.issueKey ?? String(node.number), node.issueProvider ?? null)}`}
           />
         )}
 
         {/* Issue state icon */}
         <IssueStateBadge state={node.state} />
 
-        {/* Issue number */}
+        {/* Issue key / number */}
         <a
           href={node.url}
           target="_blank"
@@ -244,7 +249,7 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
           className="text-sm text-dark-muted hover:text-dark-accent transition-colors shrink-0"
           onClick={(e) => e.stopPropagation()}
         >
-          #{node.number}
+          {formatIssueKey(node.issueKey ?? String(node.number), node.issueProvider ?? null)}
         </a>
 
         {/* Issue title */}
@@ -310,7 +315,7 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
             className={`ml-auto shrink-0 transition-opacity inline-flex items-center gap-1 px-1.5 py-0.5 text-xs rounded border border-[#A371F7]/50 text-[#A371F7] hover:bg-[#A371F7]/10 disabled:opacity-50 disabled:cursor-not-allowed ${
               prioritizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
             }`}
-            title={`Prioritize sub-issues under #${node.number}`}
+            title={`Prioritize sub-issues under ${formatIssueKey(node.issueKey ?? String(node.number), node.issueProvider ?? null)}`}
           >
             {prioritizing ? (
               <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
@@ -338,7 +343,7 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
                 ? 'border-[#D29922]/50 text-[#D29922] hover:text-[#D29922] hover:border-[#D29922]'
                 : 'border-dark-border text-dark-muted hover:text-[#3FB950] hover:border-[#3FB950]/50'
             }`}
-            title={isBlocked ? `Launch team for #${node.number} (blocked — will prompt for confirmation)` : `Launch team for #${node.number}`}
+            title={isBlocked ? `Launch team for ${formatIssueKey(node.issueKey ?? String(node.number), node.issueProvider ?? null)} (blocked — will prompt for confirmation)` : `Launch team for ${formatIssueKey(node.issueKey ?? String(node.number), node.issueProvider ?? null)}`}
           >
             {launching ? (
               <svg className="animate-spin w-3 h-3" viewBox="0 0 24 24" fill="none">
