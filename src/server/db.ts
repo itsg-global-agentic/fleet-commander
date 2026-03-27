@@ -817,6 +817,12 @@ export class FleetDatabase {
       // Recreate the view (will be done again by schema.sql, but ensure order)
       this.db.exec('DROP VIEW IF EXISTS v_team_dashboard');
 
+      // Drop the old UNIQUE index on (project_id, issue_number) — non-numeric
+      // issue keys (e.g. Jira PROJ-123) all map to issueNumber=0, which would
+      // violate the UNIQUE constraint. The new idx_teams_project_issue_key index
+      // (on issue_key) replaces its purpose.
+      this.db.exec('DROP INDEX IF EXISTS idx_teams_project_issue');
+
       // Add UNIQUE index on (project_id, issue_key) for non-numeric key support
       // First, check if issue_key column exists (it should from v10)
       const teamCols = this.db.prepare("PRAGMA table_info(teams)").all() as Array<{ name: string }>;

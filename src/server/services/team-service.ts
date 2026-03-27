@@ -18,6 +18,7 @@ import type { TeamPhase, IssueDependencyInfo, PaginatedResponse, TeamDashboardRo
 import { buildTimeline } from '../utils/build-timeline.js';
 import { ServiceError, validationError, notFoundError, conflictError, projectNotReadyError } from './service-error.js';
 import { getProjectService } from './project-service.js';
+import { formatIssueKey } from '../../shared/issue-provider.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -425,7 +426,7 @@ export class TeamService {
 
     if (format === 'txt') {
       let text = `# Team ${team.worktreeName} - Export\n`;
-      text += `Issue: #${team.issueNumber} ${team.issueTitle ?? ''}\n`;
+      text += `Issue: ${formatIssueKey(team.issueKey ?? String(team.issueNumber), team.issueProvider)} ${team.issueTitle ?? ''}\n`;
       text += `Status: ${team.status}\n`;
       text += `Launched: ${team.launchedAt ?? 'N/A'}\n\n`;
       text += `## Stream Events\n`;

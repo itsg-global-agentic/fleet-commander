@@ -1550,7 +1550,9 @@ export class TeamManager {
       if (fs.existsSync(absPath)) {
         try {
           const template = fs.readFileSync(absPath, 'utf-8');
-          const resolved = template.replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey);
+          const resolved = template
+            .replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey)
+            .replace(/\{\{ISSUE_KEY\}\}/g, issueKey);
           console.log(`[TeamManager] Resolved prompt from file: ${project.promptFile}`);
           return resolved;
         } catch (err: unknown) {
@@ -1566,7 +1568,9 @@ export class TeamManager {
     if (fs.existsSync(defaultPath)) {
       try {
         const template = fs.readFileSync(defaultPath, 'utf-8');
-        const resolved = template.replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey);
+        const resolved = template
+          .replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey)
+          .replace(/\{\{ISSUE_KEY\}\}/g, issueKey);
         console.log(`[TeamManager] Resolved prompt from default: prompts/default-prompt.md`);
         return resolved;
       } catch {

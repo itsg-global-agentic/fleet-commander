@@ -213,6 +213,7 @@ class StuckDetector {
           if (newStatus === 'stuck') {
             const msg = resolveMessage('stuck_nudge', {
               ISSUE_NUMBER: team.issueKey ?? String(team.issueNumber),
+              ISSUE_KEY: team.issueKey ?? String(team.issueNumber),
             });
             if (msg) {
               try {
