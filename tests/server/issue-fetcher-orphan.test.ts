@@ -14,19 +14,35 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IssueNode } from '../../src/server/services/issue-fetcher.js';
 
 // ---------------------------------------------------------------------------
-// Mocks — must be declared before import
+// Mocks — must be declared before import. vi.mock calls are hoisted.
+// vi.hoisted() ensures variables are available in hoisted vi.mock factories.
 // ---------------------------------------------------------------------------
 
-const mockDb = {
-  getProject: vi.fn().mockReturnValue({
-    id: 1,
-    name: 'test-repo',
-    githubRepo: 'owner/repo',
-  }),
-  getProjects: vi.fn().mockReturnValue([]),
-  getActiveTeams: vi.fn().mockReturnValue([]),
-  getActiveTeamsByProject: vi.fn().mockReturnValue([]),
-};
+const {
+  mockFetchRawIssueHierarchy,
+  mockFetchMissingParents,
+  mockFetchSingleIssueDeps,
+  mockResolveIssueStates,
+  mockDb,
+} = vi.hoisted(() => ({
+  mockFetchRawIssueHierarchy: vi.fn(),
+  mockFetchMissingParents: vi.fn(),
+  mockFetchSingleIssueDeps: vi.fn(),
+  mockResolveIssueStates: vi.fn(),
+  mockDb: {
+    getProject: vi.fn().mockReturnValue({
+      id: 1,
+      name: 'test-repo',
+      githubRepo: 'owner/repo',
+      issueProvider: null,
+      projectKey: null,
+      providerConfig: null,
+    }),
+    getProjects: vi.fn().mockReturnValue([]),
+    getActiveTeams: vi.fn().mockReturnValue([]),
+    getActiveTeamsByProject: vi.fn().mockReturnValue([]),
+  },
+}));
 
 vi.mock('../../src/server/db.js', () => ({
   getDatabase: () => mockDb,
@@ -38,28 +54,75 @@ vi.mock('../../src/server/config.js', () => ({
   },
 }));
 
-// Mock child_process.exec (used by fetchMissingParents / resolveIssueStates)
-const mockExec = vi.fn();
-vi.mock('child_process', () => ({
-  exec: (...args: unknown[]) => mockExec(...args),
-  spawn: vi.fn(),
-}));
+// We mock the entire providers/index module and providers/github-issue-provider module.
+// The key trick: since the IssueFetcher does `instanceof GitHubIssueProvider` check,
+// we need the mock provider to pass that check. We accomplish this by mocking
+// GitHubIssueProvider class and making getIssueProvider return instances of it.
 
-// Mock util.promisify so that execAsync uses our mockExec
-vi.mock('util', () => ({
-  promisify: (fn: unknown) => {
-    // Return a function that wraps mockExec into a Promise
-    return (...args: unknown[]) => {
-      return new Promise((resolve, reject) => {
-        // Call the mock with a callback pattern
-        (fn as Function)(...args, (err: Error | null, result: unknown) => {
-          if (err) reject(err);
-          else resolve(result);
-        });
-      });
+vi.mock('../../src/server/providers/github-issue-provider.js', () => {
+  // Create a real class so instanceof works
+  class GitHubIssueProvider {
+    name = 'github';
+    capabilities = {
+      dependencies: true,
+      subIssues: true,
+      labels: true,
+      boardStatuses: false,
+      priorities: false,
+      assignees: true,
+      linkedPRs: true,
     };
-  },
-}));
+    fetchRawIssueHierarchy = mockFetchRawIssueHierarchy;
+    fetchMissingParents = mockFetchMissingParents;
+    fetchSingleIssueDeps = mockFetchSingleIssueDeps;
+    resolveIssueStates = mockResolveIssueStates;
+    isBlockedBySupported = true;
+    resetBlockedBySupport = vi.fn();
+    getIssue = vi.fn().mockResolvedValue(null);
+    queryIssues = vi.fn().mockResolvedValue({ issues: [], cursor: null, hasMore: false });
+    getDependencies = vi.fn().mockResolvedValue([]);
+    getLinkedPRs = vi.fn().mockResolvedValue([]);
+    mapToGenericIssue = vi.fn();
+  }
+
+  return {
+    GitHubIssueProvider,
+    parseDependenciesFromBody: vi.fn().mockReturnValue([]),
+    runWithConcurrency: async <T>(tasks: Array<() => Promise<T>>, limit: number): Promise<T[]> => {
+      const results: T[] = new Array(tasks.length);
+      let nextIndex = 0;
+      async function worker(): Promise<void> {
+        while (nextIndex < tasks.length) {
+          const idx = nextIndex++;
+          results[idx] = await tasks[idx]();
+        }
+      }
+      const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
+      await Promise.all(workers);
+      return results;
+    },
+    parseRepo: (githubRepo: string): [string, string] => {
+      const parts = githubRepo.split('/');
+      return [parts[0] || 'unknown', parts[1] || 'unknown'];
+    },
+    GITHUB_STATUS_MAP: { OPEN: 'open', CLOSED: 'closed' },
+    MAX_CONCURRENT_RESOLVE: 5,
+    ISSUES_QUERY_FULL: '',
+    ISSUES_QUERY_BASIC: '',
+    SINGLE_ISSUE_DEPS_QUERY_FULL: '',
+    SINGLE_ISSUE_DEPS_QUERY_BASIC: '',
+  };
+});
+
+// The provider singleton instance -- created fresh per getIssueProvider call
+vi.mock('../../src/server/providers/index.js', async () => {
+  const { GitHubIssueProvider } = await import('../../src/server/providers/github-issue-provider.js');
+  const instance = new GitHubIssueProvider();
+  return {
+    getIssueProvider: () => instance,
+    resetProviders: vi.fn(),
+  };
+});
 
 // Import after mocks
 import IssueFetcher from '../../src/server/services/issue-fetcher.js';
@@ -68,35 +131,33 @@ import IssueFetcher from '../../src/server/services/issue-fetcher.js';
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Helper to create a minimal GraphQL response for the executeGraphQL mock */
-function makeGraphQLResponse(nodes: Array<{
+interface MockNode {
   number: number;
   title: string;
   state?: string;
   url?: string;
   parent?: { number: number; title: string } | null;
   labels?: { nodes?: Array<{ name: string }> };
-}>) {
+  body?: string | null;
+}
+
+/** Helper to create a mock fetchRawIssueHierarchy return value */
+function makeRawHierarchyResult(nodes: MockNode[], fetchComplete = true) {
   return {
-    data: {
-      repository: {
-        issues: {
-          pageInfo: { hasNextPage: false, endCursor: null },
-          nodes: nodes.map((n) => ({
-            number: n.number,
-            title: n.title,
-            state: n.state ?? 'OPEN',
-            url: n.url ?? `https://github.com/owner/repo/issues/${n.number}`,
-            labels: n.labels ?? { nodes: [] },
-            parent: n.parent ?? null,
-            subIssuesSummary: undefined,
-            closedByPullRequestsReferences: undefined,
-            blockedBy: undefined,
-            issueDependenciesSummary: undefined,
-          })),
-        },
-      },
-    },
+    nodes: nodes.map((n) => ({
+      number: n.number,
+      title: n.title,
+      state: n.state ?? 'OPEN',
+      url: n.url ?? `https://github.com/owner/repo/issues/${n.number}`,
+      labels: n.labels ?? { nodes: [] },
+      parent: n.parent ?? null,
+      subIssuesSummary: undefined,
+      closedByPullRequestsReferences: undefined,
+      blockedBy: undefined,
+      issueDependenciesSummary: undefined,
+      body: n.body ?? null,
+    })),
+    fetchComplete,
   };
 }
 
@@ -113,21 +174,19 @@ describe('IssueFetcher orphan detection', () => {
   });
 
   it('promotes orphaned children to root when parent fetch fails completely', async () => {
-    // Scenario: issue #10 (open) has parent #5 (closed, not in OPEN query).
-    // The fetchMissingParents call fails for #5 -> child #10 should become root.
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([
         { number: 10, title: 'Open child', parent: { number: 5, title: 'Closed parent' } },
         { number: 20, title: 'Root issue' },
       ])
     );
 
-    const fetchParentsSpy = vi.spyOn(fetcher as any, 'fetchMissingParents').mockResolvedValue([]);
+    mockFetchMissingParents.mockResolvedValue([]);
 
     const result = await fetcher.fetchIssueHierarchy(1);
 
     // fetchMissingParents was called with [5]
-    expect(fetchParentsSpy).toHaveBeenCalledWith('owner', 'repo', [5]);
+    expect(mockFetchMissingParents).toHaveBeenCalledWith('owner', 'repo', [5]);
 
     // Since fetchMissingParents returned empty (failed), orphan #10 becomes root
     const rootNumbers = result.map((n) => n.number).sort((a, b) => a - b);
@@ -136,33 +195,26 @@ describe('IssueFetcher orphan detection', () => {
     // Both should be at root level, not nested
     expect(result.find((n) => n.number === 10)!.children).toHaveLength(0);
     expect(result.find((n) => n.number === 20)!.children).toHaveLength(0);
-
-    graphqlSpy.mockRestore();
-    fetchParentsSpy.mockRestore();
   });
 
   it('injects closed parent and links children when parent fetch succeeds', async () => {
-    // Scenario: issues #10, #11 (open) have parent #5 (closed).
-    // fetchMissingParents returns #5 as a closed node.
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([
         { number: 10, title: 'Sub-issue A', parent: { number: 5, title: 'Epic (closed)' } },
         { number: 11, title: 'Sub-issue B', parent: { number: 5, title: 'Epic (closed)' } },
         { number: 20, title: 'Standalone issue' },
       ])
     );
 
-    const closedParent: IssueNode = {
+    const closedParentNode = {
       number: 5,
       title: 'Epic (closed)',
-      state: 'closed',
-      labels: [],
+      state: 'CLOSED',
       url: 'https://github.com/owner/repo/issues/5',
-      children: [],
-      activeTeam: null,
+      labels: { nodes: [] as Array<{ name: string }> },
     };
 
-    const fetchParentsSpy = vi.spyOn(fetcher as any, 'fetchMissingParents').mockResolvedValue([closedParent]);
+    mockFetchMissingParents.mockResolvedValue([closedParentNode]);
 
     const result = await fetcher.fetchIssueHierarchy(1);
 
@@ -179,60 +231,47 @@ describe('IssueFetcher orphan detection', () => {
     // #10 and #11 should NOT be at root
     expect(result.find((n) => n.number === 10)).toBeUndefined();
     expect(result.find((n) => n.number === 11)).toBeUndefined();
-
-    graphqlSpy.mockRestore();
-    fetchParentsSpy.mockRestore();
   });
 
   it('does not call fetchMissingParents when all parents are present', async () => {
-    // Scenario: all parents are open and present in the fetched set.
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([
         { number: 5, title: 'Parent issue' },
         { number: 10, title: 'Child issue', parent: { number: 5, title: 'Parent issue' } },
       ])
     );
 
-    const fetchParentsSpy = vi.spyOn(fetcher as any, 'fetchMissingParents');
-
     const result = await fetcher.fetchIssueHierarchy(1);
 
     // fetchMissingParents should NOT be called
-    expect(fetchParentsSpy).not.toHaveBeenCalled();
+    expect(mockFetchMissingParents).not.toHaveBeenCalled();
 
     // #5 is root with #10 as child
     expect(result).toHaveLength(1);
     expect(result[0].number).toBe(5);
     expect(result[0].children).toHaveLength(1);
     expect(result[0].children[0].number).toBe(10);
-
-    graphqlSpy.mockRestore();
-    fetchParentsSpy.mockRestore();
   });
 
   it('handles multiple orphan parents — some fetched, some failed', async () => {
-    // #10 has closed parent #5, #20 has closed parent #15.
-    // Only #5 is successfully fetched; #15 fails -> #20 becomes root.
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([
         { number: 10, title: 'Child of 5', parent: { number: 5, title: 'Parent A' } },
         { number: 20, title: 'Child of 15', parent: { number: 15, title: 'Parent B' } },
         { number: 30, title: 'Standalone' },
       ])
     );
 
-    const closedParent5: IssueNode = {
+    const closedParent5 = {
       number: 5,
       title: 'Parent A (closed)',
-      state: 'closed',
-      labels: [],
+      state: 'CLOSED',
       url: 'https://github.com/owner/repo/issues/5',
-      children: [],
-      activeTeam: null,
+      labels: { nodes: [] as Array<{ name: string }> },
     };
 
     // Only parent #5 is returned; #15 fetch failed
-    const fetchParentsSpy = vi.spyOn(fetcher as any, 'fetchMissingParents').mockResolvedValue([closedParent5]);
+    mockFetchMissingParents.mockResolvedValue([closedParent5]);
 
     const result = await fetcher.fetchIssueHierarchy(1);
 
@@ -248,30 +287,24 @@ describe('IssueFetcher orphan detection', () => {
     // #20 should be promoted to root (its parent #15 was not fetched)
     const child20 = result.find((n) => n.number === 20)!;
     expect(child20.children).toHaveLength(0);
-
-    graphqlSpy.mockRestore();
-    fetchParentsSpy.mockRestore();
   });
 
   it('does not duplicate children when re-linking orphans', async () => {
-    // Regression check: ensure children are not double-linked
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([
         { number: 10, title: 'Only child', parent: { number: 5, title: 'Closed parent' } },
       ])
     );
 
-    const closedParent: IssueNode = {
+    const closedParent = {
       number: 5,
       title: 'Closed parent',
-      state: 'closed',
-      labels: [],
+      state: 'CLOSED',
       url: 'https://github.com/owner/repo/issues/5',
-      children: [],
-      activeTeam: null,
+      labels: { nodes: [] as Array<{ name: string }> },
     };
 
-    const fetchParentsSpy = vi.spyOn(fetcher as any, 'fetchMissingParents').mockResolvedValue([closedParent]);
+    mockFetchMissingParents.mockResolvedValue([closedParent]);
 
     const result = await fetcher.fetchIssueHierarchy(1);
 
@@ -279,31 +312,22 @@ describe('IssueFetcher orphan detection', () => {
     // Should have exactly 1 child, not duplicated
     expect(parentNode.children).toHaveLength(1);
     expect(parentNode.children[0].number).toBe(10);
-
-    graphqlSpy.mockRestore();
-    fetchParentsSpy.mockRestore();
   });
 
   it('handles empty GraphQL response gracefully', async () => {
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([])
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([])
     );
-
-    const fetchParentsSpy = vi.spyOn(fetcher as any, 'fetchMissingParents');
 
     const result = await fetcher.fetchIssueHierarchy(1);
 
     expect(result).toHaveLength(0);
-    expect(fetchParentsSpy).not.toHaveBeenCalled();
-
-    graphqlSpy.mockRestore();
-    fetchParentsSpy.mockRestore();
+    expect(mockFetchMissingParents).not.toHaveBeenCalled();
   });
 
   it('preserves normal tree structure when no orphans exist', async () => {
-    // Two-level hierarchy, all open
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([
         { number: 1, title: 'Root A' },
         { number: 2, title: 'Root B' },
         { number: 10, title: 'Child of A', parent: { number: 1, title: 'Root A' } },
@@ -312,11 +336,9 @@ describe('IssueFetcher orphan detection', () => {
       ])
     );
 
-    const fetchParentsSpy = vi.spyOn(fetcher as any, 'fetchMissingParents');
-
     const result = await fetcher.fetchIssueHierarchy(1);
 
-    expect(fetchParentsSpy).not.toHaveBeenCalled();
+    expect(mockFetchMissingParents).not.toHaveBeenCalled();
 
     expect(result).toHaveLength(2);
 
@@ -325,9 +347,6 @@ describe('IssueFetcher orphan detection', () => {
 
     expect(rootA.children.map((c) => c.number).sort((a, b) => a - b)).toEqual([10, 11]);
     expect(rootB.children.map((c) => c.number)).toEqual([20]);
-
-    graphqlSpy.mockRestore();
-    fetchParentsSpy.mockRestore();
   });
 });
 
@@ -344,8 +363,11 @@ describe('IssueFetcher partial fetch failure caching', () => {
   });
 
   it('should not cache empty results with valid cachedAt when GraphQL fetch fails on first page', async () => {
-    // Simulate gh CLI error on the very first page
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(null);
+    // Simulate gh CLI error on the very first page (fetchComplete = false, empty nodes)
+    mockFetchRawIssueHierarchy.mockResolvedValue({
+      nodes: [],
+      fetchComplete: false,
+    });
 
     const result = await fetcher.fetchIssueHierarchy(1);
 
@@ -357,14 +379,12 @@ describe('IssueFetcher partial fetch failure caching', () => {
     expect(cache).toBeDefined();
     expect(cache.cachedAt).toBeNull();
     expect(cache.issues).toHaveLength(0);
-
-    graphqlSpy.mockRestore();
   });
 
   it('should preserve previous good cache when GraphQL fetch fails mid-pagination', async () => {
     // First, successfully populate the cache with valid data
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([
         { number: 1, title: 'Issue 1' },
         { number: 2, title: 'Issue 2' },
       ])
@@ -378,8 +398,11 @@ describe('IssueFetcher partial fetch failure caching', () => {
     const originalCachedAt = cacheAfterSuccess.cachedAt;
     expect(originalCachedAt).not.toBeNull();
 
-    // Now simulate a failure on the next fetch
-    graphqlSpy.mockResolvedValue(null);
+    // Now simulate a failure on the next fetch (fetchComplete: false)
+    mockFetchRawIssueHierarchy.mockResolvedValue({
+      nodes: [],
+      fetchComplete: false,
+    });
 
     const secondResult = await fetcher.fetchIssueHierarchy(1);
     // The function still returns whatever it collected (empty in this case)
@@ -389,13 +412,14 @@ describe('IssueFetcher partial fetch failure caching', () => {
     const cacheAfterFailure = (fetcher as any).cacheByProject.get(1);
     expect(cacheAfterFailure.issues).toHaveLength(2);
     expect(cacheAfterFailure.cachedAt).toBe(originalCachedAt);
-
-    graphqlSpy.mockRestore();
   });
 
   it('should set cachedAt to null on first fetch failure so getIssues triggers refetch', async () => {
     // No prior cache — simulate gh CLI error
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(null);
+    mockFetchRawIssueHierarchy.mockResolvedValue({
+      nodes: [],
+      fetchComplete: false,
+    });
 
     await fetcher.fetchIssueHierarchy(1);
 
@@ -409,16 +433,15 @@ describe('IssueFetcher partial fetch failure caching', () => {
     const issues = await fetcher.getIssues(1);
 
     // getIssues should return empty (from cache) and trigger a background refetch
-    expect(issues).toHaveLength(0);
+    expect(issues).toEqual([]);
     expect(fetchSpy).toHaveBeenCalledWith(1);
 
-    graphqlSpy.mockRestore();
     fetchSpy.mockRestore();
   });
 
   it('should cache with valid cachedAt when fetch completes successfully', async () => {
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([
         { number: 1, title: 'Issue 1' },
       ])
     );
@@ -430,14 +453,12 @@ describe('IssueFetcher partial fetch failure caching', () => {
     expect(cache.cachedAt).not.toBeNull();
     expect(typeof cache.cachedAt).toBe('string');
     expect(cache.issues).toHaveLength(1);
-
-    graphqlSpy.mockRestore();
   });
 
   it('should cache empty repository correctly with valid cachedAt', async () => {
     // Empty repo — zero issues but fetch completes successfully
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue(
-      makeGraphQLResponse([])
+    mockFetchRawIssueHierarchy.mockResolvedValue(
+      makeRawHierarchyResult([])
     );
 
     await fetcher.fetchIssueHierarchy(1);
@@ -447,14 +468,13 @@ describe('IssueFetcher partial fetch failure caching', () => {
     expect(cache.cachedAt).not.toBeNull();
     expect(typeof cache.cachedAt).toBe('string');
     expect(cache.issues).toHaveLength(0);
-
-    graphqlSpy.mockRestore();
   });
 
-  it('should not cache when issues.nodes is falsy on first page with no prior cache', async () => {
-    // Simulate a response where issues.nodes is undefined
-    const graphqlSpy = vi.spyOn(fetcher as any, 'executeGraphQL').mockResolvedValue({
-      data: { repository: { issues: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: undefined } } },
+  it('should not cache when fetchComplete is false on first page with no prior cache', async () => {
+    // Simulate a response where fetchComplete is false (partial failure)
+    mockFetchRawIssueHierarchy.mockResolvedValue({
+      nodes: [],
+      fetchComplete: false,
     });
 
     await fetcher.fetchIssueHierarchy(1);
@@ -463,7 +483,5 @@ describe('IssueFetcher partial fetch failure caching', () => {
     const cache = (fetcher as any).cacheByProject.get(1);
     expect(cache).toBeDefined();
     expect(cache.cachedAt).toBeNull();
-
-    graphqlSpy.mockRestore();
   });
 });

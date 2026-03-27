@@ -1,25 +1,35 @@
 // =============================================================================
-// Fleet Commander -- Issue Hierarchy Service (GraphQL + REST via gh CLI)
+// Fleet Commander -- Issue Hierarchy Service (Provider-based)
 // =============================================================================
-// Fetches issue hierarchy from GitHub using `gh api graphql` via child_process.
-// Caches results in memory with periodic auto-refresh.
-// Enriches issues with active team info from the database.
+// Orchestration and caching layer for issue hierarchy fetching. Delegates
+// GitHub-specific GraphQL logic to GitHubIssueProvider. Retains caching,
+// polling, tree-building, team enrichment, and priority/filtering logic.
 //
 // Per-project: issue cache is keyed by projectId. Each project fetches from
-// its own github_repo. The polling loop iterates over all active projects.
-//
-// All GitHub API calls (gh CLI) are async to avoid blocking the event loop.
-// Dependencies are fetched inline via the blockedBy field in the main issue query.
+// its own configured issue provider. The polling loop iterates over all
+// active projects.
 // =============================================================================
 
-import { exec, spawn } from 'child_process';
-import { promisify } from 'util';
 import config from '../config.js';
 import { getDatabase } from '../db.js';
 import type { DependencyRef, IssueDependencyInfo } from '../../shared/types.js';
+import { getIssueProvider, resetProviders } from '../providers/index.js';
+import {
+  type GraphQLIssueNode,
+  GitHubIssueProvider,
+  parseDependenciesFromBody as _parseDependenciesFromBody,
+  runWithConcurrency,
+  parseRepo,
+} from '../providers/github-issue-provider.js';
 
-/** Promisified exec for async child_process calls */
-const execAsync = promisify(exec);
+// ---------------------------------------------------------------------------
+// Re-exports for backward compatibility
+// ---------------------------------------------------------------------------
+// These functions moved to the provider but are re-exported here so existing
+// consumers (tests, services) do not need to update their import paths.
+// ---------------------------------------------------------------------------
+
+export { parseDependenciesFromBody } from '../providers/github-issue-provider.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -39,62 +49,6 @@ export interface IssueNode {
   dependencies?: IssueDependencyInfo;
 }
 
-interface GraphQLIssueNode {
-  number: number;
-  title: string;
-  state: string;
-  url: string;
-  body?: string | null;
-  labels?: { nodes?: Array<{ name: string }> };
-  parent?: { number: number; title: string } | null;
-  subIssuesSummary?: { total: number; completed: number; percentCompleted: number };
-  closedByPullRequestsReferences?: {
-    nodes?: Array<{ number: number; state: string }>;
-  };
-  blockedBy?: {
-    nodes?: Array<{
-      number: number;
-      title: string;
-      state: string;
-      repository: { owner: { login: string }; name: string };
-    }>;
-  };
-  issueDependenciesSummary?: { totalBlockedBy: number; totalBlocking: number };
-}
-
-interface GraphQLResponse {
-  data?: {
-    repository?: {
-      issues?: {
-        pageInfo?: { hasNextPage: boolean; endCursor: string | null };
-        nodes?: GraphQLIssueNode[];
-      };
-    };
-  };
-  errors?: Array<{ message: string }>;
-}
-
-/** Shape returned by the single-issue dependency GraphQL query. */
-interface SingleIssueDepsResult {
-  body: string | null;
-  trackedInIssues?: {
-    nodes?: Array<{
-      number: number;
-      title: string;
-      state: string;
-      repository: { owner: { login: string }; name: string };
-    }>;
-  };
-  blockedBy?: {
-    nodes?: Array<{
-      number: number;
-      title: string;
-      state: string;
-      repository: { owner: { login: string }; name: string };
-    }>;
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Per-project cache entry
 // ---------------------------------------------------------------------------
@@ -104,204 +58,83 @@ interface ProjectIssueCache {
   cachedAt: string | null;
 }
 
-/** Maximum concurrent `gh api` calls for resolving issue states */
-const MAX_CONCURRENT_RESOLVE = 5;
-
 // ---------------------------------------------------------------------------
-// GraphQL queries -- flat list of all open issues with parent reference
-// ---------------------------------------------------------------------------
-// Fetches ~100 issues per page with ~10 sub-fields each = ~1,000 nodes/page.
-// The tree is built client-side from parent references instead of nested
-// subIssues, avoiding GitHub's 500,000 node limit.
-//
-// Two variants: FULL includes blockedBy/issueDependenciesSummary fields
-// (GitHub Sub-issues / Issue Dependencies API). BASIC omits them for
-// environments where those fields are not available in the GraphQL schema.
-// ---------------------------------------------------------------------------
-
-const ISSUES_QUERY_FULL = `
-query GetIssues($owner: String!, $repo: String!, $cursor: String) {
-  repository(owner: $owner, name: $repo) {
-    issues(first: 100, after: $cursor, states: [OPEN]) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        number
-        title
-        state
-        url
-        labels(first: 5) { nodes { name } }
-        parent { number title }
-        subIssuesSummary { total completed percentCompleted }
-        body
-        closedByPullRequestsReferences(first: 3, includeClosedPrs: true) {
-          nodes { number state }
-        }
-        blockedBy(first: 20) {
-          nodes { number title state repository { owner { login } name } }
-        }
-        issueDependenciesSummary { totalBlockedBy totalBlocking }
-      }
-    }
-  }
-}
-`;
-
-const ISSUES_QUERY_BASIC = `
-query GetIssues($owner: String!, $repo: String!, $cursor: String) {
-  repository(owner: $owner, name: $repo) {
-    issues(first: 100, after: $cursor, states: [OPEN]) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        number
-        title
-        state
-        url
-        labels(first: 5) { nodes { name } }
-        parent { number title }
-        subIssuesSummary { total completed percentCompleted }
-        body
-        closedByPullRequestsReferences(first: 3, includeClosedPrs: true) {
-          nodes { number state }
-        }
-      }
-    }
-  }
-}
-`;
-
-// ---------------------------------------------------------------------------
-// Single-issue dependency queries (used by fetchDependenciesFromTimeline)
-// ---------------------------------------------------------------------------
-// Two variants mirror the batch query pattern: FULL includes blockedBy for
-// environments that support GitHub's native issue dependencies; BASIC omits
-// it for environments where the field is not available in the GraphQL schema.
-// ---------------------------------------------------------------------------
-
-const SINGLE_ISSUE_DEPS_QUERY_FULL = `
-query($owner: String!, $repo: String!, $issueNumber: Int!) {
-  repository(owner: $owner, name: $repo) {
-    issue(number: $issueNumber) {
-      body
-      trackedInIssues(first: 50) {
-        nodes { number title state repository { owner { login } name } }
-      }
-      blockedBy(first: 20) {
-        nodes { number title state repository { owner { login } name } }
-      }
-    }
-  }
-}
-`;
-
-const SINGLE_ISSUE_DEPS_QUERY_BASIC = `
-query($owner: String!, $repo: String!, $issueNumber: Int!) {
-  repository(owner: $owner, name: $repo) {
-    issue(number: $issueNumber) {
-      body
-      trackedInIssues(first: 50) {
-        nodes { number title state repository { owner { login } name } }
-      }
-    }
-  }
-}
-`;
-
-// ---------------------------------------------------------------------------
-// Exported utility: parse dependency patterns from issue body text
+// Helper: map a GraphQLIssueNode to our IssueNode format
 // ---------------------------------------------------------------------------
 
 /**
- * Parse issue body text for dependency patterns like:
- *   - "Blocked by #123"
- *   - "Depends on owner/repo#456"
- *   - "blocked by https://github.com/owner/repo/issues/789"
- *   - "requires #42"
- *
- * Returns DependencyRef[] with state defaulting to 'open'.
- * Callers should resolve actual state via GitHub API afterward.
+ * Map a GraphQL issue node to our IssueNode format.
+ * Includes inline dependency info from the `blockedBy` field when present.
  */
-export function parseDependenciesFromBody(body: string, defaultOwner: string, defaultRepo: string): DependencyRef[] {
-  const deps: DependencyRef[] = [];
-  // Match "blocked by", "depends on", "requires", "after" followed by issue references
-  const patterns = [
-    // "blocked by #123" or "depends on #456" or "after #789"
-    /(?:blocked\s+by|depends\s+on|requires|after)\s+#(\d+)/gi,
-    // "blocked by owner/repo#123" or "after owner/repo#123"
-    /(?:blocked\s+by|depends\s+on|requires|after)\s+([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)#(\d+)/gi,
-    // "blocked by https://github.com/owner/repo/issues/123" or "after https://github.com/..."
-    /(?:blocked\s+by|depends\s+on|requires|after)\s+https?:\/\/github\.com\/([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)\/issues\/(\d+)/gi,
-  ];
+function mapGraphQLNodeToIssueNode(node: GraphQLIssueNode): IssueNode {
+  const labels = (node.labels?.nodes ?? []).map((l) => l.name);
 
-  // Simple #N references
-  for (const match of body.matchAll(patterns[0])) {
-    const num = parseInt(match[1], 10);
-    if (!isNaN(num) && num > 0) {
-      deps.push({
-        number: num,
-        owner: defaultOwner,
-        repo: defaultRepo,
-        state: 'open',
-        title: '',
-      });
-    }
+  // Extract PR references
+  const prRefs = (node.closedByPullRequestsReferences?.nodes ?? []).map((pr) => ({
+    number: pr.number,
+    state: pr.state,
+  }));
+
+  const issueNode: IssueNode = {
+    number: node.number,
+    title: node.title,
+    state: node.state.toLowerCase() === 'open' ? 'open' : 'closed',
+    labels,
+    url: node.url,
+    children: [],   // populated later by buildHierarchy in fetchIssueHierarchy
+    activeTeam: null,
+  };
+
+  if (node.subIssuesSummary) {
+    issueNode.subIssueSummary = {
+      total: node.subIssuesSummary.total,
+      completed: node.subIssuesSummary.completed,
+      percentCompleted: node.subIssuesSummary.percentCompleted,
+    };
   }
 
-  // owner/repo#N references
-  for (const match of body.matchAll(patterns[1])) {
-    const num = parseInt(match[3], 10);
-    if (!isNaN(num) && num > 0) {
-      deps.push({
-        number: num,
-        owner: match[1],
-        repo: match[2],
-        state: 'open',
-        title: '',
-      });
-    }
+  if (prRefs.length > 0) {
+    issueNode.prReferences = prRefs;
   }
 
-  // Full URL references
-  for (const match of body.matchAll(patterns[2])) {
-    const num = parseInt(match[3], 10);
-    if (!isNaN(num) && num > 0) {
-      deps.push({
-        number: num,
-        owner: match[1],
-        repo: match[2],
-        state: 'open',
-        title: '',
-      });
-    }
+  // Map inline blockedBy nodes to DependencyRef[] and populate dependencies.
+  // Skip nodes where repository is null/undefined (can happen with cross-repo deps).
+  const blockedByNodes = (node.blockedBy?.nodes ?? []).filter((dep) => dep.repository);
+  if (blockedByNodes.length > 0) {
+    const blockedBy: DependencyRef[] = blockedByNodes.map((dep) => ({
+      number: dep.number,
+      owner: dep.repository.owner.login,
+      repo: dep.repository.name,
+      state: dep.state.toLowerCase() === 'open' ? 'open' : 'closed',
+      title: dep.title,
+    }));
+    const openCount = blockedBy.filter((d) => d.state === 'open').length;
+
+    issueNode.dependencies = {
+      issueNumber: node.number,
+      blockedBy,
+      resolved: openCount === 0,
+      openCount,
+    };
   }
 
-  return deps;
+  return issueNode;
 }
 
-// ---------------------------------------------------------------------------
-// Concurrency limiter (simple semaphore -- no external deps)
-// ---------------------------------------------------------------------------
-
 /**
- * Run an array of async tasks with a concurrency cap.
- * Returns results in the same order as the input tasks.
+ * Map a GraphQLIssueNode (from fetchMissingParents) to an IssueNode.
+ * Simpler version for parent nodes that lack sub-issue/PR/dependency data.
  */
-async function runWithConcurrency<T>(
-  tasks: Array<() => Promise<T>>,
-  limit: number,
-): Promise<T[]> {
-  const results: T[] = new Array(tasks.length);
-  let nextIndex = 0;
-
-  async function worker(): Promise<void> {
-    while (nextIndex < tasks.length) {
-      const idx = nextIndex++;
-      results[idx] = await tasks[idx]();
-    }
-  }
-
-  const workers = Array.from({ length: Math.min(limit, tasks.length) }, () => worker());
-  await Promise.all(workers);
-  return results;
+function mapParentNodeToIssueNode(node: GraphQLIssueNode): IssueNode {
+  return {
+    number: node.number,
+    title: node.title,
+    state: node.state.toLowerCase() === 'open' ? 'open' : 'closed',
+    labels: (node.labels?.nodes ?? []).map((l) => l.name),
+    url: node.url,
+    children: [],
+    activeTeam: null,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -313,21 +146,13 @@ export class IssueFetcher {
   private cacheByProject: Map<number, ProjectIssueCache> = new Map();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
-  // Whether the GitHub GraphQL schema supports blockedBy/issueDependenciesSummary.
-  // Starts true; set to false on first query failure caused by unsupported fields,
-  // after which all subsequent queries use the basic query without those fields.
-  // Recovery: after `blockedByRetryCountdown` poll cycles, re-tests the full query.
-  private blockedBySupported = true;
-  // Countdown to retry the full query after blockedBySupported was set to false.
-  // When this reaches 0, the next fetchAllProjects() cycle re-enables blockedBySupported.
-  private blockedByRetryCountdown = 0;
 
   // -------------------------------------------------------------------------
   // Public API
   // -------------------------------------------------------------------------
 
   /**
-   * Full fetch from GitHub for a specific project.
+   * Full fetch from the configured issue provider for a specific project.
    * Paginates through all open issues. Returns the full hierarchy tree.
    */
   async fetchIssueHierarchy(projectId: number): Promise<IssueNode[]> {
@@ -343,33 +168,19 @@ export class IssueFetcher {
       return [];
     }
 
-    const [owner, repo] = this.parseRepo(project.githubRepo);
-    let allNodes: GraphQLIssueNode[] = [];
-    let cursor: string | null = null;
-    let hasNextPage = true;
-    let fetchComplete = true;
+    const [owner, repo] = parseRepo(project.githubRepo);
 
-    while (hasNextPage) {
-      const result = await this.executeGraphQL(owner, repo, cursor);
-      if (!result) {
-        // gh CLI error -- return whatever we have so far (or empty)
-        fetchComplete = false;
-        break;
-      }
-
-      const issues = result.data?.repository?.issues;
-      if (!issues?.nodes) {
-        fetchComplete = false;
-        break;
-      }
-
-      allNodes = allNodes.concat(issues.nodes);
-      hasNextPage = issues.pageInfo?.hasNextPage ?? false;
-      cursor = issues.pageInfo?.endCursor ?? null;
+    // Get the provider and delegate the raw issue fetch
+    const provider = getIssueProvider(project);
+    if (!(provider instanceof GitHubIssueProvider)) {
+      console.error(`[IssueFetcher] Provider for project ${projectId} is not a GitHubIssueProvider`);
+      return [];
     }
 
+    const { nodes: allNodes, fetchComplete } = await provider.fetchRawIssueHierarchy(owner, repo);
+
     // Convert GraphQL nodes to our IssueNode format (flat, no children yet)
-    const flatIssues = allNodes.map((node) => this.mapGraphQLNode(node));
+    const flatIssues = allNodes.map((node) => mapGraphQLNodeToIssueNode(node));
 
     // Build parent->children map from parent references
     const issueByNumber = new Map<number, IssueNode>();
@@ -380,7 +191,7 @@ export class IssueFetcher {
     // Track which issues have a parent (so we can identify roots)
     const childNumbers = new Set<number>();
 
-    // Collect orphan parent numbers — parent numbers referenced by open
+    // Collect orphan parent numbers -- parent numbers referenced by open
     // children but not present in the fetched (OPEN-only) issue set.
     // These are typically closed parents whose open sub-issues would
     // otherwise be hidden from the tree (the bug this fixes).
@@ -394,7 +205,7 @@ export class IssueFetcher {
         if (parentIssue && childIssue) {
           parentIssue.children.push(childIssue);
         } else if (!parentIssue && childIssue) {
-          // Parent is missing from the OPEN-only query — likely closed
+          // Parent is missing from the OPEN-only query -- likely closed
           orphanParentNumbers.add(node.parent.number);
         }
       }
@@ -403,9 +214,11 @@ export class IssueFetcher {
     // Fetch missing (closed) parents so their open children stay visible
     // in the tree instead of being silently hidden.
     if (orphanParentNumbers.size > 0) {
-      const fetchedParents = await this.fetchMissingParents(
+      const fetchedParentNodes = await provider.fetchMissingParents(
         owner, repo, Array.from(orphanParentNumbers),
       );
+
+      const fetchedParents = fetchedParentNodes.map((n) => mapParentNodeToIssueNode(n));
 
       for (const parent of fetchedParents) {
         issueByNumber.set(parent.number, parent);
@@ -449,7 +262,7 @@ export class IssueFetcher {
     // -----------------------------------------------------------------------
     // Parse "blocked by #X" / "depends on #X" / "requires #X" / "after #X"
     // patterns from each issue body and merge with any inline blockedBy deps
-    // already populated by mapGraphQLNode from GitHub's native tracking.
+    // already populated by mapGraphQLNodeToIssueNode from GitHub's native tracking.
     // Body text is stored in a transient map and discarded after enrichment.
     // -----------------------------------------------------------------------
     const bodyByNumber = new Map<number, string>();
@@ -477,7 +290,7 @@ export class IssueFetcher {
       const body = bodyByNumber.get(issue.number);
       if (!body) continue;
 
-      const bodyDeps = parseDependenciesFromBody(body, owner, repo);
+      const bodyDeps = _parseDependenciesFromBody(body, owner, repo);
       if (bodyDeps.length === 0) continue;
 
       // Resolve state and title for same-repo body deps from our local data
@@ -487,7 +300,7 @@ export class IssueFetcher {
           if (openIssueNumbers.has(dep.number)) {
             dep.state = 'open';
           } else {
-            // Not in open issues — either closed or external; assume closed
+            // Not in open issues -- either closed or external; assume closed
             dep.state = 'closed';
           }
           // Populate title from the tree if available
@@ -496,7 +309,7 @@ export class IssueFetcher {
             dep.title = title;
           }
         }
-        // Cross-repo deps keep their default state ('open') — conservative
+        // Cross-repo deps keep their default state ('open') -- conservative
       }
 
       if (issue.dependencies) {
@@ -515,7 +328,7 @@ export class IssueFetcher {
         ).length;
         issue.dependencies.resolved = issue.dependencies.openCount === 0;
       } else {
-        // No inline deps — create new dependency info from body deps only
+        // No inline deps -- create new dependency info from body deps only
         const openCount = bodyDeps.filter((d) => d.state === 'open').length;
         issue.dependencies = {
           issueNumber: issue.number,
@@ -540,7 +353,7 @@ export class IssueFetcher {
         cachedAt: null,
       });
     }
-    // else: partial failure with existing cache — keep previous good data
+    // else: partial failure with existing cache -- keep previous good data
 
     return rootIssues;
   }
@@ -551,17 +364,11 @@ export class IssueFetcher {
    * serial iteration, significantly reducing total wall-clock time.
    */
   async fetchAllProjects(): Promise<void> {
-    // Recovery mechanism: if blockedBySupported was disabled, periodically re-test
-    // the full query (circuit-breaker pattern: trip on failure, retry after N polls).
-    if (!this.blockedBySupported) {
-      this.blockedByRetryCountdown--;
-      if (this.blockedByRetryCountdown <= 0) {
-        console.warn(
-          '[IssueFetcher] blockedBySupported recovery: re-enabling full query ' +
-          'to re-test GraphQL schema support'
-        );
-        this.blockedBySupported = true;
-      }
+    // Recovery mechanism: tick the provider's retry countdown so it re-enables
+    // blockedBy support after a few poll cycles (circuit-breaker pattern).
+    const provider = getIssueProvider({ issueProvider: 'github' } as Parameters<typeof getIssueProvider>[0]);
+    if (provider instanceof GitHubIssueProvider) {
+      provider.tickRetryCountdown();
     }
 
     const db = getDatabase();
@@ -735,19 +542,17 @@ export class IssueFetcher {
   }
 
   /**
-   * Full reset: stop the polling timer and clear all cached data.
+   * Full reset: stop the polling timer, clear all cached data, and reset providers.
    * Used by factory reset -- does NOT restart since there are no projects.
-   * Also resets the blockedBySupported flag so the full query is re-tested.
    */
   reset(): void {
     this.stop();
     this.clearAll();
-    this.blockedBySupported = true;
-    this.blockedByRetryCountdown = 0;
+    resetProviders();
   }
 
   /**
-   * Force a re-fetch from GitHub for a specific project.
+   * Force a re-fetch from the issue provider for a specific project.
    */
   async refresh(projectId?: number): Promise<IssueNode[]> {
     if (projectId !== undefined) {
@@ -812,7 +617,7 @@ export class IssueFetcher {
 
   /**
    * Enrich issue nodes with active team info from the database.
-   * Returns a NEW tree of shallow-copied nodes — the original cached tree
+   * Returns a NEW tree of shallow-copied nodes -- the original cached tree
    * is not mutated, eliminating the need for structuredClone at call sites.
    * When projectId is specified, only teams for that project are matched.
    */
@@ -857,31 +662,60 @@ export class IssueFetcher {
   // -------------------------------------------------------------------------
 
   /**
-   * Fetch dependency information for a specific issue using the GitHub
-   * GraphQL API (issue body + trackedInIssues). Falls back gracefully
-   * if the API is unavailable.
+   * Fetch dependency information for a specific issue using the configured
+   * issue provider. Falls back gracefully if the API is unavailable.
    *
    * Returns null if the API call fails (e.g. gh CLI too old).
    */
   async fetchDependencies(owner: string, repo: string, issueNumber: number): Promise<IssueDependencyInfo | null> {
-    return this.fetchDependenciesFromTimeline(owner, repo, issueNumber);
+    return this.fetchDependenciesFromProvider(owner, repo, issueNumber);
   }
 
   /**
-   * Fetch dependencies from the issue body + trackedInIssues + blockedBy via GraphQL.
+   * Fetch dependencies for a specific project + issue number.
+   * Convenience wrapper that resolves owner/repo from projectId.
+   */
+  async fetchDependenciesForIssue(projectId: number, issueNumber: number): Promise<IssueDependencyInfo | null> {
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project?.githubRepo) return null;
+
+    const [owner, repo] = parseRepo(project.githubRepo);
+    return this.fetchDependencies(owner, repo, issueNumber);
+  }
+
+  // -------------------------------------------------------------------------
+  // Private helpers
+  // -------------------------------------------------------------------------
+
+  /**
+   * Fetch dependencies from the issue provider (body + trackedInIssues + blockedBy).
    * Used for single-issue dependency fetching (e.g. launch-time check).
    *
-   * Selects between the full query (with blockedBy) and the basic query based on
-   * `this.blockedBySupported`. If the full query fails due to unsupported fields,
-   * automatically downgrades to the basic query and retries.
+   * Delegates GraphQL execution to the GitHubIssueProvider.
    */
-  private async fetchDependenciesFromTimeline(
+  private async fetchDependenciesFromProvider(
     owner: string,
     repo: string,
-    issueNumber: number
+    issueNumber: number,
   ): Promise<IssueDependencyInfo | null> {
     try {
-      const issue = await this.executeSingleIssueDepsQuery(owner, repo, issueNumber);
+      // Look up the project to get the provider
+      const db = getDatabase();
+      const projects = db.getProjects({ status: 'active' });
+      const project = projects.find((p) => p.githubRepo === `${owner}/${repo}`);
+      if (!project) {
+        console.error(`[IssueFetcher] No project found for ${owner}/${repo}`);
+        return this.buildEmptyDependencyInfo(issueNumber);
+      }
+
+      const provider = getIssueProvider(project);
+      if (!(provider instanceof GitHubIssueProvider)) {
+        console.error(`[IssueFetcher] Provider for ${owner}/${repo} is not a GitHubIssueProvider`);
+        return this.buildEmptyDependencyInfo(issueNumber);
+      }
+
+      const issue = await provider.fetchSingleIssueDeps(owner, repo, issueNumber);
       if (!issue) {
         return this.buildEmptyDependencyInfo(issueNumber);
       }
@@ -923,9 +757,9 @@ export class IssueFetcher {
 
       // 3. Parse body for "blocked by" or "depends on" patterns, deduplicating
       if (issue.body) {
-        const bodyDeps = parseDependenciesFromBody(issue.body, owner, repo);
+        const bodyDeps = _parseDependenciesFromBody(issue.body, owner, repo);
         // Resolve the actual state for body-parsed deps (they default to 'open')
-        const resolvedBodyDeps = await this.resolveIssueStates(bodyDeps);
+        const resolvedBodyDeps = await provider.resolveIssueStates(bodyDeps);
         for (const dep of resolvedBodyDeps) {
           const exists = blockedBy.some(
             (b) => b.number === dep.number && b.owner === dep.owner && b.repo === dep.repo
@@ -954,132 +788,6 @@ export class IssueFetcher {
   }
 
   /**
-   * Execute the single-issue dependency GraphQL query with full/basic fallback.
-   * Mirrors the executeGraphQL() pattern: tries the full query first (with
-   * blockedBy), downgrades to basic if the field is unsupported.
-   */
-  private async executeSingleIssueDepsQuery(
-    owner: string,
-    repo: string,
-    issueNumber: number
-  ): Promise<SingleIssueDepsResult | null> {
-    const query = this.blockedBySupported
-      ? SINGLE_ISSUE_DEPS_QUERY_FULL
-      : SINGLE_ISSUE_DEPS_QUERY_BASIC;
-
-    const result = await this.runSingleIssueDepsQuery(query, owner, repo, issueNumber);
-    if (result !== null) {
-      return result;
-    }
-
-    // If the full query failed and blockedBy was enabled, downgrade and retry
-    if (this.blockedBySupported) {
-      this.blockedBySupported = false;
-      this.blockedByRetryCountdown = 5;
-      console.warn(
-        '[IssueFetcher] blockedBySupported changed: true -> false ' +
-        '(single-issue deps query field error; will retry after 5 poll cycles)'
-      );
-      return this.runSingleIssueDepsQuery(SINGLE_ISSUE_DEPS_QUERY_BASIC, owner, repo, issueNumber);
-    }
-
-    return null;
-  }
-
-  /**
-   * Run a single-issue dependency GraphQL query and return the parsed issue data.
-   * Returns null only on field-not-found errors (triggering fallback to BASIC).
-   * Non-field GraphQL errors (rate limits, deprecation warnings) are logged as
-   * warnings but the response data is still used if present.
-   */
-  private async runSingleIssueDepsQuery(
-    query: string,
-    owner: string,
-    repo: string,
-    issueNumber: number
-  ): Promise<SingleIssueDepsResult | null> {
-    try {
-      const compactQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-      const requestBody = JSON.stringify({
-        query: compactQuery,
-        variables: { owner, repo, issueNumber },
-      });
-
-      // spawn + stdin pipe is used because exec does NOT support the `input` option.
-      const stdout = await this.runGHGraphQL(requestBody, 15_000);
-
-      const parsed = JSON.parse(stdout) as {
-        data?: {
-          repository?: {
-            issue?: SingleIssueDepsResult;
-          };
-        };
-        errors?: Array<{ message: string }>;
-      };
-
-      if (parsed.errors?.length) {
-        const hasFieldError = parsed.errors.some(
-          (e) => /field\b.*\bdoesn't exist/i.test(e.message) ||
-                 /field\b.*\bblockedBy\b.*\bdoesn't exist/i.test(e.message) ||
-                 /field\b.*\bissueDependenciesSummary\b.*\bdoesn't exist/i.test(e.message)
-        );
-        if (hasFieldError) {
-          console.error(
-            `[IssueFetcher] Single-issue deps GraphQL field errors: ${parsed.errors.map((e) => e.message).join('; ')}`
-          );
-          return null;
-        }
-        // Non-field errors (rate limits, deprecation warnings, etc.): log but still use data
-        console.warn(
-          `[IssueFetcher] Single-issue deps GraphQL non-field errors (data still used): ${parsed.errors.map((e) => e.message).join('; ')}`
-        );
-      }
-
-      return parsed.data?.repository?.issue ?? null;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[IssueFetcher] Single-issue deps query failed: ${message}`);
-      return null;
-    }
-  }
-
-  /**
-   * Resolve the actual open/closed state for a list of dependency refs.
-   * Queries GitHub via `gh api` for each unique owner/repo + issue number.
-   * Uses capped concurrency (MAX_CONCURRENT_RESOLVE) to avoid flooding.
-   * Falls back to 'open' if the query fails (conservative: assume still blocking).
-   * Mutates the deps in place and returns the same array.
-   */
-  private async resolveIssueStates(deps: DependencyRef[]): Promise<DependencyRef[]> {
-    if (deps.length === 0) return deps;
-
-    const tasks = deps.map((dep) => async () => {
-      try {
-        const { stdout } = await execAsync(
-          `gh api "/repos/${dep.owner}/${dep.repo}/issues/${dep.number}" --jq ".state,.title"`,
-          {
-            encoding: 'utf-8',
-            timeout: 10_000,
-          }
-        );
-        const lines = stdout.trim().split('\n');
-        if (lines.length >= 1) {
-          const state = lines[0].trim().toLowerCase();
-          dep.state = state === 'closed' ? 'closed' : 'open';
-        }
-        if (lines.length >= 2 && lines[1]) {
-          dep.title = lines[1].trim();
-        }
-      } catch {
-        // gh CLI error -- leave state as default 'open' (conservative)
-      }
-    });
-
-    await runWithConcurrency(tasks, MAX_CONCURRENT_RESOLVE);
-    return deps;
-  }
-
-  /**
    * Build an empty dependency info object (no blockers).
    */
   private buildEmptyDependencyInfo(issueNumber: number): IssueDependencyInfo {
@@ -1089,329 +797,6 @@ export class IssueFetcher {
       resolved: true,
       openCount: 0,
     };
-  }
-
-  /**
-   * Fetch dependencies for a specific project + issue number.
-   * Convenience wrapper that resolves owner/repo from projectId.
-   */
-  async fetchDependenciesForIssue(projectId: number, issueNumber: number): Promise<IssueDependencyInfo | null> {
-    const db = getDatabase();
-    const project = db.getProject(projectId);
-    if (!project?.githubRepo) return null;
-
-    const [owner, repo] = this.parseRepo(project.githubRepo);
-    return this.fetchDependencies(owner, repo, issueNumber);
-  }
-
-  // -------------------------------------------------------------------------
-  // Private helpers
-  // -------------------------------------------------------------------------
-
-  /**
-   * Fetch missing parent issues via a single batched GraphQL query.
-   * These are typically closed parents whose open sub-issues reference them.
-   * Since the main GraphQL query only fetches OPEN issues, closed parents
-   * are absent, causing their open children to become invisible in the tree.
-   *
-   * Uses GraphQL aliases (`p42: issue(number: 42) { ... }`) to fetch up to
-   * 20 parents in a single API call instead of N individual REST calls.
-   *
-   * Cap: at most 20 parent fetches to avoid excessive API calls.
-   * On failure: falls back to empty array; orphaned children will be
-   * promoted to root level by the caller.
-   */
-  private async fetchMissingParents(
-    owner: string,
-    repo: string,
-    parentNumbers: number[],
-  ): Promise<IssueNode[]> {
-    // Cap the number of parent fetches to avoid excessive API calls
-    const capped = parentNumbers.slice(0, 20);
-    if (capped.length < parentNumbers.length) {
-      console.warn(
-        `[IssueFetcher] Capping orphan parent fetches to 20 (${parentNumbers.length} requested)`
-      );
-    }
-
-    if (capped.length === 0) return [];
-
-    try {
-      // Build aliased GraphQL query fields for each parent number
-      const aliasedFields = capped.map((num) =>
-        `p${num}: issue(number: ${num}) { number title state url labels(first: 5) { nodes { name } } }`
-      ).join('\n        ');
-
-      const query = `query($owner: String!, $repo: String!) {
-        repository(owner: $owner, name: $repo) {
-          ${aliasedFields}
-        }
-      }`;
-
-      const compactQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-      const requestBody = JSON.stringify({
-        query: compactQuery,
-        variables: { owner, repo },
-      });
-
-      const stdout = await this.runGHGraphQL(requestBody, 30_000);
-      const result = JSON.parse(stdout) as {
-        data?: {
-          repository?: Record<string, {
-            number: number;
-            title: string;
-            state: string;
-            url: string;
-            labels?: { nodes?: Array<{ name: string }> };
-          } | null>;
-        };
-        errors?: Array<{ message: string }>;
-      };
-
-      if (result.errors?.length) {
-        console.warn(
-          `[IssueFetcher] GraphQL errors fetching orphan parents: ${result.errors.map((e) => e.message).join('; ')}`
-        );
-      }
-
-      const repoData = result.data?.repository;
-      if (!repoData) return [];
-
-      const results: IssueNode[] = [];
-      for (const key of Object.keys(repoData)) {
-        if (!/^p\d+$/.test(key)) continue;
-        const issueData = repoData[key];
-        if (!issueData) continue; // null = non-existent issue, skip
-
-        const parentNode: IssueNode = {
-          number: issueData.number,
-          title: issueData.title,
-          state: issueData.state.toLowerCase() === 'open' ? 'open' : 'closed',
-          labels: (issueData.labels?.nodes ?? []).map((l) => l.name),
-          url: issueData.url,
-          children: [],
-          activeTeam: null,
-        };
-
-        results.push(parentNode);
-      }
-
-      return results;
-    } catch (err) {
-      console.warn(
-        `[IssueFetcher] Failed to fetch missing parents via GraphQL: ${err instanceof Error ? err.message : err}`
-      );
-      // Fallback: return empty — caller will promote orphaned children to root
-      return [];
-    }
-  }
-
-  /**
-   * Parse a github_repo string (e.g. "owner/repo") into [owner, repo].
-   */
-  private parseRepo(githubRepo: string): [string, string] {
-    const parts = githubRepo.split('/');
-    if (parts.length !== 2 || !parts[0] || !parts[1]) {
-      console.error(`[IssueFetcher] Invalid githubRepo: "${githubRepo}"`);
-      return ['unknown', 'unknown'];
-    }
-    return [parts[0], parts[1]];
-  }
-
-  /**
-   * Execute a GraphQL query via `gh api graphql`.
-   * Returns parsed JSON or null on error.
-   *
-   * Selects between the full query (with blockedBy/issueDependenciesSummary)
-   * and the basic query based on `this.blockedBySupported`. If the full query
-   * fails due to unsupported fields, automatically downgrades to the basic
-   * query and retries.
-   */
-  private async executeGraphQL(
-    owner: string,
-    repo: string,
-    cursor: string | null
-  ): Promise<GraphQLResponse | null> {
-    const query = this.blockedBySupported ? ISSUES_QUERY_FULL : ISSUES_QUERY_BASIC;
-    const result = await this.runGraphQLQuery(query, owner, repo, cursor);
-
-    if (result !== null) {
-      return result;
-    }
-
-    // If the full query failed and blockedBy was enabled, downgrade and retry
-    if (this.blockedBySupported) {
-      this.blockedBySupported = false;
-      this.blockedByRetryCountdown = 5;
-      console.warn(
-        '[IssueFetcher] blockedBySupported changed: true -> false ' +
-        '(batch query field error; will retry after 5 poll cycles)'
-      );
-      return this.runGraphQLQuery(ISSUES_QUERY_BASIC, owner, repo, cursor);
-    }
-
-    return null;
-  }
-
-  /**
-   * Execute `gh api graphql --input -` by spawning a child process and piping
-   * the request body to stdin.  Returns the raw stdout string on success.
-   *
-   * `child_process.exec` does NOT support the `input` option (only `execSync`
-   * does), so we use `spawn` with explicit stdin piping wrapped in a Promise.
-   */
-  private runGHGraphQL(requestBody: string, timeoutMs = 30_000): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const child = spawn('gh', ['api', 'graphql', '--input', '-'], {
-        env: process.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      let stdout = '';
-      let stderr = '';
-
-      child.stdout.on('data', (d: Buffer) => { stdout += d; });
-      child.stderr.on('data', (d: Buffer) => { stderr += d; });
-
-      const timer = setTimeout(() => {
-        child.kill();
-        reject(new Error(`gh api graphql timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      child.on('close', (code) => {
-        clearTimeout(timer);
-        if (code === 0) resolve(stdout);
-        else reject(new Error(`gh api graphql failed (code ${code}): ${stderr}`));
-      });
-
-      child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-
-      child.stdin.write(requestBody);
-      child.stdin.end();
-    });
-  }
-
-  /**
-   * Run a single GraphQL query via `gh api graphql --input -`.
-   * Returns parsed JSON or null on error.
-   */
-  private async runGraphQLQuery(
-    query: string,
-    owner: string,
-    repo: string,
-    cursor: string | null
-  ): Promise<GraphQLResponse | null> {
-    try {
-      // Collapse whitespace for a compact query string
-      const compactQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
-
-      // Build the full GraphQL request body as JSON.
-      // Passing via stdin avoids all shell escaping issues on Windows/Git Bash.
-      const variables: Record<string, string> = { owner, repo };
-      if (cursor) {
-        variables.cursor = cursor;
-      }
-
-      const requestBody = JSON.stringify({
-        query: compactQuery,
-        variables,
-      });
-
-      // Use `gh api graphql` with --input - to read the JSON body from stdin.
-      // spawn + stdin pipe is used because exec does NOT support the `input` option.
-      const stdout = await this.runGHGraphQL(requestBody, 30_000);
-
-      const parsed = JSON.parse(stdout) as GraphQLResponse;
-
-      // Check for GraphQL-level errors indicating unsupported fields.
-      // Only match field-not-found errors; non-field errors (rate limits,
-      // deprecation warnings) should not discard valid data.
-      if (parsed.errors?.length) {
-        const hasFieldError = parsed.errors.some(
-          (e) => /field\b.*\bdoesn't exist/i.test(e.message) ||
-                 /field\b.*\bblockedBy\b.*\bdoesn't exist/i.test(e.message) ||
-                 /field\b.*\bissueDependenciesSummary\b.*\bdoesn't exist/i.test(e.message)
-        );
-        if (hasFieldError) {
-          console.error(
-            `[IssueFetcher] GraphQL schema error: ${parsed.errors.map((e) => e.message).join('; ')}`
-          );
-          return null;
-        }
-        // Non-field errors: log but still return the data
-        console.warn(
-          `[IssueFetcher] GraphQL non-field errors (data still used): ${parsed.errors.map((e) => e.message).join('; ')}`
-        );
-      }
-
-      return parsed;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`[IssueFetcher] gh api graphql failed: ${message}`);
-      return null;
-    }
-  }
-
-  /**
-   * Map a GraphQL issue node to our IssueNode format.
-   * Includes inline dependency info from the `blockedBy` field when present.
-   */
-  private mapGraphQLNode(node: GraphQLIssueNode): IssueNode {
-    const labels = (node.labels?.nodes ?? []).map((l) => l.name);
-
-    // Extract PR references
-    const prRefs = (node.closedByPullRequestsReferences?.nodes ?? []).map((pr) => ({
-      number: pr.number,
-      state: pr.state,
-    }));
-
-    const issueNode: IssueNode = {
-      number: node.number,
-      title: node.title,
-      state: node.state.toLowerCase() === 'open' ? 'open' : 'closed',
-      labels,
-      url: node.url,
-      children: [],   // populated later by buildHierarchy in fetchIssueHierarchy
-      activeTeam: null,
-    };
-
-    if (node.subIssuesSummary) {
-      issueNode.subIssueSummary = {
-        total: node.subIssuesSummary.total,
-        completed: node.subIssuesSummary.completed,
-        percentCompleted: node.subIssuesSummary.percentCompleted,
-      };
-    }
-
-    if (prRefs.length > 0) {
-      issueNode.prReferences = prRefs;
-    }
-
-    // Map inline blockedBy nodes to DependencyRef[] and populate dependencies.
-    // Skip nodes where repository is null/undefined (can happen with cross-repo deps).
-    const blockedByNodes = (node.blockedBy?.nodes ?? []).filter((dep) => dep.repository);
-    if (blockedByNodes.length > 0) {
-      const blockedBy: DependencyRef[] = blockedByNodes.map((dep) => ({
-        number: dep.number,
-        owner: dep.repository.owner.login,
-        repo: dep.repository.name,
-        state: dep.state.toLowerCase() === 'open' ? 'open' : 'closed',
-        title: dep.title,
-      }));
-      const openCount = blockedBy.filter((d) => d.state === 'open').length;
-
-      issueNode.dependencies = {
-        issueNumber: node.number,
-        blockedBy,
-        resolved: openCount === 0,
-        openCount,
-      };
-    }
-
-    return issueNode;
   }
 
   /**
@@ -1481,7 +866,7 @@ export function detectCircularDependencies(
 
   function dfs(node: number): number[] | null {
     if (inPath.has(node)) {
-      // Found a cycle — extract the cycle from path
+      // Found a cycle -- extract the cycle from path
       const cycleStart = path.indexOf(node);
       return [...path.slice(cycleStart), node];
     }
