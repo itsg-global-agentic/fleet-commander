@@ -127,11 +127,12 @@ export class TeamService {
 
   /**
    * Launch multiple teams in a batch. Checks dependencies for each issue,
-   * separating blocked from launchable issues. Intra-batch dependencies
-   * are allowed (deferred to queue ordering).
+   * launching unblocked issues and queuing blocked ones (both intra-batch
+   * and external blockers) via queueTeamWithBlockers for automatic
+   * resolution-triggered launch.
    *
    * @param params - Batch launch parameters
-   * @returns Object with launched teams and any blocked issues
+   * @returns Object with launched teams and any queued teams
    * @throws ServiceError with code VALIDATION for invalid input
    */
   async launchBatch(params: {
@@ -140,7 +141,7 @@ export class TeamService {
     prompt?: string;
     delayMs?: number;
     headless?: boolean;
-  }): Promise<{ launched: unknown[]; blocked?: Array<{ issueNumber: number; dependencies: IssueDependencyInfo }> }> {
+  }): Promise<{ launched: unknown[]; queued?: Array<{ issueNumber: number; team: unknown; blockedBy: number[] }> }> {
     const { projectId, issues, prompt, delayMs, headless } = params;
 
     if (!projectId || typeof projectId !== 'number' || projectId < 1) {
@@ -166,36 +167,63 @@ export class TeamService {
       );
     }
 
-    // Dependency check for batch launch
-    const blocked: Array<{ issueNumber: number; dependencies: IssueDependencyInfo }> = [];
+    // Dependency check for batch launch — separate launchable from queueable
     const launchable: Array<{ number: number; title?: string }> = [];
-    const batchNumbers = new Set(issues.map((i) => i.number));
+    const queueable: Array<{ issue: { number: number; title?: string }; blockerNumbers: number[] }> = [];
 
     for (const issue of issues) {
       const depInfo = await checkDependencies(projectId, issue.number);
       if (depInfo && !depInfo.resolved) {
-        const allBlockersInBatch = depInfo.blockedBy
+        const openBlockerNumbers = depInfo.blockedBy
           .filter((b) => b.state === 'open')
-          .every((b) => batchNumbers.has(b.number));
+          .map((b) => b.number);
 
-        if (allBlockersInBatch) {
+        // Permissive fallback: if we have unresolved deps but no valid open
+        // blocker numbers, treat as launchable rather than blocking forever
+        if (openBlockerNumbers.length === 0) {
           launchable.push(issue);
         } else {
-          blocked.push({ issueNumber: issue.number, dependencies: depInfo });
+          queueable.push({ issue, blockerNumbers: openBlockerNumbers });
         }
       } else {
         launchable.push(issue);
       }
     }
 
+    // Launch unblocked issues
     const manager = getTeamManager();
     const teams = launchable.length > 0
       ? await manager.launchBatch(projectId, launchable, prompt, delayMs, headless)
       : [];
 
+    // Queue blocked issues with blocker metadata for auto-launch on resolution
+    let queued: Array<{ issueNumber: number; team: unknown; blockedBy: number[] }> | undefined;
+
+    if (queueable.length > 0) {
+      queued = [];
+      for (const { issue, blockerNumbers } of queueable) {
+        try {
+          githubPoller.trackBlockedIssue(projectId, issue.number, blockerNumbers);
+          const team = await manager.queueTeamWithBlockers(
+            projectId, issue.number, blockerNumbers, issue.title, headless, prompt,
+          );
+          queued.push({ issueNumber: issue.number, team, blockedBy: blockerNumbers });
+        } catch (err: unknown) {
+          // Log and continue — don't stop the batch for individual queue failures
+          const msg = err instanceof Error ? err.message : String(err);
+          console.error(
+            `[TeamService] Batch queue failed for issue #${issue.number}: ${msg}`,
+          );
+        }
+      }
+      if (queued.length === 0) {
+        queued = undefined;
+      }
+    }
+
     return {
       launched: teams,
-      blocked: blocked.length > 0 ? blocked : undefined,
+      queued,
     };
   }
 

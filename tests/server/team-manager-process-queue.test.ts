@@ -569,4 +569,70 @@ describe('TeamManager.processQueue dependency filtering', () => {
     // Should track only the open blockers (5 and 12, not 8 which is closed)
     expect(mockTrackBlockedIssue).toHaveBeenCalledWith(1, 10, [5, 12]);
   });
+
+  it('skips queued team with open blockedByJson and launches it after deps resolve', async () => {
+    const project = makeProject({ id: 1, maxActiveTeams: 3 });
+    const team = makeTeam({
+      id: 101,
+      issueNumber: 10,
+      worktreeName: 'proj-10',
+      status: 'queued',
+    });
+
+    mockDb.getProject.mockReturnValue(project);
+
+    // --- First processQueue call: deps unresolved => team skipped ---
+    mockDb.getActiveTeamCountByProject
+      .mockReturnValueOnce(0)   // processQueue: 0 active
+      .mockReturnValueOnce(0);  // finally: re-drain check
+    mockDb.getQueuedTeamsByProject
+      .mockReturnValueOnce([team])  // processQueue: 1 queued team
+      .mockReturnValueOnce([team]); // finally: still queued (was skipped)
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
+    mockDb.insertTransition.mockReturnValue(undefined);
+
+    mockFetchDependenciesForIssue.mockResolvedValueOnce({
+      issueNumber: 10,
+      blockedBy: [{ number: 5, owner: 'o', repo: 'r', state: 'open', title: 'Blocker' }],
+      resolved: false,
+      openCount: 1,
+    });
+
+    await tm.processQueue(1);
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Should not have launched yet
+    expect(launchQueuedSpy).not.toHaveBeenCalled();
+    expect(mockTrackBlockedIssue).toHaveBeenCalledWith(1, 10, [5]);
+
+    // --- Second processQueue call: deps now resolved => team launches ---
+    vi.clearAllMocks();
+    launchQueuedSpy = vi.fn().mockResolvedValue(undefined);
+    (tm as any).launchQueued = launchQueuedSpy;
+
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getActiveTeamCountByProject
+      .mockReturnValueOnce(0)   // processQueue: 0 active
+      .mockReturnValueOnce(1);  // finally: re-drain check
+    mockDb.getQueuedTeamsByProject
+      .mockReturnValueOnce([team])  // processQueue: team still queued
+      .mockReturnValueOnce([]);     // finally: no more queued
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
+    mockDb.insertTransition.mockReturnValue(undefined);
+
+    mockFetchDependenciesForIssue.mockResolvedValueOnce({
+      issueNumber: 10,
+      blockedBy: [{ number: 5, owner: 'o', repo: 'r', state: 'closed', title: 'Blocker' }],
+      resolved: true,
+      openCount: 0,
+    });
+
+    await tm.processQueue(1);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Now the team should be launched
+    expect(launchQueuedSpy).toHaveBeenCalledTimes(1);
+    expect(launchQueuedSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 101 }));
+  });
 });

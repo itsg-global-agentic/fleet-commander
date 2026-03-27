@@ -996,3 +996,159 @@ describe('single-issue dependency merge: blockedBy + trackedInIssues + body', ()
     expect(result.openCount).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Batch launch dependency gate — categorization logic
+// ---------------------------------------------------------------------------
+// These tests verify the categorization logic used by TeamService.launchBatch:
+// issues with unresolved dependencies (including intra-batch deps) should be
+// queued rather than launched, while unblocked issues launch normally.
+// ---------------------------------------------------------------------------
+
+describe('batch launch dependency gate categorization', () => {
+  /**
+   * Simulate the batch launch categorization logic from TeamService.launchBatch.
+   * Takes a list of issues and a dependency resolver, and returns the launchable
+   * and queueable sets.
+   */
+  function categorizeBatch(
+    issues: Array<{ number: number; title?: string }>,
+    depResolver: (issueNumber: number) => IssueDependencyInfo | null,
+  ): {
+    launchable: Array<{ number: number; title?: string }>;
+    queueable: Array<{ issue: { number: number; title?: string }; blockerNumbers: number[] }>;
+  } {
+    const launchable: Array<{ number: number; title?: string }> = [];
+    const queueable: Array<{ issue: { number: number; title?: string }; blockerNumbers: number[] }> = [];
+
+    for (const issue of issues) {
+      const depInfo = depResolver(issue.number);
+      if (depInfo && !depInfo.resolved) {
+        const openBlockerNumbers = depInfo.blockedBy
+          .filter((b) => b.state === 'open')
+          .map((b) => b.number);
+
+        if (openBlockerNumbers.length === 0) {
+          launchable.push(issue);
+        } else {
+          queueable.push({ issue, blockerNumbers: openBlockerNumbers });
+        }
+      } else {
+        launchable.push(issue);
+      }
+    }
+
+    return { launchable, queueable };
+  }
+
+  it('queues intra-batch blocked issues instead of launching them', () => {
+    // #576 has no deps; #577 blocked by #576 (both in batch)
+    const issues = [
+      { number: 576, title: 'Base' },
+      { number: 577, title: 'Step 2' },
+    ];
+
+    const result = categorizeBatch(issues, (issueNumber) => {
+      if (issueNumber === 576) return null;
+      if (issueNumber === 577) {
+        return {
+          issueNumber: 577,
+          blockedBy: [{ number: 576, owner: 'o', repo: 'r', state: 'open' as const, title: 'Base' }],
+          resolved: false,
+          openCount: 1,
+        };
+      }
+      return null;
+    });
+
+    expect(result.launchable).toHaveLength(1);
+    expect(result.launchable[0].number).toBe(576);
+    expect(result.queueable).toHaveLength(1);
+    expect(result.queueable[0].issue.number).toBe(577);
+    expect(result.queueable[0].blockerNumbers).toEqual([576]);
+  });
+
+  it('queues a full dependency chain correctly', () => {
+    // #576 -> #577 -> #578 -> #579 (chain)
+    const issues = [
+      { number: 576 },
+      { number: 577 },
+      { number: 578 },
+      { number: 579 },
+    ];
+
+    const blockerMap: Record<number, number> = { 577: 576, 578: 577, 579: 578 };
+
+    const result = categorizeBatch(issues, (issueNumber) => {
+      const blocker = blockerMap[issueNumber];
+      if (blocker) {
+        return {
+          issueNumber,
+          blockedBy: [{ number: blocker, owner: 'o', repo: 'r', state: 'open' as const, title: '' }],
+          resolved: false,
+          openCount: 1,
+        };
+      }
+      return null;
+    });
+
+    expect(result.launchable).toHaveLength(1);
+    expect(result.launchable[0].number).toBe(576);
+    expect(result.queueable).toHaveLength(3);
+    expect(result.queueable.map((q) => q.issue.number)).toEqual([577, 578, 579]);
+  });
+
+  it('launches all issues when none have dependencies', () => {
+    const issues = [{ number: 10 }, { number: 11 }, { number: 12 }];
+
+    const result = categorizeBatch(issues, () => null);
+
+    expect(result.launchable).toHaveLength(3);
+    expect(result.queueable).toHaveLength(0);
+  });
+
+  it('treats unresolved deps with no open blockers as launchable (permissive fallback)', () => {
+    const issues = [{ number: 10 }];
+
+    const result = categorizeBatch(issues, () => ({
+      issueNumber: 10,
+      blockedBy: [{ number: 5, owner: 'o', repo: 'r', state: 'closed' as const, title: 'Done' }],
+      resolved: false,
+      openCount: 0,
+    }));
+
+    // Permissive: no open blockers means launchable
+    expect(result.launchable).toHaveLength(1);
+    expect(result.queueable).toHaveLength(0);
+  });
+
+  it('separates external and intra-batch blocked issues into queueable', () => {
+    // #10 unblocked, #11 blocked by external #5, #12 blocked by intra-batch #10
+    const issues = [{ number: 10 }, { number: 11 }, { number: 12 }];
+
+    const result = categorizeBatch(issues, (issueNumber) => {
+      if (issueNumber === 11) {
+        return {
+          issueNumber: 11,
+          blockedBy: [{ number: 5, owner: 'o', repo: 'r', state: 'open' as const, title: 'Ext' }],
+          resolved: false,
+          openCount: 1,
+        };
+      }
+      if (issueNumber === 12) {
+        return {
+          issueNumber: 12,
+          blockedBy: [{ number: 10, owner: 'o', repo: 'r', state: 'open' as const, title: 'Intra' }],
+          resolved: false,
+          openCount: 1,
+        };
+      }
+      return null;
+    });
+
+    expect(result.launchable).toHaveLength(1);
+    expect(result.launchable[0].number).toBe(10);
+    expect(result.queueable).toHaveLength(2);
+    expect(result.queueable.map((q) => q.issue.number)).toEqual([11, 12]);
+  });
+});
