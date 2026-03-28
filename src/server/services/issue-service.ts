@@ -32,6 +32,24 @@ function countIssues(tree: Array<{ children?: Array<unknown> }>): number {
 }
 
 /**
+ * Collect distinct issueProvider values from a tree (recursive).
+ * Defaults to 'github' for nodes without an explicit issueProvider.
+ */
+function collectProviders(nodes: Array<{ issueProvider?: string; children?: Array<unknown> }>): string[] {
+  const providers: string[] = [];
+  const walk = (list: Array<{ issueProvider?: string; children?: Array<unknown> }>): void => {
+    for (const node of list) {
+      providers.push(node.issueProvider ?? 'github');
+      if (node.children && Array.isArray(node.children)) {
+        walk(node.children as Array<{ issueProvider?: string; children?: Array<unknown> }>);
+      }
+    }
+  };
+  walk(nodes);
+  return providers;
+}
+
+/**
  * Flatten an issue tree into a single-level array of all issues.
  */
 function flattenIssueTree(nodes: Array<{ number: number; children: Array<unknown> }>): Array<{ number: number }> {
@@ -84,6 +102,7 @@ export class IssueService {
       tree: IssueNode[];
       cachedAt: string | null;
       count: number;
+      providers: string[];
     }>;
     cachedAt: string | null;
     count: number;
@@ -97,6 +116,7 @@ export class IssueService {
       const enriched = fetcher.enrichWithTeamInfo(entry.tree, entry.projectId);
       const groupId = project?.groupId ?? null;
       const group = groupId != null ? db.getProjectGroup(groupId) : undefined;
+      const providers = [...new Set(collectProviders(enriched))];
       return {
         projectId: entry.projectId,
         projectName: project?.name ?? `Project #${entry.projectId}`,
@@ -105,6 +125,7 @@ export class IssueService {
         tree: enriched,
         cachedAt: entry.cachedAt,
         count: countIssues(enriched),
+        providers,
       };
     }));
 

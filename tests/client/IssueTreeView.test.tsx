@@ -965,4 +965,219 @@ describe('IssueTreeView', () => {
     fireEvent.click(screen.getByText('My Group'));
     expect(mockToggleCollapse).toHaveBeenCalledWith('group-100');
   });
+
+  // -------------------------------------------------------------------------
+  // Provider grouping (Issue #597)
+  // -------------------------------------------------------------------------
+
+  it('does not show provider filter pills when single provider', async () => {
+    const issue = { number: 10, title: 'GitHub Issue', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'github' };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issue],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'my-project',
+              tree: [issue],
+              cachedAt: null,
+              count: 1,
+              providers: ['github'],
+            },
+          ],
+          cachedAt: '2026-03-28T10:00:00Z',
+          count: 1,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('my-project')).toBeInTheDocument();
+    });
+    // Provider filter pills should NOT be rendered
+    expect(screen.queryByTestId('provider-filter-pills')).not.toBeInTheDocument();
+  });
+
+  it('shows provider filter pills when multiple providers exist', async () => {
+    const ghIssue = { number: 10, title: 'GitHub Issue', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'github' };
+    const jiraIssue = { number: 20, title: 'Jira Issue', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'jira', issueKey: 'PROJ-20' };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [ghIssue, jiraIssue],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'multi-source-project',
+              tree: [ghIssue, jiraIssue],
+              cachedAt: null,
+              count: 2,
+              providers: ['github', 'jira'],
+            },
+          ],
+          cachedAt: '2026-03-28T10:00:00Z',
+          count: 2,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-filter-pills')).toBeInTheDocument();
+    });
+    // Should have "All Sources" pill and individual provider pills inside the filter bar
+    const filterPills = screen.getByTestId('provider-filter-pills');
+    expect(filterPills).toHaveTextContent('All Sources');
+    expect(filterPills).toHaveTextContent('Github');
+    expect(filterPills).toHaveTextContent('Jira');
+  });
+
+  it('renders provider sub-groups when project has multiple providers', async () => {
+    const ghIssue = { number: 10, title: 'GitHub Issue', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'github' };
+    const jiraIssue = { number: 20, title: 'Jira Issue', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'jira', issueKey: 'PROJ-20' };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [ghIssue, jiraIssue],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'multi-source-project',
+              tree: [ghIssue, jiraIssue],
+              cachedAt: null,
+              count: 2,
+              providers: ['github', 'jira'],
+            },
+          ],
+          cachedAt: '2026-03-28T10:00:00Z',
+          count: 2,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('multi-source-project')).toBeInTheDocument();
+    });
+    // Should render provider sub-group sections
+    expect(screen.getByTestId('provider-subgroup-github')).toBeInTheDocument();
+    expect(screen.getByTestId('provider-subgroup-jira')).toBeInTheDocument();
+    // Sub-group headers should have provider names inside them
+    expect(screen.getByTestId('provider-subgroup-github')).toHaveTextContent('Github');
+    expect(screen.getByTestId('provider-subgroup-jira')).toHaveTextContent('Jira');
+  });
+
+  it('does not render provider sub-groups when project has single provider', async () => {
+    const issue = { number: 10, title: 'Only GitHub', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'github' };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issue],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'single-source-project',
+              tree: [issue],
+              cachedAt: null,
+              count: 1,
+              providers: ['github'],
+            },
+          ],
+          cachedAt: '2026-03-28T10:00:00Z',
+          count: 1,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('single-source-project')).toBeInTheDocument();
+    });
+    // Should NOT render provider sub-group sections
+    expect(screen.queryByTestId('provider-subgroup-github')).not.toBeInTheDocument();
+    // Should render the tree directly
+    expect(screen.getByTestId('tree-node-10')).toBeInTheDocument();
+  });
+
+  it('shows per-provider count badges in project header when multiple providers', async () => {
+    const ghIssue = { number: 10, title: 'GH Issue', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'github' };
+    const jiraIssue1 = { number: 20, title: 'Jira 1', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'jira' };
+    const jiraIssue2 = { number: 30, title: 'Jira 2', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'jira' };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [ghIssue, jiraIssue1, jiraIssue2],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'mixed-project',
+              tree: [ghIssue, jiraIssue1, jiraIssue2],
+              cachedAt: null,
+              count: 3,
+              providers: ['github', 'jira'],
+            },
+          ],
+          cachedAt: '2026-03-28T10:00:00Z',
+          count: 3,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('mixed-project')).toBeInTheDocument();
+    });
+    // Header should show per-provider breakdown
+    expect(screen.getByText(/3 issues \(Github: 1, Jira: 2\)/)).toBeInTheDocument();
+  });
+
+  it('collapseAll includes provider sub-group IDs when multiple providers exist', async () => {
+    const ghIssue = { number: 10, title: 'GH', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'github' };
+    const jiraIssue = { number: 20, title: 'Jira', state: 'open', labels: [], children: [], activeTeam: null, issueProvider: 'jira' };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [ghIssue, jiraIssue],
+          groups: [
+            {
+              projectId: 1,
+              projectName: 'multi',
+              tree: [ghIssue, jiraIssue],
+              cachedAt: null,
+              count: 2,
+              providers: ['github', 'jira'],
+            },
+          ],
+          cachedAt: '2026-03-28T10:00:00Z',
+          count: 2,
+        });
+      }
+      if (path === 'projects') return Promise.resolve(makeProjectsResponse());
+      return Promise.resolve({});
+    });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Collapse All')).toBeInTheDocument();
+    });
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Collapse All'));
+
+    // collapseAll should include provider sub-group IDs
+    expect(mockCollapseAll).toHaveBeenCalledWith(
+      expect.arrayContaining(['provider-1-github', 'provider-1-jira', 'project-1', '10', '20']),
+    );
+  });
 });

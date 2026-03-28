@@ -184,6 +184,60 @@ describe('IssueService.getAllIssues', () => {
     expect(result.groups).toHaveLength(0);
     expect(result.count).toBe(0);
   });
+
+  it('should include providers array in each group', async () => {
+    const project = seedProject();
+    const mixedProviderTree = [
+      {
+        number: 10,
+        title: 'GitHub issue',
+        state: 'open',
+        labels: [],
+        children: [],
+        issueProvider: 'github',
+      },
+      {
+        number: 20,
+        title: 'Jira issue',
+        state: 'open',
+        labels: [],
+        children: [],
+        issueProvider: 'jira',
+      },
+    ];
+    mockGetIssuesByProject.mockReturnValue([
+      { projectId: project.id, tree: mixedProviderTree, cachedAt: '2026-03-25T12:00:00Z' },
+    ]);
+
+    const result = await service.getAllIssues();
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]).toHaveProperty('providers');
+    expect(result.groups[0].providers).toContain('github');
+    expect(result.groups[0].providers).toContain('jira');
+  });
+
+  it('should default to github provider when issueProvider is undefined', async () => {
+    const project = seedProject();
+    const treeWithoutProvider = [
+      {
+        number: 10,
+        title: 'Legacy issue',
+        state: 'open',
+        labels: [],
+        children: [],
+        // No issueProvider set
+      },
+    ];
+    mockGetIssuesByProject.mockReturnValue([
+      { projectId: project.id, tree: treeWithoutProvider, cachedAt: '2026-03-25T12:00:00Z' },
+    ]);
+
+    const result = await service.getAllIssues();
+
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0].providers).toEqual(['github']);
+  });
 });
 
 // =============================================================================

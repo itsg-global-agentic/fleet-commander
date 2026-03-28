@@ -257,3 +257,28 @@ export function JiraIcon({ size = 14, className }: IconProps) {
     </svg>
   );
 }
+
+export function LinearIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 16 16" fill="currentColor">
+      <path d="M.34 9.14a7.97 7.97 0 006.52 6.52L.34 9.14zm-.28-1.6a8.03 8.03 0 018.4-7.48L.06 7.54zm1.28-3.82A8 8 0 0114.28 12.66L1.34 3.72zM8 0a8 8 0 110 16A8 8 0 018 0z"/>
+    </svg>
+  );
+}
+
+/**
+ * Maps a provider name to its icon component.
+ * Falls back to a generic circle icon for unknown providers.
+ */
+export function ProviderIcon({ provider, size = 14, className }: { provider: string; size?: number; className?: string }) {
+  switch (provider) {
+    case 'github':
+      return <GitHubIcon size={size} className={className} />;
+    case 'jira':
+      return <JiraIcon size={size} className={className} />;
+    case 'linear':
+      return <LinearIcon size={size} className={className} />;
+    default:
+      return <CircleDotIcon size={size} className={className} />;
+  }
+}

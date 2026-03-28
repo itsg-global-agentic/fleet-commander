@@ -113,7 +113,7 @@ describe('TreeNode', () => {
       />,
     );
     fireEvent.click(screen.getByTitle('Launch team for #50'));
-    expect(onLaunch).toHaveBeenCalledWith(50, 'Launch me', undefined);
+    expect(onLaunch).toHaveBeenCalledWith(50, 'Launch me', undefined, undefined, undefined);
   });
 
   it('shows "Launching..." indicator when issue is launching', () => {
@@ -306,5 +306,30 @@ describe('TreeNode', () => {
     // depth 15 * 20 = 300, capped at 200, plus 8 = 208px
     const row = container.querySelector('.flex.items-center.gap-2') as HTMLElement;
     expect(row.style.paddingLeft).toBe('208px');
+  });
+
+  // -------------------------------------------------------------------------
+  // Provider display (Issue #597)
+  // -------------------------------------------------------------------------
+
+  it('renders Jira issue key when issueProvider is jira', () => {
+    render(
+      <TreeNode
+        node={makeNode({ number: 123, title: 'Jira task', issueProvider: 'jira', issueKey: 'PROJ-123' })}
+        {...defaultProps}
+      />,
+    );
+    // Should display the Jira key (PROJ-123) instead of #123
+    expect(screen.getByText('PROJ-123')).toBeInTheDocument();
+  });
+
+  it('renders GitHub issue number when issueProvider is github', () => {
+    render(
+      <TreeNode
+        node={makeNode({ number: 42, title: 'GH bug', issueProvider: 'github', issueKey: '42' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.getByText('#42')).toBeInTheDocument();
   });
 });

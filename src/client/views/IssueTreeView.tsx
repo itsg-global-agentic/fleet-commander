@@ -5,6 +5,7 @@ import { usePrioritization, sortTreeByPriority } from '../hooks/usePrioritizatio
 import { useCollapseState } from '../hooks/useCollapseState';
 import { useFlattenedTree } from '../hooks/useVirtualizedTree';
 import { VirtualizedTreeList } from '../components/VirtualizedTreeList';
+import { ProviderIcon } from '../components/Icons';
 import type { IssueNode } from '../components/TreeNode';
 import type { ProjectSummary } from '../../shared/types';
 
@@ -36,6 +37,7 @@ interface ProjectIssueGroup {
   tree: IssueNode[];
   cachedAt: string | null;
   count: number;
+  providers?: string[];
 }
 
 /** A top-level group of projects (for the project group collapsible level) */
@@ -80,6 +82,7 @@ export function IssueTreeView() {
   const [groups, setGroups] = useState<ProjectIssueGroup[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [providerFilter, setProviderFilter] = useState<string>('all');
 
   // Collapse state — persisted to localStorage
   const collapseState = useCollapseState();
@@ -385,10 +388,37 @@ export function IssueTreeView() {
   }, [api, depConfirm, fetchTree]);
 
   // -------------------------------------------------------------------------
-  // Filter tree by search query
+  // Compute available providers across all groups/tree for filter pills
   // -------------------------------------------------------------------------
 
-  const filteredTree = useMemo(() => filterTree(tree, search, statusFilter), [tree, search, statusFilter]);
+  const availableProviders = useMemo(() => {
+    const providerSet = new Set<string>();
+    function walkProviders(nodes: IssueNode[]) {
+      for (const node of nodes) {
+        providerSet.add(node.issueProvider ?? 'github');
+        walkProviders(node.children);
+      }
+    }
+    if (groups.length > 0) {
+      for (const g of groups) {
+        // Use server-provided providers if available, else walk the tree
+        if (g.providers && g.providers.length > 0) {
+          for (const p of g.providers) providerSet.add(p);
+        } else {
+          walkProviders(g.tree);
+        }
+      }
+    } else {
+      walkProviders(tree);
+    }
+    return [...providerSet].sort();
+  }, [tree, groups]);
+
+  // -------------------------------------------------------------------------
+  // Filter tree by search query, status, and provider
+  // -------------------------------------------------------------------------
+
+  const filteredTree = useMemo(() => filterTree(tree, search, statusFilter, providerFilter), [tree, search, statusFilter, providerFilter]);
 
   // Filtered groups for the grouped view
   const filteredGroups = useMemo(() => {
@@ -396,10 +426,10 @@ export function IssueTreeView() {
     return groups
       .map((g) => ({
         ...g,
-        tree: filterTree(g.tree, search, statusFilter),
+        tree: filterTree(g.tree, search, statusFilter, providerFilter),
       }))
       .filter((g) => g.tree.length > 0);
-  }, [groups, search, statusFilter]);
+  }, [groups, search, statusFilter, providerFilter]);
 
   // Group filtered project groups into top-level buckets by groupId
   // Only creates buckets when there are multiple distinct groups (at least one project has a groupId)
@@ -434,7 +464,7 @@ export function IssueTreeView() {
 
   // Collect all node IDs from the full (unfiltered) tree for Collapse All
   // Includes group bucket IDs (group-{id}), project group IDs (project-{id}),
-  // and individual issue node IDs
+  // provider sub-group IDs (provider-{projectId}-{providerName}), and individual issue node IDs
   const allNodeIds = useMemo(() => {
     if (groups.length > 0) {
       const hasAnyGroupId = groups.some((g) => g.groupId != null);
@@ -443,10 +473,20 @@ export function IssueTreeView() {
         : [];
       return [
         ...groupKeys,
-        ...groups.flatMap((g) => [
-          `project-${g.projectId}`,
-          ...collectAllNodeIds(g.tree),
-        ]),
+        ...groups.flatMap((g) => {
+          // Collect provider sub-group keys when multiple providers exist
+          const providerKeys: string[] = [];
+          if (g.providers && g.providers.length > 1) {
+            for (const p of g.providers) {
+              providerKeys.push(`provider-${g.projectId}-${p}`);
+            }
+          }
+          return [
+            `project-${g.projectId}`,
+            ...providerKeys,
+            ...collectAllNodeIds(g.tree),
+          ];
+        }),
       ];
     }
     return collectAllNodeIds(tree);
@@ -511,7 +551,7 @@ export function IssueTreeView() {
         <div className="flex items-center gap-3 shrink-0">
           <h2 className="text-sm font-semibold text-dark-text">Issue Tree</h2>
           <span className="text-xs text-dark-muted">
-            {search || statusFilter !== 'all'
+            {search || statusFilter !== 'all' || providerFilter !== 'all'
               ? `${countNodes(filteredTree)} of ${issueCount} issues`
               : `${issueCount} issue${issueCount !== 1 ? 's' : ''}`}
           </span>
@@ -562,6 +602,36 @@ export function IssueTreeView() {
             </button>
           ))}
         </div>
+
+        {/* Provider filter pills — only shown when 2+ providers */}
+        {availableProviders.length > 1 && (
+          <div className="flex items-center gap-1 flex-wrap" data-testid="provider-filter-pills">
+            <button
+              onClick={() => setProviderFilter('all')}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                providerFilter === 'all'
+                  ? 'border-dark-accent/50 bg-dark-accent/20 text-dark-accent'
+                  : 'border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted'
+              }`}
+            >
+              All Sources
+            </button>
+            {availableProviders.map((p) => (
+              <button
+                key={p}
+                onClick={() => setProviderFilter(p)}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-full border transition-colors ${
+                  providerFilter === p
+                    ? 'border-dark-accent/50 bg-dark-accent/20 text-dark-accent'
+                    : 'border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-muted'
+                }`}
+              >
+                <ProviderIcon provider={p} size={12} />
+                {p.charAt(0).toUpperCase() + p.slice(1)}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Expand / Collapse All buttons */}
         <div className="flex items-center gap-1.5 shrink-0">
@@ -642,7 +712,7 @@ export function IssueTreeView() {
                   : <>No issues match filter &ldquo;{STATUS_FILTERS.find(f => f.key === statusFilter)?.label}&rdquo;</>}
             </p>
             <button
-              onClick={() => { setSearch(''); setStatusFilter('all'); }}
+              onClick={() => { setSearch(''); setStatusFilter('all'); setProviderFilter('all'); }}
               className="text-xs text-dark-accent hover:underline"
             >
               Clear filters
@@ -658,7 +728,7 @@ export function IssueTreeView() {
                 onLaunch={handleLaunch}
                 launchingIssues={launchingIssues}
                 launchErrors={launchErrors}
-                forceExpand={!!search || statusFilter !== 'all'}
+                forceExpand={!!search || statusFilter !== 'all' || providerFilter !== 'all'}
                 fetchTree={fetchTree}
                 collapsedNodes={collapseState.collapsedNodes}
                 onToggleCollapse={collapseState.toggleCollapse}
@@ -675,7 +745,7 @@ export function IssueTreeView() {
                 onLaunch={handleLaunch}
                 launchingIssues={launchingIssues}
                 launchErrors={launchErrors}
-                forceExpand={!!search || statusFilter !== 'all'}
+                forceExpand={!!search || statusFilter !== 'all' || providerFilter !== 'all'}
                 fetchTree={fetchTree}
                 collapsedNodes={collapseState.collapsedNodes}
                 onToggleCollapse={collapseState.toggleCollapse}
@@ -690,7 +760,7 @@ export function IssueTreeView() {
             onLaunch={handleLaunch}
             launchingIssues={launchingIssues}
             launchErrors={launchErrors}
-            forceExpand={!!search || statusFilter !== 'all'}
+            forceExpand={!!search || statusFilter !== 'all' || providerFilter !== 'all'}
             fetchTree={fetchTree}
             collapsedNodes={collapseState.collapsedNodes}
             onToggleCollapse={collapseState.toggleCollapse}
@@ -1130,7 +1200,7 @@ function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, 
 // ---------------------------------------------------------------------------
 
 interface ProjectGroupProps {
-  group: { projectId: number; projectName: string; tree: IssueNode[]; count: number };
+  group: { projectId: number; projectName: string; tree: IssueNode[]; count: number; providers?: string[] };
   onLaunch: (issueNumber: number, title: string, projectId?: number, issueKey?: string, issueProvider?: string) => Promise<void>;
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
@@ -1147,6 +1217,53 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
   const prioritization = usePrioritization();
   const [showRunAllDialog, setShowRunAllDialog] = useState(false);
 
+  // Detect distinct providers in this group's tree
+  const distinctProviders = useMemo(() => {
+    if (group.providers && group.providers.length > 0) return group.providers;
+    const providerSet = new Set<string>();
+    function walk(nodes: IssueNode[]) {
+      for (const n of nodes) {
+        providerSet.add(n.issueProvider ?? 'github');
+        walk(n.children);
+      }
+    }
+    walk(group.tree);
+    return [...providerSet].sort();
+  }, [group.tree, group.providers]);
+
+  const hasMultipleProviders = distinctProviders.length > 1;
+
+  // Per-provider issue counts for the header badges
+  const providerCounts = useMemo(() => {
+    if (!hasMultipleProviders) return null;
+    const counts = new Map<string, number>();
+    function walk(nodes: IssueNode[]) {
+      for (const n of nodes) {
+        const p = n.issueProvider ?? 'github';
+        counts.set(p, (counts.get(p) ?? 0) + 1);
+        walk(n.children);
+      }
+    }
+    walk(group.tree);
+    return counts;
+  }, [group.tree, hasMultipleProviders]);
+
+  // Split tree into per-provider buckets (only when multiple providers exist)
+  const providerBuckets = useMemo(() => {
+    if (!hasMultipleProviders) return null;
+    const buckets = new Map<string, IssueNode[]>();
+    function walk(nodes: IssueNode[]): Map<string, IssueNode[]> {
+      for (const node of nodes) {
+        const p = node.issueProvider ?? 'github';
+        if (!buckets.has(p)) buckets.set(p, []);
+        buckets.get(p)!.push(node);
+      }
+      return buckets;
+    }
+    walk(group.tree);
+    return buckets;
+  }, [group.tree, hasMultipleProviders]);
+
   const displayTree = useMemo(() => {
     if (!prioritization.hasPriority) return group.tree;
     return sortTreeByPriority(group.tree, prioritization.priorityMap);
@@ -1155,6 +1272,18 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
   const launchableInfo = useMemo(() => collectLaunchableIssues(group.tree), [group.tree]);
 
   const flatRows = useFlattenedTree(displayTree, collapsedNodes, forceExpand);
+
+  // Build header count text
+  const totalCount = countNodes(group.tree);
+  const headerCountText = useMemo(() => {
+    if (!hasMultipleProviders || !providerCounts) {
+      return `${totalCount} issue${totalCount !== 1 ? 's' : ''}`;
+    }
+    const parts = distinctProviders
+      .filter((p) => providerCounts.has(p))
+      .map((p) => `${p.charAt(0).toUpperCase() + p.slice(1)}: ${providerCounts.get(p)}`);
+    return `${totalCount} issue${totalCount !== 1 ? 's' : ''} (${parts.join(', ')})`;
+  }, [totalCount, hasMultipleProviders, providerCounts, distinctProviders]);
 
   return (
     <div>
@@ -1178,7 +1307,7 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
             {group.projectName}
           </span>
           <span className="text-xs text-dark-muted shrink-0">
-            {countNodes(group.tree)} issue{countNodes(group.tree) !== 1 ? 's' : ''}
+            {headerCountText}
           </span>
         </button>
 
@@ -1216,24 +1345,52 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
         fetchTree={fetchTree}
       />
 
-      {/* Issue tree within this project group (virtualized) */}
+      {/* Issue tree within this project group */}
       {expanded && (
         <div className="ml-2 border-l border-dark-border/40 pl-1">
-          <VirtualizedTreeList
-            rows={flatRows}
-            onLaunch={onLaunch}
-            launchingIssues={launchingIssues}
-            launchErrors={launchErrors}
-            projectId={group.projectId}
-            priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
-            checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
-            onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
-            onPrioritizeSubtree={prioritization.prioritizeSubtree}
-            prioritizing={prioritization.loading}
-            collapsedNodes={collapsedNodes}
-            onToggleCollapse={onToggleCollapse}
-            className="max-h-[70vh]"
-          />
+          {hasMultipleProviders && providerBuckets ? (
+            /* Multi-provider: render per-provider sub-groups */
+            <div className="space-y-1">
+              {distinctProviders.map((provider) => {
+                const providerIssues = providerBuckets.get(provider) ?? [];
+                if (providerIssues.length === 0) return null;
+                return (
+                  <ProviderSubGroup
+                    key={`provider-${group.projectId}-${provider}`}
+                    provider={provider}
+                    issues={providerIssues}
+                    projectId={group.projectId}
+                    nodeKey={`provider-${group.projectId}-${provider}`}
+                    onLaunch={onLaunch}
+                    launchingIssues={launchingIssues}
+                    launchErrors={launchErrors}
+                    forceExpand={forceExpand}
+                    fetchTree={fetchTree}
+                    collapsedNodes={collapsedNodes}
+                    onToggleCollapse={onToggleCollapse}
+                    api={api}
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            /* Single provider: flat list as before (virtualized) */
+            <VirtualizedTreeList
+              rows={flatRows}
+              onLaunch={onLaunch}
+              launchingIssues={launchingIssues}
+              launchErrors={launchErrors}
+              projectId={group.projectId}
+              priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
+              checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
+              onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
+              onPrioritizeSubtree={prioritization.prioritizeSubtree}
+              prioritizing={prioritization.loading}
+              collapsedNodes={collapsedNodes}
+              onToggleCollapse={onToggleCollapse}
+              className="max-h-[70vh]"
+            />
+          )}
         </div>
       )}
 
@@ -1244,6 +1401,104 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
           skippedActive={launchableInfo.skippedActive}
           blockedIssues={launchableInfo.blocked}
           projectId={group.projectId}
+          api={api}
+          fetchTree={fetchTree}
+          onClose={() => setShowRunAllDialog(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ProviderSubGroup — collapsible sub-group for a single provider within a project
+// ---------------------------------------------------------------------------
+
+interface ProviderSubGroupProps {
+  provider: string;
+  issues: IssueNode[];
+  projectId: number;
+  nodeKey: string;
+  onLaunch: (issueNumber: number, title: string, projectId?: number, issueKey?: string, issueProvider?: string) => Promise<void>;
+  launchingIssues: Set<number>;
+  launchErrors: Map<number, string>;
+  forceExpand: boolean;
+  fetchTree: () => Promise<void>;
+  collapsedNodes: Set<string>;
+  onToggleCollapse: (nodeId: string) => void;
+  api: ReturnType<typeof useApi>;
+}
+
+function ProviderSubGroup({ provider, issues, projectId, nodeKey, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, api }: ProviderSubGroupProps) {
+  const expanded = !collapsedNodes.has(nodeKey);
+  const [showRunAllDialog, setShowRunAllDialog] = useState(false);
+
+  const flatRows = useFlattenedTree(issues, collapsedNodes, forceExpand);
+  const launchableInfo = useMemo(() => collectLaunchableIssues(issues), [issues]);
+  const issueCount = countNodes(issues);
+  const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
+
+  return (
+    <div data-testid={`provider-subgroup-${provider}`}>
+      {/* Provider sub-group header */}
+      <div className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-dark-surface/40 transition-colors">
+        <button
+          onClick={() => onToggleCollapse(nodeKey)}
+          className="flex items-center gap-2 flex-1 text-left min-w-0"
+        >
+          {/* Expand/collapse arrow */}
+          <span className={`w-3.5 h-3.5 flex items-center justify-center text-dark-muted shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}>
+            <svg className="w-2.5 h-2.5" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z" />
+            </svg>
+          </span>
+          {/* Provider icon */}
+          <ProviderIcon provider={provider} size={14} className="text-dark-muted shrink-0" />
+          <span className="text-xs font-medium text-dark-text">
+            {providerLabel}
+          </span>
+          <span className="text-xs text-dark-muted shrink-0">
+            {issueCount} issue{issueCount !== 1 ? 's' : ''}
+          </span>
+        </button>
+
+        {/* Provider-scoped Run All */}
+        <button
+          onClick={() => setShowRunAllDialog(true)}
+          disabled={launchableInfo.launchable.length === 0 && launchableInfo.blocked.length === 0}
+          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border border-[#3FB950]/50 text-[#3FB950] hover:bg-[#3FB950]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title={`Launch teams for all ${providerLabel} issues`}
+        >
+          <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M1.5 3.5a.5.5 0 0 1 .8-.4l4.5 3.4a.5.5 0 0 1 0 .8l-4.5 3.4a.5.5 0 0 1-.8-.4V3.5Zm7 0a.5.5 0 0 1 .8-.4l4.5 3.4a.5.5 0 0 1 0 .8l-4.5 3.4a.5.5 0 0 1-.8-.4V3.5Z" />
+          </svg>
+          Run All
+        </button>
+      </div>
+
+      {/* Provider sub-group issue tree */}
+      {expanded && (
+        <div className="ml-2 border-l border-dark-border/20 pl-1">
+          <VirtualizedTreeList
+            rows={flatRows}
+            onLaunch={onLaunch}
+            launchingIssues={launchingIssues}
+            launchErrors={launchErrors}
+            projectId={projectId}
+            collapsedNodes={collapsedNodes}
+            onToggleCollapse={onToggleCollapse}
+            className="max-h-[60vh]"
+          />
+        </div>
+      )}
+
+      {/* Provider-scoped Run All dialog */}
+      {showRunAllDialog && (
+        <RunAllConfirmDialog
+          issues={launchableInfo.launchable}
+          skippedActive={launchableInfo.skippedActive}
+          blockedIssues={launchableInfo.blocked}
+          projectId={projectId}
           api={api}
           fetchTree={fetchTree}
           onClose={() => setShowRunAllDialog(false)}
@@ -1367,13 +1622,14 @@ function matchesStatusFilter(node: IssueNode, filter: string): boolean {
   return node.activeTeam?.status === filter;
 }
 
-/** Filter tree nodes by search query and status filter, keeping parents of matching children */
-function filterTree(nodes: IssueNode[], query: string, statusFilter: string): IssueNode[] {
+/** Filter tree nodes by search query, status filter, and provider filter, keeping parents of matching children */
+function filterTree(nodes: IssueNode[], query: string, statusFilter: string, providerFilter: string = 'all'): IssueNode[] {
   const hasQuery = query.trim().length > 0;
   const hasStatusFilter = statusFilter !== 'all';
+  const hasProviderFilter = providerFilter !== 'all';
 
   // No filters active — return as-is
-  if (!hasQuery && !hasStatusFilter) return nodes;
+  if (!hasQuery && !hasStatusFilter && !hasProviderFilter) return nodes;
 
   const q = query.toLowerCase().trim();
   const isNumericQuery = /^\d+$/.test(q);
@@ -1388,11 +1644,15 @@ function filterTree(nodes: IssueNode[], query: string, statusFilter: string): Is
     // Check if this node matches the status filter
     const matchesStatus = matchesStatusFilter(node, statusFilter);
 
-    // A node directly matches if it passes BOTH filters
-    const directMatch = matchesSearch && matchesStatus;
+    // Check if this node matches the provider filter
+    const matchesProvider = !hasProviderFilter ||
+      (node.issueProvider ?? 'github') === providerFilter;
+
+    // A node directly matches if it passes ALL filters
+    const directMatch = matchesSearch && matchesStatus && matchesProvider;
 
     // Recursively filter children
-    const filteredChildren = filterTree(node.children, query, statusFilter);
+    const filteredChildren = filterTree(node.children, query, statusFilter, providerFilter);
 
     // Include node if it directly matches OR has matching children
     if (directMatch || filteredChildren.length > 0) {

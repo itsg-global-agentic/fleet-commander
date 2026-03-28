@@ -89,6 +89,8 @@ function mapGraphQLNodeToIssueNode(node: GraphQLIssueNode): IssueNode {
     url: node.url,
     children: [],   // populated later by buildHierarchy in fetchIssueHierarchy
     activeTeam: null,
+    issueKey: String(node.number),
+    issueProvider: 'github',
   };
 
   if (node.subIssuesSummary) {
@@ -140,6 +142,8 @@ function mapParentNodeToIssueNode(node: GraphQLIssueNode): IssueNode {
     url: node.url,
     children: [],
     activeTeam: null,
+    issueKey: String(node.number),
+    issueProvider: 'github',
   };
 }
 
