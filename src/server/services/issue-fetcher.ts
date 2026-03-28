@@ -165,6 +165,7 @@ function mapGenericIssueToIssueNode(issue: GenericIssue): IssueNode {
     state: issue.status === 'closed' ? 'closed' : 'open',
     labels: issue.labels,
     url: issue.url ?? '',
+    boardStatus: issue.rawStatus,
     children: [],
     activeTeam: null,
     issueKey: issue.key,
@@ -176,8 +177,12 @@ function mapGenericIssueToIssueNode(issue: GenericIssue): IssueNode {
  * Convert a GenericDependencyRef to a DependencyRef (for backward compat).
  * Jira deps use key-based identification; the DependencyRef structure
  * is GitHub-centric (owner/repo), so we set placeholder values.
+ *
+ * @param dep - The generic dependency reference from any provider.
+ * @param providerBaseUrl - Optional base URL for the provider (e.g. Jira Cloud URL).
+ *   When provided, used to construct a direct link to the dependency issue.
  */
-function genericDepToDepRef(dep: GenericDependencyRef): DependencyRef {
+function genericDepToDepRef(dep: GenericDependencyRef, providerBaseUrl?: string): DependencyRef {
   const numMatch = dep.key.match(/(\d+)$/);
   const number = numMatch ? parseInt(numMatch[1], 10) : 0;
 
@@ -187,6 +192,8 @@ function genericDepToDepRef(dep: GenericDependencyRef): DependencyRef {
     repo: dep.provider,
     state: dep.status === 'closed' ? 'closed' : 'open',
     title: dep.title,
+    issueKey: dep.key,
+    url: providerBaseUrl ? `${providerBaseUrl.replace(/\/+$/, '')}/browse/${dep.key}` : undefined,
   };
 }
 
@@ -589,6 +596,9 @@ export class IssueFetcher {
       (issue) => !childKeys.has(issue.issueKey ?? String(issue.number)),
     );
 
+    // Resolve provider base URL for dependency links (e.g. Jira browse URL)
+    const providerBaseUrl = provider instanceof JiraIssueProvider ? provider.baseUrl : undefined;
+
     // Fetch dependencies for each issue
     if (provider.capabilities.dependencies) {
       const depTasks = flatIssues.map((issue) => async () => {
@@ -600,7 +610,7 @@ export class IssueFetcher {
             issue.dependencies = {
               issueNumber: issue.number,
               issueKey: key,
-              blockedBy: deps.map((d) => genericDepToDepRef(d)),
+              blockedBy: deps.map((d) => genericDepToDepRef(d, providerBaseUrl)),
               resolved: openCount === 0,
               openCount,
             };

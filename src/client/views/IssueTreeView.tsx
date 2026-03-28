@@ -91,6 +91,8 @@ export function IssueTreeView() {
     projectId: number;
     message: string;
     blockers: string[];
+    issueKey?: string;
+    issueProvider?: string;
   } | null>(null);
 
   // Track pending timeouts so we can clear them on unmount
@@ -178,7 +180,7 @@ export function IssueTreeView() {
   // Launch team for an issue (play button)
   // -------------------------------------------------------------------------
 
-  const handleLaunch = useCallback(async (issueNumber: number, title: string, contextProjectId?: number) => {
+  const handleLaunch = useCallback(async (issueNumber: number, title: string, contextProjectId?: number, issueKey?: string, issueProvider?: string) => {
     // Use the project from the grouped context if provided, otherwise fall back to launchProjectId
     const resolvedProjectId = contextProjectId ?? launchProjectId;
 
@@ -215,7 +217,7 @@ export function IssueTreeView() {
     try {
       await api.post('teams/launch', {
         issueNumber,
-        issueKey: String(issueNumber),
+        issueKey: issueKey ?? String(issueNumber),
         issueTitle: title,
         projectId: resolvedProjectId,
       });
@@ -252,6 +254,8 @@ export function IssueTreeView() {
           projectId: resolvedProjectId,
           message,
           blockers: [], // The error message contains the details
+          issueKey,
+          issueProvider,
         });
         return;
       }
@@ -285,14 +289,14 @@ export function IssueTreeView() {
   // Handle force launch (bypassing dependency check)
   const handleForceLaunch = useCallback(async () => {
     if (!depConfirm) return;
-    const { issueNumber, title, projectId } = depConfirm;
+    const { issueNumber, title, projectId, issueKey } = depConfirm;
     setDepConfirm(null);
     setLaunchingIssues(prev => new Set(prev).add(issueNumber));
 
     try {
       await api.post('teams/launch', {
         issueNumber,
-        issueKey: String(issueNumber),
+        issueKey: issueKey ?? String(issueNumber),
         issueTitle: title,
         projectId,
         force: true,
@@ -334,14 +338,14 @@ export function IssueTreeView() {
   // Handle queue launch (queue with blockers until dependencies resolve)
   const handleQueueLaunch = useCallback(async () => {
     if (!depConfirm) return;
-    const { issueNumber, title, projectId } = depConfirm;
+    const { issueNumber, title, projectId, issueKey } = depConfirm;
     setDepConfirm(null);
     setLaunchingIssues(prev => new Set(prev).add(issueNumber));
 
     try {
       await api.post('teams/launch', {
         issueNumber,
-        issueKey: String(issueNumber),
+        issueKey: issueKey ?? String(issueNumber),
         issueTitle: title,
         projectId,
         queue: true,
@@ -698,6 +702,7 @@ export function IssueTreeView() {
       {depConfirm && (
         <DependencyConfirmDialog
           issueNumber={depConfirm.issueNumber}
+          issueKey={depConfirm.issueKey}
           message={depConfirm.message}
           onForce={handleForceLaunch}
           onQueue={handleQueueLaunch}
@@ -712,13 +717,15 @@ export function IssueTreeView() {
 // DependencyConfirmDialog — shown when launching a blocked issue
 // ---------------------------------------------------------------------------
 
-function DependencyConfirmDialog({ issueNumber, message, onForce, onQueue, onCancel }: {
+function DependencyConfirmDialog({ issueNumber, issueKey, message, onForce, onQueue, onCancel }: {
   issueNumber: number;
+  issueKey?: string;
   message: string;
   onForce: () => void;
   onQueue: () => void;
   onCancel: () => void;
 }) {
+  const displayKey = issueKey ?? `#${issueNumber}`;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="w-[420px] max-w-[95vw] bg-dark-surface border border-dark-border rounded-lg shadow-2xl">
@@ -728,7 +735,7 @@ function DependencyConfirmDialog({ issueNumber, message, onForce, onQueue, onCan
               <path d="M4.25 7.25a.75.75 0 0 0 0 1.5h7.5a.75.75 0 0 0 0-1.5h-7.5Z" />
               <path d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0Zm-1.5 0a6.5 6.5 0 1 0-13 0 6.5 6.5 0 0 0 13 0Z" />
             </svg>
-            Issue #{issueNumber} has unresolved dependencies
+            Issue {displayKey} has unresolved dependencies
           </h3>
         </div>
         <div className="px-5 py-4">
@@ -786,7 +793,11 @@ function RunAllConfirmDialog({ issues, skippedActive, blockedIssues, projectId, 
     try {
       await api.post('teams/launch-batch', {
         projectId,
-        issues: [...issues, ...blockedIssues].map((n) => ({ number: n.number, title: n.title })),
+        issues: [...issues, ...blockedIssues].map((n) => ({
+          number: n.number,
+          title: n.title,
+          issueKey: n.issueKey,
+        })),
       });
       onClose();
       // Give the server a moment to process, then refresh
@@ -820,12 +831,12 @@ function RunAllConfirmDialog({ issues, skippedActive, blockedIssues, projectId, 
           {issues.length > 0 && (
             <ul className="space-y-1 mb-3">
               {issues.map((n) => (
-                <li key={n.number} className="text-xs text-dark-text flex items-center gap-2">
+                <li key={n.issueKey ?? n.number} className="text-xs text-dark-text flex items-center gap-2">
                   <svg className="w-3 h-3 text-[#3FB950] shrink-0" viewBox="0 0 16 16" fill="currentColor">
                     <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
                     <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
                   </svg>
-                  <span className="text-dark-muted">#{n.number}</span>
+                  <span className="text-dark-muted">{n.issueKey ?? `#${n.number}`}</span>
                   <span className="truncate">{n.title}</span>
                 </li>
               ))}
@@ -840,12 +851,12 @@ function RunAllConfirmDialog({ issues, skippedActive, blockedIssues, projectId, 
               </p>
               <ul className="space-y-1">
                 {blockedIssues.map((n) => (
-                  <li key={n.number} className="text-xs text-dark-text flex items-center gap-2">
+                  <li key={n.issueKey ?? n.number} className="text-xs text-dark-text flex items-center gap-2">
                     <svg className="w-3 h-3 text-[#D29922] shrink-0" viewBox="0 0 16 16" fill="currentColor">
                       <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
                       <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
                     </svg>
-                    <span className="text-dark-muted">#{n.number}</span>
+                    <span className="text-dark-muted">{n.issueKey ?? `#${n.number}`}</span>
                     <span className="truncate">{n.title}</span>
                   </li>
                 ))}
@@ -1048,7 +1059,7 @@ function PrioritizationActionBar({ prioritization, projectId, api, fetchTree }: 
 
 interface ProjectGroupSectionProps {
   bucket: ProjectGroupBucket;
-  onLaunch: (issueNumber: number, title: string, projectId?: number) => Promise<void>;
+  onLaunch: (issueNumber: number, title: string, projectId?: number, issueKey?: string, issueProvider?: string) => Promise<void>;
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
   forceExpand: boolean;
@@ -1120,7 +1131,7 @@ function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, 
 
 interface ProjectGroupProps {
   group: { projectId: number; projectName: string; tree: IssueNode[]; count: number };
-  onLaunch: (issueNumber: number, title: string, projectId?: number) => Promise<void>;
+  onLaunch: (issueNumber: number, title: string, projectId?: number, issueKey?: string, issueProvider?: string) => Promise<void>;
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
   forceExpand: boolean;
@@ -1249,7 +1260,7 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
 interface SingleProjectTreeProps {
   tree: IssueNode[];
   projectId: number | null;
-  onLaunch: (issueNumber: number, title: string, projectId?: number) => Promise<void>;
+  onLaunch: (issueNumber: number, title: string, projectId?: number, issueKey?: string, issueProvider?: string) => Promise<void>;
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
   forceExpand: boolean;

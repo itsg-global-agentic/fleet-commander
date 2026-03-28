@@ -10,7 +10,7 @@ import type { PrioritizedIssue } from '../../shared/types';
 
 interface VirtualizedTreeListProps {
   rows: FlatTreeRow[];
-  onLaunch: (issueNumber: number, title: string, projectId?: number) => Promise<void>;
+  onLaunch: (issueNumber: number, title: string, projectId?: number, issueKey?: string, issueProvider?: string) => Promise<void>;
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
   projectId?: number;

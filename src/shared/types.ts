@@ -425,6 +425,10 @@ export interface DependencyRef {
   state: 'open' | 'closed';
   /** Issue title */
   title: string;
+  /** Universal issue key (e.g. "PROJ-123" for Jira). Undefined for GitHub deps. */
+  issueKey?: string;
+  /** Direct URL to the dependency in its provider's UI */
+  url?: string;
 }
 
 /** Dependency info for an issue */

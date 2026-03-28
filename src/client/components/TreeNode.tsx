@@ -1,7 +1,7 @@
 import React from 'react';
 import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
-import { PlayIcon, LockIcon } from './Icons';
+import { PlayIcon, LockIcon, GitHubIcon, JiraIcon } from './Icons';
 import type { TeamStatus, PrioritizedIssue, IssueDependencyInfo, CIStatus } from '../../shared/types';
 import { formatIssueKey } from '../../shared/issue-provider';
 
@@ -91,26 +91,40 @@ function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
       <LockIcon size={12} className="text-[#F85149] shrink-0" />
       <span>blocked by</span>
       {dependencies.blockedBy.map((dep, idx) => {
-        const issueUrl = `https://github.com/${dep.owner}/${dep.repo}/issues/${dep.number}`;
+        // Use dep.url if available (Jira deps), otherwise construct GitHub URL
+        const issueUrl = dep.url ?? `https://github.com/${dep.owner}/${dep.repo}/issues/${dep.number}`;
         const isClosed = dep.state === 'closed';
+        // Display Jira issue key when available, otherwise GitHub #number
+        const displayKey = dep.issueKey ?? `#${dep.number}`;
         const tooltipText = dep.title
           ? `${dep.title} (${dep.state})`
-          : `#${dep.number} (${dep.state})`;
+          : `${displayKey} (${dep.state})`;
+        // Unique key: prefer issueKey for Jira deps, fall back to owner/repo#number
+        const depKey = dep.issueKey ?? `${dep.owner}/${dep.repo}#${dep.number}`;
 
         return (
-          <span key={`${dep.owner}/${dep.repo}#${dep.number}`}>
-            <a
-              href={issueUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={tooltipText}
-              className={`hover:text-dark-accent transition-colors ${
-                isClosed ? 'line-through text-dark-muted/60' : 'text-dark-muted'
-              }`}
-              onClick={(e) => e.stopPropagation()}
-            >
-              #{dep.number}
-            </a>
+          <span key={depKey}>
+            {issueUrl ? (
+              <a
+                href={issueUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={tooltipText}
+                className={`hover:text-dark-accent transition-colors ${
+                  isClosed ? 'line-through text-dark-muted/60' : 'text-dark-muted'
+                }`}
+                onClick={(e) => e.stopPropagation()}
+              >
+                {displayKey}
+              </a>
+            ) : (
+              <span
+                title={tooltipText}
+                className={isClosed ? 'line-through text-dark-muted/60' : 'text-dark-muted'}
+              >
+                {displayKey}
+              </span>
+            )}
             {idx < dependencies.blockedBy.length - 1 && (
               <span className="text-dark-muted">,</span>
             )}
@@ -119,6 +133,28 @@ function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
       })}
     </span>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Provider badge (GitHub / Jira icon)
+// ---------------------------------------------------------------------------
+
+function ProviderBadge({ provider }: { provider: string }) {
+  if (provider === 'jira') {
+    return (
+      <span className="inline-flex items-center shrink-0" title="Jira">
+        <JiraIcon size={12} className="text-[#2684FF]" />
+      </span>
+    );
+  }
+  if (provider === 'github') {
+    return (
+      <span className="inline-flex items-center shrink-0" title="GitHub">
+        <GitHubIcon size={12} className="text-dark-muted" />
+      </span>
+    );
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -157,7 +193,7 @@ function PriorityBadge({ data }: { data: PrioritizedIssue }) {
 interface TreeNodeProps {
   node: IssueNode;
   depth: number;
-  onLaunch: (issueNumber: number, title: string, projectId?: number) => Promise<void>;
+  onLaunch: (issueNumber: number, title: string, projectId?: number, issueKey?: string, issueProvider?: string) => Promise<void>;
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
   /** When set, the play button uses this project instead of requiring the user to select one. */
@@ -190,7 +226,7 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
   const handleLaunch = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (launching) return;
-    await onLaunch(node.number, node.title, projectId);
+    await onLaunch(node.number, node.title, projectId, node.issueKey ?? undefined, node.issueProvider ?? undefined);
   };
 
   // Find first PR reference for PRBadge
@@ -241,6 +277,9 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
         {/* Issue state icon */}
         <IssueStateBadge state={node.state} />
 
+        {/* Provider badge (Jira/GitHub icon) */}
+        {node.issueProvider && <ProviderBadge provider={node.issueProvider} />}
+
         {/* Issue key / number */}
         <a
           href={node.url}
@@ -256,6 +295,13 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
         <span className={`text-sm truncate ${node.state === 'closed' ? 'text-dark-muted line-through' : 'text-dark-text'}`}>
           {node.title}
         </span>
+
+        {/* Native board status for non-GitHub providers */}
+        {node.boardStatus && node.issueProvider && node.issueProvider !== 'github' && (
+          <span className="shrink-0 ml-1 px-1.5 py-0.5 text-[10px] rounded bg-dark-border/40 text-dark-muted">
+            {node.boardStatus}
+          </span>
+        )}
 
         {/* Priority badge from AI prioritization */}
         {priorityMap?.get(node.number) && (

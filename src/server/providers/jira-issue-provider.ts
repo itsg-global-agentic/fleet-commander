@@ -215,6 +215,11 @@ export class JiraIssueProvider implements IssueProvider {
     };
   }
 
+  /** Returns the Jira Cloud base URL (e.g. "https://mycompany.atlassian.net") */
+  get baseUrl(): string {
+    return this.config.baseUrl.replace(/\/+$/, '');
+  }
+
   // -------------------------------------------------------------------------
   // IssueProvider interface methods
   // -------------------------------------------------------------------------
