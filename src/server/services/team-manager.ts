@@ -28,6 +28,7 @@ import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgent
 import { classifyAgentRole, shouldAdvancePhase } from './event-collector.js';
 import type { TeamPhase } from '../../shared/types.js';
 import { isValidGithubRepo } from '../utils/exec-gh.js';
+import { generateIssueContext } from './issue-context-generator.js';
 
 const execAsync = promisify(execCallback);
 
@@ -351,6 +352,16 @@ export class TeamManager {
 
     // ── Step 3: Copy hook scripts and settings into worktree ──
     this.copyFCFiles(worktreeAbsPath);
+
+    // ── Step 3b: Generate issue context file ──
+    await generateIssueContext({
+      worktreeAbsPath,
+      issueKey: effectiveIssueKey,
+      issueNumber,
+      issueTitle: issueTitle ?? null,
+      issueProvider: project.issueProvider ?? 'github',
+      project,
+    });
 
     // ── Step 4: Spawn Claude Code process ──
     const resolvedPrompt = prompt || this.resolvePromptFromFile(project, effectiveIssueKey);
@@ -1238,8 +1249,18 @@ export class TeamManager {
     // ── Step 2: Copy hooks and settings ──
     this.copyFCFiles(worktreeAbsPath);
 
-    // ── Step 3: Spawn Claude Code ──
+    // ── Step 2b: Generate issue context file ──
     const effectiveIssueKey = team.issueKey ?? String(team.issueNumber);
+    await generateIssueContext({
+      worktreeAbsPath,
+      issueKey: effectiveIssueKey,
+      issueNumber: team.issueNumber,
+      issueTitle: team.issueTitle ?? null,
+      issueProvider: team.issueProvider ?? project.issueProvider ?? 'github',
+      project,
+    });
+
+    // ── Step 3: Spawn Claude Code ──
     const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, effectiveIssueKey);
     const isHeadless = team.headless;
 
@@ -1906,6 +1927,7 @@ export class TeamManager {
     const toAdd: string[] = [];
     if (!lines.includes('plan.md')) toAdd.push('plan.md');
     if (!lines.includes('review.md')) toAdd.push('review.md');
+    if (!lines.includes('.fleet-issue-context.md')) toAdd.push('.fleet-issue-context.md');
     if (toAdd.length > 0) {
       const suffix = gitignoreContent.length > 0 && !gitignoreContent.endsWith('\n') ? '\n' : '';
       fs.writeFileSync(gitignorePath, gitignoreContent + suffix + toAdd.join('\n') + '\n', 'utf-8');

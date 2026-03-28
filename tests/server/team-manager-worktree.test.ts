@@ -39,6 +39,11 @@ vi.mock('../../src/server/config.js', () => ({
     mergeShutdownGraceMs: 120000,
     fleetCommanderRoot: '/tmp/fleet',
     mapCleanupIntervalMs: 3600000,
+    fcHooksDir: '/tmp/fleet/hooks',
+    hookDir: '.claude/hooks',
+    fcAgentsDir: '/tmp/fleet/agents',
+    fcGuidesDir: '/tmp/fleet/guides',
+    fcWorkflowTemplate: '/tmp/fleet/templates/workflow.md',
   },
 }));
 
@@ -151,6 +156,11 @@ vi.mock('../../src/server/services/event-collector.js', () => ({
 // Mock exec-gh
 vi.mock('../../src/server/utils/exec-gh.js', () => ({
   isValidGithubRepo: vi.fn().mockResolvedValue(true),
+}));
+
+// Mock issue-context-generator
+vi.mock('../../src/server/services/issue-context-generator.js', () => ({
+  generateIssueContext: vi.fn().mockResolvedValue(undefined),
 }));
 
 import { TeamManager } from '../../src/server/services/team-manager.js';
@@ -326,5 +336,53 @@ describe('TeamManager.syncWithOrigin', () => {
       expect.objectContaining({ team_id: teamId }),
       teamId,
     );
+  });
+});
+
+describe('TeamManager.copyFCFiles gitignore', () => {
+  let tm: TeamManager;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFs.existsSync.mockReturnValue(false);
+    mockFs.readFileSync.mockReturnValue('');
+    tm = new TeamManager();
+  });
+
+  it('should add .fleet-issue-context.md to gitignore', () => {
+    // Simulate an empty gitignore
+    mockFs.existsSync.mockImplementation((p: string) => {
+      if (typeof p === 'string' && p.includes('.gitignore')) return true;
+      return false;
+    });
+    mockFs.readFileSync.mockReturnValue('node_modules\n');
+
+    (tm as any).copyFCFiles('/tmp/worktree');
+
+    // Find the writeFileSync call that writes the .gitignore
+    const gitignoreCall = mockFs.writeFileSync.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('.gitignore'),
+    );
+    expect(gitignoreCall).toBeDefined();
+    const writtenContent = gitignoreCall![1] as string;
+    expect(writtenContent).toContain('.fleet-issue-context.md');
+    expect(writtenContent).toContain('plan.md');
+    expect(writtenContent).toContain('review.md');
+  });
+
+  it('should not duplicate .fleet-issue-context.md if already in gitignore', () => {
+    mockFs.existsSync.mockImplementation((p: string) => {
+      if (typeof p === 'string' && p.includes('.gitignore')) return true;
+      return false;
+    });
+    mockFs.readFileSync.mockReturnValue('plan.md\nreview.md\n.fleet-issue-context.md\n');
+
+    (tm as any).copyFCFiles('/tmp/worktree');
+
+    // Should not write gitignore at all since all entries are already present
+    const gitignoreCall = mockFs.writeFileSync.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('.gitignore'),
+    );
+    expect(gitignoreCall).toBeUndefined();
   });
 });

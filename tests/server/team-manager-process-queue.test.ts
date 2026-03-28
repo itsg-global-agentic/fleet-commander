@@ -68,6 +68,10 @@ vi.mock('../../src/server/services/github-poller.js', () => ({
   },
 }));
 
+vi.mock('../../src/server/services/issue-context-generator.js', () => ({
+  generateIssueContext: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { TeamManager } from '../../src/server/services/team-manager.js';
 import type { Team, Project } from '../../src/shared/types.js';
 
