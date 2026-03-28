@@ -33,7 +33,7 @@ You are spawned **after the developer has finished implementation and reported r
 1. **Read CLAUDE.md** at the project root (or `.claude/CLAUDE.md`) for coding standards, naming conventions, architecture rules, and prohibited patterns.
 2. **Read guidebooks**: if your task prompt lists guidebook paths, read them now so you can verify compliance during review.
 3. **Read the planner's plan**: your task prompt includes the plan that guided the developer. Read it carefully — you will verify implementation against it.
-4. **Read the GitHub issue** for issue **#{{ISSUE_NUMBER}}** — understand the acceptance criteria and requirements.
+4. **Read the acceptance criteria**: your task prompt includes the acceptance criteria from the issue. Use these as your primary verification checklist. If acceptance criteria are not in your task prompt, read the GitHub issue for issue **#{{ISSUE_NUMBER}}** to understand requirements.
 5. **Get the diff**: First run `git fetch origin {{BASE_BRANCH}}` to ensure the base branch is up-to-date. Then identify all changed files against the base branch and begin reviewing.
 
 ```bash

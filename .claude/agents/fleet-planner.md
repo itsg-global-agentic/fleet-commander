@@ -28,9 +28,12 @@ Follow these steps in order:
 > **WARNING**: You MUST read the full issue before doing anything else. Do NOT plan based on the title alone.
 > Skipping this step is the #1 cause of incorrect plans. Read the body, comments, and acceptance criteria.
 
+**First**, check if `.fleet-issue-context.md` exists in the worktree root. Fleet Commander pre-generates this file with full issue context (body, comments, acceptance criteria, linked issues). If the file exists, read it — it contains everything you need and is faster than fetching from GitHub.
+
+**If `.fleet-issue-context.md` does not exist**, fall back to fetching the issue directly:
 Use `gh issue view {{ISSUE_NUMBER}} --json title,body,comments` to read the full issue details.
 
-After reading, confirm you have:
+After reading (from either source), confirm you have:
 - [ ] The full issue body/description
 - [ ] All comments and PM clarifications
 - [ ] Acceptance criteria (explicit or implied)

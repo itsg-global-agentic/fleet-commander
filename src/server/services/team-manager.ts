@@ -364,7 +364,7 @@ export class TeamManager {
     });
 
     // ── Step 4: Spawn Claude Code process ──
-    const resolvedPrompt = prompt || this.resolvePromptFromFile(project, effectiveIssueKey);
+    const resolvedPrompt = prompt || this.resolvePromptFromFile(project, effectiveIssueKey, issueTitle);
     const isHeadless = headless !== false;
 
     if (!isHeadless && process.platform === 'win32') {
@@ -1261,7 +1261,7 @@ export class TeamManager {
     });
 
     // ── Step 3: Spawn Claude Code ──
-    const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, effectiveIssueKey);
+    const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, effectiveIssueKey, team.issueTitle ?? undefined);
     const isHeadless = team.headless;
 
     if (!isHeadless && process.platform === 'win32') {
@@ -1565,7 +1565,7 @@ export class TeamManager {
    * Accepts issueKey (string) which replaces the placeholder even for non-numeric keys.
    * Fallback chain: project prompt file > prompts/default-prompt.md > hardcoded default.
    */
-  private resolvePromptFromFile(project: Project, issueKey: string): string {
+  private resolvePromptFromFile(project: Project, issueKey: string, issueTitle?: string): string {
     if (project.promptFile) {
       const absPath = path.join(config.fleetCommanderRoot, project.promptFile);
       if (fs.existsSync(absPath)) {
@@ -1573,7 +1573,8 @@ export class TeamManager {
           const template = fs.readFileSync(absPath, 'utf-8');
           const resolved = template
             .replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey)
-            .replace(/\{\{ISSUE_KEY\}\}/g, issueKey);
+            .replace(/\{\{ISSUE_KEY\}\}/g, issueKey)
+            .replace(/\{\{ISSUE_TITLE\}\}/g, issueTitle ?? '');
           console.log(`[TeamManager] Resolved prompt from file: ${project.promptFile}`);
           return resolved;
         } catch (err: unknown) {
@@ -1591,7 +1592,8 @@ export class TeamManager {
         const template = fs.readFileSync(defaultPath, 'utf-8');
         const resolved = template
           .replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey)
-          .replace(/\{\{ISSUE_KEY\}\}/g, issueKey);
+          .replace(/\{\{ISSUE_KEY\}\}/g, issueKey)
+          .replace(/\{\{ISSUE_TITLE\}\}/g, issueTitle ?? '');
         console.log(`[TeamManager] Resolved prompt from default: prompts/default-prompt.md`);
         return resolved;
       } catch {
