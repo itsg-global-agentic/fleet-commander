@@ -106,7 +106,7 @@ export function getCleanupPreview(projectId: number, resetTeams: boolean = false
         files = [];
       }
 
-      const signalPatterns = ['.fleet-pm-message'];
+      const signalPatterns = ['.fleet-pm-message', '.fleet-issue-context.md'];
       const prWatcherFiles = files.filter((f) => f.startsWith('.pr-watcher-'));
 
       for (const sf of [...signalPatterns, ...prWatcherFiles]) {
