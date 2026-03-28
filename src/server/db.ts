@@ -1261,7 +1261,7 @@ export class FleetDatabase {
       provider: data.provider,
       label: data.label ?? null,
       configJson: data.configJson,
-      credentialsJson: data.credentialsJson ?? null,
+      credentialsJson: data.credentialsJson ? encrypt(data.credentialsJson) : null,
       enabled: (data.enabled ?? true) ? 1 : 0,
     });
 
@@ -1304,7 +1304,7 @@ export class FleetDatabase {
     }
     if (fields.credentialsJson !== undefined) {
       setClauses.push('credentials_json = @credentialsJson');
-      params.credentialsJson = fields.credentialsJson;
+      params.credentialsJson = fields.credentialsJson ? encrypt(fields.credentialsJson) : fields.credentialsJson;
     }
     if (fields.enabled !== undefined) {
       setClauses.push('enabled = @enabled');
@@ -2709,13 +2709,24 @@ export class FleetDatabase {
   }
 
   private mapIssueSourceRow(row: Record<string, unknown>): ProjectIssueSource {
+    const rawCredentials = (row.credentials_json as string | null) ?? null;
+    let credentialsJson: string | null = null;
+    if (rawCredentials) {
+      try {
+        credentialsJson = isEncrypted(rawCredentials) ? decrypt(rawCredentials) : rawCredentials;
+      } catch (err) {
+        console.warn(`[DB] Failed to decrypt credentials_json for issue source ${row.id}: ${err instanceof Error ? err.message : String(err)}`);
+        credentialsJson = null;
+      }
+    }
+
     return {
       id: row.id as number,
       projectId: row.project_id as number,
       provider: row.provider as string,
       label: (row.label as string | null) ?? null,
       configJson: row.config_json as string,
-      credentialsJson: (row.credentials_json as string | null) ?? null,
+      credentialsJson,
       enabled: (row.enabled as number) === 1,
       createdAt: utcify(row.created_at as string),
     };

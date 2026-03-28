@@ -218,6 +218,121 @@ async function issueSourcesRoutes(server: FastifyInstance): Promise<void> {
       }
     }
   );
+
+  /**
+   * POST /api/projects/:projectId/issue-sources/test-connection — Test Jira connection
+   *
+   * Accepts Jira credential fields and validates them against the Jira REST API.
+   * Always returns 200 with { ok, projectName?, error? }.
+   */
+  server.post<{ Params: { projectId: string } }>(
+    '/api/projects/:projectId/issue-sources/test-connection',
+    async (request: FastifyRequest<{ Params: { projectId: string } }>, reply: FastifyReply) => {
+      try {
+        const projectId = parseIdParam(request.params.projectId, 'projectId');
+        const db = getDatabase();
+
+        const project = db.getProject(projectId);
+        if (!project) {
+          throw notFoundError(`Project ${projectId} not found`);
+        }
+
+        const body = request.body as Record<string, unknown> | null;
+        if (!body) {
+          throw validationError('Request body is required');
+        }
+
+        const jiraUrl = body.jiraUrl;
+        const projectKey = body.projectKey;
+        const email = body.email;
+        const apiToken = body.apiToken;
+
+        if (!jiraUrl || typeof jiraUrl !== 'string') {
+          throw validationError('jiraUrl is required and must be a string');
+        }
+        if (!projectKey || typeof projectKey !== 'string') {
+          throw validationError('projectKey is required and must be a string');
+        }
+        if (!email || typeof email !== 'string') {
+          throw validationError('email is required and must be a string');
+        }
+        if (!apiToken || typeof apiToken !== 'string') {
+          throw validationError('apiToken is required and must be a string');
+        }
+
+        // Validate Jira URL format
+        if (!jiraUrl.startsWith('https://')) {
+          return reply.code(200).send({
+            ok: false,
+            error: 'Jira URL must start with https://',
+          });
+        }
+
+        // Strip trailing slash
+        const baseUrl = jiraUrl.replace(/\/+$/, '');
+        const apiUrl = `${baseUrl}/rest/api/3/project/${encodeURIComponent(projectKey)}`;
+        const authHeader = 'Basic ' + Buffer.from(`${email}:${apiToken}`).toString('base64');
+
+        try {
+          const response = await fetch(apiUrl, {
+            method: 'GET',
+            headers: {
+              'Authorization': authHeader,
+              'Accept': 'application/json',
+            },
+            signal: AbortSignal.timeout(10000),
+          });
+
+          if (response.ok) {
+            const data = await response.json() as Record<string, unknown>;
+            return reply.code(200).send({
+              ok: true,
+              projectName: typeof data.name === 'string' ? data.name : projectKey,
+            });
+          }
+
+          if (response.status === 401) {
+            return reply.code(200).send({
+              ok: false,
+              error: 'Authentication failed: invalid email or API token',
+            });
+          }
+
+          if (response.status === 404) {
+            return reply.code(200).send({
+              ok: false,
+              error: `Project "${projectKey}" not found on this Jira instance`,
+            });
+          }
+
+          return reply.code(200).send({
+            ok: false,
+            error: `Jira API returned ${response.status}: ${response.statusText}`,
+          });
+        } catch (fetchErr: unknown) {
+          if (fetchErr instanceof Error && fetchErr.name === 'TimeoutError') {
+            return reply.code(200).send({
+              ok: false,
+              error: 'Connection timed out after 10 seconds',
+            });
+          }
+          return reply.code(200).send({
+            ok: false,
+            error: `Connection failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`,
+          });
+        }
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        request.log.error(err, 'Failed to test Jira connection');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  );
 }
 
 export default issueSourcesRoutes;

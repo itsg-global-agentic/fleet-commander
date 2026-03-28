@@ -74,6 +74,18 @@ export interface ProjectIssueSource {
   createdAt: string;
 }
 
+/** Jira source configuration stored in configJson */
+export interface JiraSourceConfig {
+  jiraUrl: string;
+  projectKey: string;
+}
+
+/** Jira source credentials stored in credentialsJson (encrypted at rest) */
+export interface JiraSourceCredentials {
+  email: string;
+  apiToken: string;
+}
+
 /** Detailed file-level info for a single install artifact */
 export interface InstallFileStatus {
   name: string;

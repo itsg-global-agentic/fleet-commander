@@ -3,9 +3,10 @@ import { useApi } from '../hooks/useApi';
 import { useInlineEdit } from '../hooks/useInlineEdit';
 import { AddProjectDialog } from '../components/AddProjectDialog';
 import { CleanupModal } from '../components/CleanupModal';
+import { JiraSourceDialog } from '../components/JiraSourceDialog';
 import { OverflowMenu } from '../components/OverflowMenu';
 import { ChevronRightIcon, PencilIcon } from '../components/Icons';
-import type { ProjectSummary, ProjectStatus, ProjectGroup, RepoSettings } from '../../shared/types';
+import type { ProjectSummary, ProjectStatus, ProjectGroup, ProjectIssueSource, RepoSettings } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Status badge colors
@@ -352,6 +353,220 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// IssueSourcesSection — lists configured issue sources with status badges
+// ---------------------------------------------------------------------------
+
+/** Status badge color: green=enabled+credentials, red=enabled+no credentials, gray=disabled */
+function sourceStatusColor(source: ProjectIssueSource): string {
+  if (!source.enabled) return '#8B949E';
+  return source.credentialsJson ? '#3FB950' : '#F85149';
+}
+
+function sourceStatusLabel(source: ProjectIssueSource): string {
+  if (!source.enabled) return 'Disabled';
+  return source.credentialsJson ? 'Connected' : 'No credentials';
+}
+
+function IssueSourcesSection({
+  projectId,
+}: {
+  projectId: number;
+}) {
+  const api = useApi();
+  const [sources, setSources] = useState<ProjectIssueSource[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingSource, setEditingSource] = useState<ProjectIssueSource | null>(null);
+  const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
+
+  const fetchSources = useCallback(async () => {
+    try {
+      const data = await api.get<{ sources: ProjectIssueSource[] }>(`projects/${projectId}/issue-sources`);
+      setSources(Array.isArray(data.sources) ? data.sources : []);
+    } catch {
+      // Silently handle — sources section is supplementary
+    } finally {
+      setLoading(false);
+    }
+  }, [api, projectId]);
+
+  useEffect(() => {
+    fetchSources();
+  }, [fetchSources]);
+
+  const handleSave = useCallback(async (data: {
+    provider: string;
+    label: string | null;
+    configJson: string;
+    credentialsJson: string;
+    enabled: boolean;
+  }) => {
+    if (editingSource) {
+      await api.patch(`projects/${projectId}/issue-sources/${editingSource.id}`, data);
+    } else {
+      await api.post(`projects/${projectId}/issue-sources`, data);
+    }
+    setDialogOpen(false);
+    setEditingSource(null);
+    await fetchSources();
+  }, [api, projectId, editingSource, fetchSources]);
+
+  const handleToggle = useCallback(async (source: ProjectIssueSource) => {
+    const prev = sources;
+    // Optimistic update
+    setSources(sources.map((s) => s.id === source.id ? { ...s, enabled: !s.enabled } : s));
+    try {
+      await api.patch(`projects/${projectId}/issue-sources/${source.id}`, {
+        enabled: !source.enabled,
+      });
+    } catch {
+      // Revert on failure
+      setSources(prev);
+    }
+  }, [api, projectId, sources]);
+
+  const handleDelete = useCallback(async (sourceId: number) => {
+    try {
+      await api.del(`projects/${projectId}/issue-sources/${sourceId}`);
+      setSources(sources.filter((s) => s.id !== sourceId));
+      setDeleteConfirm(null);
+    } catch {
+      // Silently handle
+    }
+  }, [api, projectId, sources]);
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <div className="text-[10px] uppercase tracking-wider text-dark-muted/60 font-medium">
+          Issue Sources
+        </div>
+        <button
+          onClick={() => { setEditingSource(null); setDialogOpen(true); }}
+          className="text-[10px] text-dark-accent/70 hover:text-dark-accent transition-colors"
+        >
+          + Add Jira Source
+        </button>
+      </div>
+
+      {loading && (
+        <div className="text-xs text-dark-muted">Loading...</div>
+      )}
+
+      {!loading && sources.length === 0 && (
+        <div className="text-xs text-dark-muted/60">No issue sources configured</div>
+      )}
+
+      {!loading && sources.length > 0 && (
+        <div className="space-y-1.5">
+          {sources.map((source) => {
+            const statusColor = sourceStatusColor(source);
+            const statusText = sourceStatusLabel(source);
+            let sourceLabel = source.label || source.provider;
+            try {
+              const config = JSON.parse(source.configJson) as Record<string, unknown>;
+              if (config.projectKey) {
+                sourceLabel = source.label || `${source.provider} — ${config.projectKey}`;
+              }
+            } catch {
+              // Use default label
+            }
+
+            return (
+              <div
+                key={source.id}
+                className="flex items-center gap-2 text-xs bg-dark-base/50 rounded px-2.5 py-1.5 border border-dark-border/50"
+              >
+                {/* Status dot */}
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: statusColor }}
+                  title={statusText}
+                />
+
+                {/* Label */}
+                <span className="text-dark-text/80 truncate flex-1" title={sourceLabel}>
+                  {sourceLabel}
+                </span>
+
+                {/* Status text */}
+                <span className="text-[10px] shrink-0" style={{ color: statusColor }}>
+                  {statusText}
+                </span>
+
+                {/* Toggle button */}
+                <button
+                  onClick={() => handleToggle(source)}
+                  className={`relative inline-flex h-4 w-7 items-center rounded-full transition-colors shrink-0 ${
+                    source.enabled ? 'bg-[#3FB950]' : 'bg-dark-border'
+                  }`}
+                  title={source.enabled ? 'Disable' : 'Enable'}
+                >
+                  <span
+                    className={`inline-block h-3 w-3 rounded-full bg-white transition-transform ${
+                      source.enabled ? 'translate-x-3.5' : 'translate-x-0.5'
+                    }`}
+                  />
+                </button>
+
+                {/* Edit button */}
+                <button
+                  onClick={() => { setEditingSource(source); setDialogOpen(true); }}
+                  className="text-dark-muted/50 hover:text-dark-text transition-colors shrink-0"
+                  title="Edit"
+                >
+                  <PencilIcon size={11} />
+                </button>
+
+                {/* Delete button */}
+                {deleteConfirm === source.id ? (
+                  <span className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => handleDelete(source.id)}
+                      className="text-[10px] text-[#F85149] hover:text-[#FF6E76] transition-colors"
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      onClick={() => setDeleteConfirm(null)}
+                      className="text-[10px] text-dark-muted hover:text-dark-text transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => setDeleteConfirm(source.id)}
+                    className="text-dark-muted/50 hover:text-[#F85149] transition-colors shrink-0"
+                    title="Delete"
+                  >
+                    <svg className="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                      <path
+                        fillRule="evenodd"
+                        d="M8.75 1A2.75 2.75 0 006 3.75v.443c-.795.077-1.584.176-2.365.298a.75.75 0 10.23 1.482l.149-.022.841 10.518A2.75 2.75 0 007.596 19h4.807a2.75 2.75 0 002.742-2.53l.841-10.52.149.023a.75.75 0 00.23-1.482A41.03 41.03 0 0014 4.193V3.75A2.75 2.75 0 0011.25 1h-2.5zM10 4c.84 0 1.673.025 2.5.075V3.75c0-.69-.56-1.25-1.25-1.25h-2.5c-.69 0-1.25.56-1.25 1.25v.325C8.327 4.025 9.16 4 10 4zM8.58 7.72a.75.75 0 00-1.5.06l.3 7.5a.75.75 0 101.5-.06l-.3-7.5zm4.34.06a.75.75 0 10-1.5-.06l-.3 7.5a.75.75 0 101.5.06l.3-7.5z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <JiraSourceDialog
+        open={dialogOpen}
+        projectId={projectId}
+        source={editingSource}
+        onClose={() => { setDialogOpen(false); setEditingSource(null); }}
+        onSave={handleSave}
+      />
     </div>
   );
 }
@@ -707,6 +922,9 @@ function ProjectCard({
             </div>
             <InstallHealthDetail project={project} repoSettings={repoSettings} />
           </div>
+
+          {/* Issue Sources */}
+          <IssueSourcesSection projectId={project.id} />
 
           {/* Prompt (conditional) */}
           {project.promptFile && (

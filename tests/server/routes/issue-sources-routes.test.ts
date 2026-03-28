@@ -352,3 +352,88 @@ describe('DELETE /api/projects/:projectId/issue-sources/:sourceId', () => {
     expect(res.statusCode).toBe(404);
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /api/projects/:projectId/issue-sources/test-connection
+// ---------------------------------------------------------------------------
+
+describe('POST /api/projects/:projectId/issue-sources/test-connection', () => {
+  it('should return 404 when project does not exist', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/999999/issue-sources/test-connection',
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        jiraUrl: 'https://example.atlassian.net',
+        projectKey: 'PROJ',
+        email: 'user@example.com',
+        apiToken: 'token123',
+      }),
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('should return validation error when body is missing', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/issue-sources/test-connection`,
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('should return validation error when jiraUrl is missing', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/issue-sources/test-connection`,
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        projectKey: 'PROJ',
+        email: 'user@example.com',
+        apiToken: 'token123',
+      }),
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('should return ok: false when jiraUrl does not start with https://', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/issue-sources/test-connection`,
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        jiraUrl: 'http://example.atlassian.net',
+        projectKey: 'PROJ',
+        email: 'user@example.com',
+        apiToken: 'token123',
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('https://');
+  });
+
+  it('should return ok: false when connection fails (unreachable host)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/issue-sources/test-connection`,
+      headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({
+        jiraUrl: 'https://this-does-not-exist-fc-test.atlassian.net',
+        projectKey: 'PROJ',
+        email: 'user@example.com',
+        apiToken: 'token123',
+      }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.ok).toBe(false);
+    // Should have some error message about connection failure
+    expect(body.error).toBeTruthy();
+  });
+});

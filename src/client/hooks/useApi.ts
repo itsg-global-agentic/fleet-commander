@@ -4,6 +4,7 @@ interface ApiClient {
   get<T>(path: string): Promise<T>;
   post<T>(path: string, body?: unknown): Promise<T>;
   put<T>(path: string, body?: unknown): Promise<T>;
+  patch<T>(path: string, body?: unknown): Promise<T>;
   del<T>(path: string): Promise<T>;
 }
 
@@ -52,7 +53,8 @@ export function useApi(): ApiClient {
   const get = useCallback(<T,>(path: string) => request<T>('GET', path), []);
   const post = useCallback(<T,>(path: string, body?: unknown) => request<T>('POST', path, body), []);
   const put = useCallback(<T,>(path: string, body?: unknown) => request<T>('PUT', path, body), []);
+  const patch = useCallback(<T,>(path: string, body?: unknown) => request<T>('PATCH', path, body), []);
   const del = useCallback(<T,>(path: string) => request<T>('DELETE', path), []);
 
-  return useMemo(() => ({ get, post, put, del }), [get, post, put, del]);
+  return useMemo(() => ({ get, post, put, patch, del }), [get, post, put, patch, del]);
 }
