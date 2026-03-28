@@ -22,6 +22,13 @@ import type {
   NormalizedStatus,
 } from '../../shared/issue-provider.js';
 import type { DependencyRef } from '../../shared/types.js';
+import type {
+  IssueContextData,
+  IssueContextComment,
+  IssueContextChild,
+  IssueContextDependency,
+  IssueContextPR,
+} from '../../shared/issue-context.js';
 
 /** Promisified exec for async child_process calls */
 const execAsync = promisify(exec);
@@ -200,6 +207,144 @@ query($owner: String!, $repo: String!, $issueNumber: Int!) {
   }
 }
 `;
+
+// ---------------------------------------------------------------------------
+// Issue context queries -- single issue with full metadata for context file
+// ---------------------------------------------------------------------------
+// Fetches all fields needed for the issue context file in a single round-trip:
+// metadata, body, comments, labels, assignees, milestone, parent, sub-issues,
+// dependencies, and linked PRs.
+//
+// Two variants: WITH_DEPS includes blockedBy/blocking/subIssues fields;
+// BASIC omits them for environments where those fields are not available.
+// ---------------------------------------------------------------------------
+
+export const ISSUE_CONTEXT_QUERY_WITH_DEPS = `
+query($owner: String!, $repo: String!, $issueNumber: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $issueNumber) {
+      number
+      title
+      state
+      body
+      createdAt
+      updatedAt
+      author { login }
+      labels(first: 20) { nodes { name } }
+      assignees(first: 10) { nodes { login } }
+      milestone { title }
+      comments(last: 100) {
+        totalCount
+        nodes {
+          author { login }
+          createdAt
+          body
+          isMinimized
+        }
+      }
+      parent { number title }
+      subIssues(first: 50) { nodes { number title state } }
+      blockedBy(first: 20) {
+        nodes { number title state repository { owner { login } name } }
+      }
+      blocking(first: 20) {
+        nodes { number title state repository { owner { login } name } }
+      }
+      closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
+        nodes { number state url }
+      }
+    }
+  }
+}
+`;
+
+export const ISSUE_CONTEXT_QUERY_BASIC = `
+query($owner: String!, $repo: String!, $issueNumber: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $issueNumber) {
+      number
+      title
+      state
+      body
+      createdAt
+      updatedAt
+      author { login }
+      labels(first: 20) { nodes { name } }
+      assignees(first: 10) { nodes { login } }
+      milestone { title }
+      comments(last: 100) {
+        totalCount
+        nodes {
+          author { login }
+          createdAt
+          body
+          isMinimized
+        }
+      }
+      parent { number title }
+      closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
+        nodes { number state url }
+      }
+    }
+  }
+}
+`;
+
+// ---------------------------------------------------------------------------
+// Issue context GraphQL response type
+// ---------------------------------------------------------------------------
+
+export interface IssueContextGraphQLNode {
+  number: number;
+  title: string;
+  state: string;
+  body: string | null;
+  createdAt: string;
+  updatedAt: string;
+  author: { login: string } | null;
+  labels?: { nodes?: Array<{ name: string }> };
+  assignees?: { nodes?: Array<{ login: string }> };
+  milestone?: { title: string } | null;
+  comments?: {
+    totalCount: number;
+    nodes?: Array<{
+      author: { login: string } | null;
+      createdAt: string;
+      body: string;
+      isMinimized: boolean;
+    }>;
+  };
+  parent?: { number: number; title: string } | null;
+  subIssues?: { nodes?: Array<{ number: number; title: string; state: string }> };
+  blockedBy?: {
+    nodes?: Array<{
+      number: number;
+      title: string;
+      state: string;
+      repository: { owner: { login: string }; name: string };
+    }>;
+  };
+  blocking?: {
+    nodes?: Array<{
+      number: number;
+      title: string;
+      state: string;
+      repository: { owner: { login: string }; name: string };
+    }>;
+  };
+  closedByPullRequestsReferences?: {
+    nodes?: Array<{ number: number; state: string; url?: string }>;
+  };
+}
+
+interface IssueContextGraphQLResponse {
+  data?: {
+    repository?: {
+      issue?: IssueContextGraphQLNode;
+    };
+  };
+  errors?: Array<{ message: string }>;
+}
 
 // ---------------------------------------------------------------------------
 // Exported utility: parse dependency patterns from issue body text
@@ -481,6 +626,51 @@ export class GitHubIssueProvider implements IssueProvider {
     }
 
     return null;
+  }
+
+  /**
+   * Fetch full issue context data for generating a context file.
+   *
+   * Uses a dedicated GraphQL query that fetches all fields in a single round-trip:
+   * metadata, body, comments, labels, assignees, milestone, parent, sub-issues,
+   * dependencies, and linked PRs.
+   *
+   * Bot comments (author login ending with `[bot]` or equal to `github-actions`)
+   * and minimized comments are filtered out. Only the 10 most recent non-bot
+   * comments are included.
+   *
+   * Returns IssueContextData on success, or null on failure.
+   */
+  async fetchFullIssueContext(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<IssueContextData | null> {
+    const query = this.blockedBySupported
+      ? ISSUE_CONTEXT_QUERY_WITH_DEPS
+      : ISSUE_CONTEXT_QUERY_BASIC;
+
+    let result = await this.runIssueContextQuery(query, owner, repo, issueNumber);
+
+    // If the full query failed and blockedBy was enabled, downgrade and retry
+    if (result === null && this.blockedBySupported) {
+      this.blockedBySupported = false;
+      this.blockedByRetryCountdown = 5;
+      console.warn(
+        '[GitHubIssueProvider] blockedBySupported changed: true -> false ' +
+        '(issue context query field error; will retry after 5 poll cycles)'
+      );
+      result = await this.runIssueContextQuery(
+        ISSUE_CONTEXT_QUERY_BASIC,
+        owner,
+        repo,
+        issueNumber,
+      );
+    }
+
+    if (!result) return null;
+
+    return this.mapContextNodeToData(result, owner, repo);
   }
 
   /**
@@ -841,5 +1031,160 @@ export class GitHubIssueProvider implements IssueProvider {
       console.error(`[GitHubIssueProvider] Single-issue deps query failed: ${message}`);
       return null;
     }
+  }
+
+  /**
+   * Run the issue context GraphQL query and return the parsed issue node.
+   * Returns null on error (gh CLI failure, missing data, or GraphQL field errors).
+   */
+  private async runIssueContextQuery(
+    query: string,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<IssueContextGraphQLNode | null> {
+    try {
+      const compactQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+      const requestBody = JSON.stringify({
+        query: compactQuery,
+        variables: { owner, repo, issueNumber },
+      });
+
+      const stdout = await this.runGHGraphQL(requestBody, 30_000);
+      const parsed = JSON.parse(stdout) as IssueContextGraphQLResponse;
+
+      if (parsed.errors?.length) {
+        const hasFieldError = parsed.errors.some(
+          (e) => /field\b.*\bdoesn't exist/i.test(e.message) ||
+                 /field\b.*\bblockedBy\b.*\bdoesn't exist/i.test(e.message) ||
+                 /field\b.*\bblocking\b.*\bdoesn't exist/i.test(e.message) ||
+                 /field\b.*\bsubIssues\b.*\bdoesn't exist/i.test(e.message)
+        );
+        if (hasFieldError) {
+          console.error(
+            `[GitHubIssueProvider] Issue context GraphQL field errors: ${parsed.errors.map((e) => e.message).join('; ')}`
+          );
+          return null;
+        }
+        // Non-field errors: log but still use data
+        console.warn(
+          `[GitHubIssueProvider] Issue context GraphQL non-field errors (data still used): ${parsed.errors.map((e) => e.message).join('; ')}`
+        );
+      }
+
+      return parsed.data?.repository?.issue ?? null;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[GitHubIssueProvider] Issue context query failed: ${message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Map a GraphQL issue context node to an IssueContextData object.
+   * Filters out bot and minimized comments, selects 10 most recent.
+   */
+  private mapContextNodeToData(
+    node: IssueContextGraphQLNode,
+    owner: string,
+    repo: string,
+  ): IssueContextData {
+    // Labels
+    const labels = (node.labels?.nodes ?? []).map((l) => l.name);
+
+    // Assignees
+    const assignees = (node.assignees?.nodes ?? []).map((a) => a.login);
+
+    // Milestone
+    const milestone = node.milestone?.title ?? null;
+
+    // Parent
+    const parent = node.parent
+      ? { number: node.parent.number, title: node.parent.title }
+      : null;
+
+    // Children (sub-issues)
+    const children: IssueContextChild[] = (node.subIssues?.nodes ?? []).map(
+      (c) => ({ number: c.number, title: c.title, state: c.state }),
+    );
+
+    // Dependencies
+    const blockedBy: IssueContextDependency[] = (node.blockedBy?.nodes ?? []).map(
+      (d) => ({
+        number: d.number,
+        title: d.title,
+        state: d.state,
+        url: `https://github.com/${d.repository.owner.login}/${d.repository.name}/issues/${d.number}`,
+      }),
+    );
+
+    const blocking: IssueContextDependency[] = (node.blocking?.nodes ?? []).map(
+      (d) => ({
+        number: d.number,
+        title: d.title,
+        state: d.state,
+        url: `https://github.com/${d.repository.owner.login}/${d.repository.name}/issues/${d.number}`,
+      }),
+    );
+
+    // Linked PRs
+    const linkedPRs: IssueContextPR[] = (
+      node.closedByPullRequestsReferences?.nodes ?? []
+    ).map((pr) => ({
+      number: pr.number,
+      state: pr.state,
+      url: pr.url,
+    }));
+
+    // Comments: filter bots and minimized, take 10 most recent
+    const totalComments = node.comments?.totalCount ?? 0;
+    const rawComments = node.comments?.nodes ?? [];
+
+    const filteredComments = rawComments.filter((c) => {
+      // Filter minimized comments
+      if (c.isMinimized) return false;
+      // Filter bot accounts
+      const login = c.author?.login ?? '';
+      if (login.endsWith('[bot]')) return false;
+      if (login === 'github-actions') return false;
+      return true;
+    });
+
+    // Take the 10 most recent (they come in chronological order from `last: 100`)
+    const selectedComments: IssueContextComment[] = filteredComments
+      .slice(-10)
+      .map((c) => ({
+        author: c.author?.login ?? 'unknown',
+        date: c.createdAt,
+        body: c.body,
+      }));
+
+    const commentsTruncated = filteredComments.length > 10;
+
+    return {
+      number: node.number,
+      title: node.title,
+      state: node.state,
+      repo: `${owner}/${repo}`,
+      author: node.author?.login ?? 'unknown',
+      createdAt: node.createdAt,
+      updatedAt: node.updatedAt,
+      labels,
+      assignees,
+      milestone,
+      parent,
+      children,
+      blockedBy,
+      blocking,
+      linkedPRs,
+      body: node.body ?? '',
+      comments: selectedComments,
+      truncation: {
+        bodyTruncated: false,
+        commentsTruncated,
+        totalComments,
+        includedComments: selectedComments.length,
+      },
+    };
   }
 }
