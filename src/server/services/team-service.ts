@@ -34,8 +34,9 @@ function summarize(e: Record<string, unknown>): string {
 
 /**
  * Check whether an issue has unresolved dependencies.
- * Returns the dependency info, or null if dependencies cannot be determined
- * (which is treated as "no blockers" -- permissive fallback).
+ * Returns the dependency info, or null if dependencies cannot be determined.
+ * A null return means "status unknown" -- callers should treat this
+ * conservatively (queue the issue rather than launching it).
  */
 async function checkDependencies(projectId: number, issueNumber: number): Promise<IssueDependencyInfo | null> {
   try {
@@ -99,7 +100,24 @@ export class TeamService {
     // Dependency check -- block launch if unresolved dependencies exist
     if (!force && issueNumber > 0) {
       const depInfo = await checkDependencies(projectId, issueNumber);
-      if (depInfo && !depInfo.resolved) {
+
+      // null means dependency status is unknown -- treat conservatively
+      if (depInfo === null) {
+        if (queue) {
+          const manager = getTeamManager();
+          return await manager.queueTeamWithBlockers(
+            projectId, issueNumber, [], issueTitle, headless, prompt, issueKey,
+          );
+        }
+        const displayKey = issueKey ?? `#${issueNumber}`;
+        throw new ServiceError(
+          `Dependency check failed for issue ${displayKey} — cannot confirm dependencies are resolved`,
+          'DEPENDENCY_CHECK_FAILED',
+          503,
+        );
+      }
+
+      if (!depInfo.resolved) {
         const blockerNumbers = depInfo.blockedBy
           .filter((b) => b.state === 'open')
           .map((b) => b.number);
@@ -142,23 +160,28 @@ export class TeamService {
   async launchBatch(params: {
     projectId: number;
     issues: Array<{ number: number; title?: string; issueKey?: string }>;
+    blockedIssues?: Array<{ number: number; title?: string; issueKey?: string; blockedBy?: number[] }>;
     prompt?: string;
     delayMs?: number;
     headless?: boolean;
   }): Promise<{ launched: unknown[]; queued?: Array<{ issueNumber: number; team: unknown; blockedBy: number[] }> }> {
-    const { projectId, issues, prompt, delayMs, headless } = params;
+    const { projectId, issues, blockedIssues, prompt, delayMs, headless } = params;
 
     if (!projectId || typeof projectId !== 'number' || projectId < 1) {
       throw validationError('projectId is required and must be a positive integer');
     }
 
-    if (!issues || !Array.isArray(issues) || issues.length === 0) {
-      throw validationError('issues array is required and must not be empty');
+    const hasIssues = issues && Array.isArray(issues) && issues.length > 0;
+    const hasBlockedIssues = blockedIssues && Array.isArray(blockedIssues) && blockedIssues.length > 0;
+    if (!hasIssues && !hasBlockedIssues) {
+      throw validationError('issues array is required and must not be empty (unless blockedIssues is provided)');
     }
 
-    for (const issue of issues) {
-      if (!issue.number || typeof issue.number !== 'number' || issue.number < 1) {
-        throw validationError(`Invalid issue number: ${JSON.stringify(issue)}`);
+    if (hasIssues) {
+      for (const issue of issues) {
+        if (!issue.number || typeof issue.number !== 'number' || issue.number < 1) {
+          throw validationError(`Invalid issue number: ${JSON.stringify(issue)}`);
+        }
       }
     }
 
@@ -175,15 +198,19 @@ export class TeamService {
     const launchable: Array<{ number: number; title?: string; issueKey?: string }> = [];
     const queueable: Array<{ issue: { number: number; title?: string; issueKey?: string }; blockerNumbers: number[] }> = [];
 
-    for (const issue of issues) {
+    for (const issue of (issues ?? [])) {
       const depInfo = await checkDependencies(projectId, issue.number);
-      if (depInfo && !depInfo.resolved) {
+
+      // null means dependency status is unknown -- queue conservatively
+      if (depInfo === null) {
+        queueable.push({ issue, blockerNumbers: [] });
+      } else if (!depInfo.resolved) {
         const openBlockerNumbers = depInfo.blockedBy
           .filter((b) => b.state === 'open')
           .map((b) => b.number);
 
-        // Permissive fallback: if we have unresolved deps but no valid open
-        // blocker numbers, treat as launchable rather than blocking forever
+        // If we have unresolved deps but no valid open blocker numbers,
+        // treat as launchable rather than blocking forever
         if (openBlockerNumbers.length === 0) {
           launchable.push(issue);
         } else {
@@ -191,6 +218,17 @@ export class TeamService {
         }
       } else {
         launchable.push(issue);
+      }
+    }
+
+    // Process client-provided blocked issues -- queue directly without
+    // re-checking dependencies (client already classified them as blocked)
+    if (blockedIssues && blockedIssues.length > 0) {
+      for (const bi of blockedIssues) {
+        queueable.push({
+          issue: { number: bi.number, title: bi.title, issueKey: bi.issueKey },
+          blockerNumbers: bi.blockedBy ?? [],
+        });
       }
     }
 

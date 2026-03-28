@@ -863,11 +863,21 @@ function RunAllConfirmDialog({ issues, skippedActive, blockedIssues, projectId, 
     try {
       await api.post('teams/launch-batch', {
         projectId,
-        issues: [...issues, ...blockedIssues].map((n) => ({
+        issues: issues.map((n) => ({
           number: n.number,
           title: n.title,
           issueKey: n.issueKey,
         })),
+        blockedIssues: blockedIssues.length > 0
+          ? blockedIssues.map((n) => ({
+              number: n.number,
+              title: n.title,
+              issueKey: n.issueKey,
+              blockedBy: n.dependencies?.blockedBy
+                ?.filter((b) => b.state === 'open')
+                .map((b) => b.number) ?? [],
+            }))
+          : undefined,
       });
       onClose();
       // Give the server a moment to process, then refresh

@@ -542,6 +542,7 @@ describe('IssueTreeView', () => {
           { number: 10, title: 'Fix login' },
           { number: 20, title: 'Add feature' },
         ],
+        blockedIssues: undefined,
       });
     });
   });
@@ -581,7 +582,9 @@ describe('IssueTreeView', () => {
         projectId: 1,
         issues: [
           { number: 10, title: 'Launchable' },
-          { number: 30, title: 'Blocked' },
+        ],
+        blockedIssues: [
+          { number: 30, title: 'Blocked', blockedBy: [5] },
         ],
       });
     });

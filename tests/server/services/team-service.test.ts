@@ -230,10 +230,58 @@ describe('TeamService.launchTeam', () => {
   });
 
   it('should delegate to manager.launch on success', async () => {
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 42, blockedBy: [], resolved: true, openCount: 0,
+    });
     const result = await service.launchTeam({ projectId: 1, issueNumber: 42 });
 
     expect(result).toEqual({ id: 99, status: 'launching' });
     expect(mockLaunch).toHaveBeenCalledWith(1, 42, undefined, undefined, undefined, undefined, undefined);
+  });
+
+  it('should throw DEPENDENCY_CHECK_FAILED when dep check returns null without queue', async () => {
+    mockFetchDependenciesForIssue.mockResolvedValue(null);
+
+    try {
+      await service.launchTeam({ projectId: 1, issueNumber: 42 });
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('DEPENDENCY_CHECK_FAILED');
+      expect((err as ServiceError).statusCode).toBe(503);
+    }
+  });
+
+  it('should queue team when dep check returns null with queue=true', async () => {
+    mockFetchDependenciesForIssue.mockResolvedValue(null);
+    mockQueueTeamWithBlockers.mockResolvedValue({ id: 1, status: 'queued' });
+
+    const result = await service.launchTeam({
+      projectId: 1,
+      issueNumber: 42,
+      queue: true,
+    });
+
+    expect(result).toEqual({ id: 1, status: 'queued' });
+    expect(mockQueueTeamWithBlockers).toHaveBeenCalledWith(
+      1, 42, [], undefined, undefined, undefined, undefined,
+    );
+    expect(mockLaunch).not.toHaveBeenCalled();
+  });
+
+  it('should bypass dep check and launch when force=true even if deps would fail', async () => {
+    mockFetchDependenciesForIssue.mockResolvedValue(null);
+
+    const result = await service.launchTeam({
+      projectId: 1,
+      issueNumber: 42,
+      force: true,
+    });
+
+    expect(result).toEqual({ id: 99, status: 'launching' });
+    expect(mockLaunch).toHaveBeenCalled();
+    // fetchDependenciesForIssue should NOT have been called (force skips dep check)
+    expect(mockFetchDependenciesForIssue).not.toHaveBeenCalled();
   });
 });
 
@@ -287,8 +335,13 @@ describe('TeamService.launchBatch', () => {
     }
   });
 
-  it('should launch all issues when none have dependencies', async () => {
-    mockFetchDependenciesForIssue.mockResolvedValue(null);
+  it('should launch all issues when dependencies are confirmed resolved', async () => {
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 0,
+      blockedBy: [],
+      resolved: true,
+      openCount: 0,
+    });
     mockLaunchBatch.mockResolvedValue([
       { id: 10, status: 'launching' },
       { id: 11, status: 'launching' },
@@ -309,10 +362,28 @@ describe('TeamService.launchBatch', () => {
     expect(mockQueueTeamWithBlockers).not.toHaveBeenCalled();
   });
 
+  it('should queue issues when dependency check returns null (unknown status)', async () => {
+    mockFetchDependenciesForIssue.mockResolvedValue(null);
+    mockQueueTeamWithBlockers.mockResolvedValue({ id: 1, status: 'queued' });
+
+    const result = await service.launchBatch({
+      projectId: 1,
+      issues: [{ number: 10 }, { number: 11 }],
+    });
+
+    // All issues should be queued, none launched
+    expect(result.launched).toHaveLength(0);
+    expect(result.queued).toBeDefined();
+    expect(result.queued).toHaveLength(2);
+    expect(result.queued![0].blockedBy).toEqual([]);
+    expect(result.queued![1].blockedBy).toEqual([]);
+    expect(mockLaunchBatch).not.toHaveBeenCalled();
+  });
+
   it('should queue issues with unresolved external dependencies', async () => {
-    // Issue #10 has no deps; issue #11 is blocked by external issue #5
+    // Issue #10 has no deps (confirmed resolved); issue #11 is blocked by external issue #5
     mockFetchDependenciesForIssue.mockImplementation(async (_pid: number, issueNumber: number) => {
-      if (issueNumber === 10) return null;
+      if (issueNumber === 10) return { issueNumber: 10, blockedBy: [], resolved: true, openCount: 0 };
       if (issueNumber === 11) {
         return {
           issueNumber: 11,
@@ -321,7 +392,7 @@ describe('TeamService.launchBatch', () => {
           openCount: 1,
         };
       }
-      return null;
+      return { issueNumber, blockedBy: [], resolved: true, openCount: 0 };
     });
     mockLaunchBatch.mockResolvedValue([{ id: 10, status: 'launching' }]);
     mockQueueTeamWithBlockers.mockResolvedValue({ id: 11, status: 'queued' });
@@ -351,9 +422,9 @@ describe('TeamService.launchBatch', () => {
   });
 
   it('should queue issues with intra-batch dependencies instead of launching them', async () => {
-    // Issue #10 has no deps; issue #11 is blocked by #10 (both in the batch)
+    // Issue #10 has no deps (confirmed resolved); issue #11 is blocked by #10 (both in the batch)
     mockFetchDependenciesForIssue.mockImplementation(async (_pid: number, issueNumber: number) => {
-      if (issueNumber === 10) return null;
+      if (issueNumber === 10) return { issueNumber: 10, blockedBy: [], resolved: true, openCount: 0 };
       if (issueNumber === 11) {
         return {
           issueNumber: 11,
@@ -362,7 +433,7 @@ describe('TeamService.launchBatch', () => {
           openCount: 1,
         };
       }
-      return null;
+      return { issueNumber, blockedBy: [], resolved: true, openCount: 0 };
     });
     mockLaunchBatch.mockResolvedValue([{ id: 10, status: 'launching' }]);
     mockQueueTeamWithBlockers.mockResolvedValue({ id: 11, status: 'queued' });
@@ -392,7 +463,7 @@ describe('TeamService.launchBatch', () => {
   it('should return queued teams in the response with correct structure', async () => {
     // All 3 issues blocked: #577 by #576, #578 by #577, #579 by #578
     mockFetchDependenciesForIssue.mockImplementation(async (_pid: number, issueNumber: number) => {
-      if (issueNumber === 576) return null;
+      if (issueNumber === 576) return { issueNumber: 576, blockedBy: [], resolved: true, openCount: 0 };
       const blockerMap: Record<number, number> = { 577: 576, 578: 577, 579: 578 };
       const blocker = blockerMap[issueNumber];
       if (blocker) {
@@ -403,7 +474,7 @@ describe('TeamService.launchBatch', () => {
           openCount: 1,
         };
       }
-      return null;
+      return { issueNumber, blockedBy: [], resolved: true, openCount: 0 };
     });
     mockLaunchBatch.mockResolvedValue([{ id: 576, status: 'launching' }]);
 
@@ -451,7 +522,7 @@ describe('TeamService.launchBatch', () => {
 
   it('should track blocked issues in github poller', async () => {
     mockFetchDependenciesForIssue.mockImplementation(async (_pid: number, issueNumber: number) => {
-      if (issueNumber === 10) return null;
+      if (issueNumber === 10) return { issueNumber: 10, blockedBy: [], resolved: true, openCount: 0 };
       if (issueNumber === 11) {
         return {
           issueNumber: 11,
@@ -463,7 +534,7 @@ describe('TeamService.launchBatch', () => {
           openCount: 1,
         };
       }
-      return null;
+      return { issueNumber, blockedBy: [], resolved: true, openCount: 0 };
     });
     mockLaunchBatch.mockResolvedValue([{ id: 10, status: 'launching' }]);
     mockQueueTeamWithBlockers.mockResolvedValue({ id: 11, status: 'queued' });
@@ -482,7 +553,7 @@ describe('TeamService.launchBatch', () => {
   it('should continue batch when queueTeamWithBlockers throws for one issue', async () => {
     // Issues #11 and #12 are both blocked; #11 throws on queue, #12 succeeds
     mockFetchDependenciesForIssue.mockImplementation(async (_pid: number, issueNumber: number) => {
-      if (issueNumber === 10) return null;
+      if (issueNumber === 10) return { issueNumber: 10, blockedBy: [], resolved: true, openCount: 0 };
       return {
         issueNumber,
         blockedBy: [{ number: 5, owner: 'o', repo: 'r', state: 'open', title: 'Ext' }],
@@ -526,6 +597,66 @@ describe('TeamService.launchBatch', () => {
     expect(result.launched).toHaveLength(1);
     expect(result.queued).toBeUndefined();
     expect(mockQueueTeamWithBlockers).not.toHaveBeenCalled();
+  });
+
+  it('should queue blockedIssues directly without re-checking dependencies', async () => {
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 10, blockedBy: [], resolved: true, openCount: 0,
+    });
+    mockLaunchBatch.mockResolvedValue([{ id: 10, status: 'launching' }]);
+    mockQueueTeamWithBlockers.mockResolvedValue({ id: 30, status: 'queued' });
+
+    const result = await service.launchBatch({
+      projectId: 1,
+      issues: [{ number: 10 }],
+      blockedIssues: [
+        { number: 30, title: 'Blocked Issue', blockedBy: [5, 6] },
+      ],
+    });
+
+    // Issue #10 should be launched, issue #30 should be queued
+    expect(result.launched).toHaveLength(1);
+    expect(result.queued).toBeDefined();
+    expect(result.queued).toHaveLength(1);
+    expect(result.queued![0].issueNumber).toBe(30);
+    expect(result.queued![0].blockedBy).toEqual([5, 6]);
+
+    // fetchDependenciesForIssue should only be called for issue #10, not #30
+    expect(mockFetchDependenciesForIssue).toHaveBeenCalledTimes(1);
+    expect(mockFetchDependenciesForIssue).toHaveBeenCalledWith(1, 10);
+  });
+
+  it('should accept blockedIssues with empty issues array', async () => {
+    mockQueueTeamWithBlockers.mockResolvedValue({ id: 30, status: 'queued' });
+
+    const result = await service.launchBatch({
+      projectId: 1,
+      issues: [],
+      blockedIssues: [
+        { number: 30, title: 'Blocked Issue', blockedBy: [5] },
+      ],
+    });
+
+    expect(result.launched).toHaveLength(0);
+    expect(result.queued).toBeDefined();
+    expect(result.queued).toHaveLength(1);
+    expect(result.queued![0].issueNumber).toBe(30);
+  });
+
+  it('should handle blockedIssues with empty blockedBy array', async () => {
+    mockQueueTeamWithBlockers.mockResolvedValue({ id: 30, status: 'queued' });
+
+    const result = await service.launchBatch({
+      projectId: 1,
+      issues: [],
+      blockedIssues: [
+        { number: 30, title: 'Unknown deps' },
+      ],
+    });
+
+    expect(result.queued).toBeDefined();
+    expect(result.queued).toHaveLength(1);
+    expect(result.queued![0].blockedBy).toEqual([]);
   });
 });
 

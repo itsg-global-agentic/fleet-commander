@@ -614,13 +614,13 @@ export class GitHubIssueProvider implements IssueProvider {
       return result;
     }
 
-    // If the full query failed and blockedBy was enabled, downgrade and retry
+    // If the full query failed and blockedBy was enabled, retry with basic
+    // query locally but do NOT persist the flag change -- only batch queries
+    // should toggle blockedBySupported to avoid cascading downgrades.
     if (this.blockedBySupported) {
-      this.blockedBySupported = false;
-      this.blockedByRetryCountdown = 5;
       console.warn(
-        '[GitHubIssueProvider] blockedBySupported changed: true -> false ' +
-        '(single-issue deps query field error; will retry after 5 poll cycles)'
+        '[GitHubIssueProvider] Single-issue deps query failed with full query; ' +
+        'retrying with basic query (blockedBySupported flag NOT changed)'
       );
       return this.runSingleIssueDepsQuery(SINGLE_ISSUE_DEPS_QUERY_BASIC, owner, repo, issueNumber);
     }
@@ -652,13 +652,13 @@ export class GitHubIssueProvider implements IssueProvider {
 
     let result = await this.runIssueContextQuery(query, owner, repo, issueNumber);
 
-    // If the full query failed and blockedBy was enabled, downgrade and retry
+    // If the full query failed and blockedBy was enabled, retry with basic
+    // query locally but do NOT persist the flag change -- only batch queries
+    // should toggle blockedBySupported to avoid cascading downgrades.
     if (result === null && this.blockedBySupported) {
-      this.blockedBySupported = false;
-      this.blockedByRetryCountdown = 5;
       console.warn(
-        '[GitHubIssueProvider] blockedBySupported changed: true -> false ' +
-        '(issue context query field error; will retry after 5 poll cycles)'
+        '[GitHubIssueProvider] Issue context query failed with full query; ' +
+        'retrying with basic query (blockedBySupported flag NOT changed)'
       );
       result = await this.runIssueContextQuery(
         ISSUE_CONTEXT_QUERY_BASIC,

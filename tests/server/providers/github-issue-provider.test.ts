@@ -313,4 +313,42 @@ describe('GitHubIssueProvider', () => {
     provider.resetBlockedBySupport();
     expect(provider.isBlockedBySupported).toBe(true);
   });
+
+  it('should NOT change blockedBySupported when fetchSingleIssueDeps fails', async () => {
+    // Ensure blockedBySupported starts as true
+    provider.resetBlockedBySupport();
+    expect(provider.isBlockedBySupported).toBe(true);
+
+    // Mock the private runSingleIssueDepsQuery to return null (simulating failure)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const spy = vi.spyOn(provider as any, 'runSingleIssueDepsQuery').mockResolvedValue(null);
+
+    const result = await provider.fetchSingleIssueDeps('owner', 'repo', 42);
+
+    // The result should be null (both full and basic queries failed)
+    expect(result).toBeNull();
+    // Crucially, the flag must NOT have been flipped to false
+    expect(provider.isBlockedBySupported).toBe(true);
+
+    spy.mockRestore();
+  });
+
+  it('should NOT change blockedBySupported when fetchFullIssueContext fails', async () => {
+    // Ensure blockedBySupported starts as true
+    provider.resetBlockedBySupport();
+    expect(provider.isBlockedBySupported).toBe(true);
+
+    // Mock the private runIssueContextQuery to return null (simulating failure)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const spy = vi.spyOn(provider as any, 'runIssueContextQuery').mockResolvedValue(null);
+
+    const result = await provider.fetchFullIssueContext('owner', 'repo', 42);
+
+    // The result should be null (both full and basic queries failed)
+    expect(result).toBeNull();
+    // Crucially, the flag must NOT have been flipped to false
+    expect(provider.isBlockedBySupported).toBe(true);
+
+    spy.mockRestore();
+  });
 });

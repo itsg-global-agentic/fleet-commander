@@ -1001,18 +1001,18 @@ export class IssueFetcher {
       const project = projects.find((p) => p.githubRepo === `${owner}/${repo}`);
       if (!project) {
         console.error(`[IssueFetcher] No project found for ${owner}/${repo}`);
-        return this.buildEmptyDependencyInfo(issueNumber);
+        return null;
       }
 
       const provider = getIssueProvider(project);
       if (!(provider instanceof GitHubIssueProvider)) {
         console.error(`[IssueFetcher] Provider for ${owner}/${repo} is not a GitHubIssueProvider`);
-        return this.buildEmptyDependencyInfo(issueNumber);
+        return null;
       }
 
       const issue = await provider.fetchSingleIssueDeps(owner, repo, issueNumber);
       if (!issue) {
-        return this.buildEmptyDependencyInfo(issueNumber);
+        return null;
       }
 
       const blockedBy: DependencyRef[] = [];
