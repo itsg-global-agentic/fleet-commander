@@ -387,6 +387,10 @@ Fleet Commander sends these messages directly to the TL via stdin. They arrive a
 | `pr_merged` | PR is merged | "PR #{PR} merged. Close the issue, clean up, and finish." |
 | `nudge_idle` | Team idle 5+ min | "FC status check: You've been idle for {N} minutes. If waiting for subagents, run TaskList to verify they are still active. If a phase just completed, proceed to the next step." |
 | `nudge_stuck` | Team stuck 10+ min | "You appear stuck. Report status or ask for help." |
+| `issue_comment_new` | New non-bot comment on issue | "New comment on issue #{KEY} by @{author}: {body}" |
+| `issue_labels_changed` | Priority/blocking labels change | "Labels changed on issue #{KEY}: {added} added, {removed} removed." |
+| `issue_closed_externally` | Issue closed outside team | "Issue #{KEY} was closed externally. Wrap up and shut down." |
+| `issue_body_updated` | Issue description edited | "The description of issue #{KEY} has been updated. Review latest requirements." |
 
 ### TL Response to FC Messages
 
@@ -401,6 +405,14 @@ Fleet Commander sends these messages directly to the TL via stdin. They arrive a
 **On `nudge_idle`**: Run `TaskList` to verify all subagents are alive. If any agent is missing or crashed, respawn it. Report current status to FC.
 
 **On `nudge_stuck`**: Check which agent is stuck. Send a targeted nudge. If no progress after nudge, escalate to FC by reporting status.
+
+**On `issue_comment_new`**: Review the new comment for any instructions or questions from the issue reporter. If the comment contains new requirements or clarifications, forward relevant details to the dev agent. If it's just acknowledgment, no action needed.
+
+**On `issue_labels_changed`**: Check the label change for priority shifts. If a `blocking` or `urgent` label was added, prioritize accordingly. If `blocked` was added, check what's blocking and report to FC.
+
+**On `issue_closed_externally`**: The issue was closed by someone outside the team. Stop all active work immediately. Commit any pending changes, push to the branch, and shut down all agents gracefully.
+
+**On `issue_body_updated`**: Re-read the issue description for updated requirements. If the changes affect current implementation, forward the updated requirements to dev. If dev has already completed the affected work, assess whether rework is needed.
 
 ---
 

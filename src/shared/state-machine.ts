@@ -342,6 +342,48 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     condition: 'Merge status changes from behind to another state (not dirty)',
     hookEvent: null,
   },
+
+  // ---- Issue update poller transitions ----
+  {
+    id: 'issue_comment_new',
+    from: 'running',
+    to: 'running',
+    trigger: 'poller',
+    triggerLabel: 'New issue comment',
+    description: 'A new non-bot comment was posted on the issue. Forwarded to TL for awareness.',
+    condition: 'New comment detected on issue (bot comments filtered)',
+    hookEvent: null,
+  },
+  {
+    id: 'issue_labels_changed',
+    from: 'running',
+    to: 'running',
+    trigger: 'poller',
+    triggerLabel: 'Issue labels changed',
+    description: 'Priority or blocking labels changed on the issue.',
+    condition: 'Priority/blocking label added or removed',
+    hookEvent: null,
+  },
+  {
+    id: 'issue_closed_externally',
+    from: '*',
+    to: 'done',
+    trigger: 'poller',
+    triggerLabel: 'Issue closed externally',
+    description: 'The issue was closed outside of the team workflow. Team receives shutdown message and is stopped gracefully.',
+    condition: 'Issue state changed from open to closed',
+    hookEvent: null,
+  },
+  {
+    id: 'issue_body_updated',
+    from: 'running',
+    to: 'running',
+    trigger: 'poller',
+    triggerLabel: 'Issue body updated',
+    description: 'The issue description was edited. TL is notified to review updated requirements.',
+    condition: 'Issue body hash changed',
+    hookEvent: null,
+  },
 ];
 
 // =============================================================================

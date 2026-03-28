@@ -125,4 +125,32 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
     description: 'Sent to TL when PR branch is no longer behind main',
     placeholders: ['PR_NUMBER'],
   },
+  {
+    id: 'issue_comment_new',
+    template:
+      'New comment on issue #{{ISSUE_KEY}} by @{{COMMENT_AUTHOR}}:\n\n{{COMMENT_BODY}}',
+    description: 'Sent to TL when a new non-bot comment is posted on the issue',
+    placeholders: ['ISSUE_KEY', 'COMMENT_AUTHOR', 'COMMENT_BODY'],
+  },
+  {
+    id: 'issue_labels_changed',
+    template:
+      'Labels changed on issue #{{ISSUE_KEY}}: {{LABELS_ADDED}} added, {{LABELS_REMOVED}} removed. Current labels: {{CURRENT_LABELS}}.',
+    description: 'Sent to TL when priority/blocking labels change on the issue',
+    placeholders: ['ISSUE_KEY', 'LABELS_ADDED', 'LABELS_REMOVED', 'CURRENT_LABELS'],
+  },
+  {
+    id: 'issue_closed_externally',
+    template:
+      'Issue #{{ISSUE_KEY}} was closed externally. Wrap up your current work, commit any pending changes, and shut down gracefully.',
+    description: 'Sent to TL when the issue is closed outside of the team workflow',
+    placeholders: ['ISSUE_KEY'],
+  },
+  {
+    id: 'issue_body_updated',
+    template:
+      'The description of issue #{{ISSUE_KEY}} has been updated. Review the latest requirements:\n\n{{BODY_DIFF_SUMMARY}}',
+    description: 'Sent to TL when the issue body/description is edited',
+    placeholders: ['ISSUE_KEY', 'BODY_DIFF_SUMMARY'],
+  },
 ];

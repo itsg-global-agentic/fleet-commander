@@ -22,6 +22,7 @@ import { sseBroker } from './services/sse-broker.js';
 import { getIssueFetcher } from './services/issue-fetcher.js';
 import { stuckDetector } from './services/stuck-detector.js';
 import { githubPoller } from './services/github-poller.js';
+import { issueUpdatePoller } from './services/issue-update-poller.js';
 import { errorHandler } from './middleware/error-handler.js';
 import { getDatabase, closeDatabase } from './db.js';
 import { recoverOnStartup } from './services/startup-recovery.js';
@@ -161,16 +162,18 @@ async function main() {
   issueFetcher.start();
   stuckDetector.start();
   githubPoller.start();
+  issueUpdatePoller.start();
   usagePoller.start();
   dataRetention.start();
   getTeamManager().startPeriodicCleanup();
-  server.log.info('All services started (SSE, issues, stuck detector, GitHub poller, usage poller, data retention, map cleanup)');
+  server.log.info('All services started (SSE, issues, stuck detector, GitHub poller, issue update poller, usage poller, data retention, map cleanup)');
 
   // Graceful shutdown
   server.addHook('onClose', async () => {
     getTeamManager().stopPeriodicCleanup();
     dataRetention.stop();
     usagePoller.stop();
+    issueUpdatePoller.stop();
     githubPoller.stop();
     stuckDetector.stop();
     issueFetcher.stop();

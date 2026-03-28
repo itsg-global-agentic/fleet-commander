@@ -250,6 +250,26 @@ INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
   ('stuck_nudge',
    'Hey, you have been idle for a while on issue #{{ISSUE_NUMBER}}. What is the status? Do you need help?',
    'Nudge sent to TL when team transitions to stuck');
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
+  ('issue_comment_new',
+   'New comment on issue #{{ISSUE_KEY}} by @{{COMMENT_AUTHOR}}:
+
+{{COMMENT_BODY}}',
+   'Sent to TL when a new non-bot comment is posted on the issue');
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
+  ('issue_labels_changed',
+   'Labels changed on issue #{{ISSUE_KEY}}: {{LABELS_ADDED}} added, {{LABELS_REMOVED}} removed. Current labels: {{CURRENT_LABELS}}.',
+   'Sent to TL when priority/blocking labels change on the issue');
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
+  ('issue_closed_externally',
+   'Issue #{{ISSUE_KEY}} was closed externally. Wrap up your current work, commit any pending changes, and shut down gracefully.',
+   'Sent to TL when the issue is closed outside of the team workflow');
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
+  ('issue_body_updated',
+   'The description of issue #{{ISSUE_KEY}} has been updated. Review the latest requirements:
+
+{{BODY_DIFF_SUMMARY}}',
+   'Sent to TL when the issue body/description is edited');
 
 -- ---------------------------------------------------------------------------
 -- TEAM TRANSITIONS — state machine transition history per team
