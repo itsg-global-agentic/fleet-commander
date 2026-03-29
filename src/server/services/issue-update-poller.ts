@@ -97,14 +97,11 @@ class IssueUpdatePoller {
   private snapshots = new Map<number, IssueSnapshot>();
 
   /**
-   * Start the polling loop. First poll fires after 10s delay, then
-   * every `config.issueUpdatePollMs` milliseconds.
+   * Start the polling loop. First poll fires after `config.issueUpdatePollMs`
+   * milliseconds, then repeats at the same interval.
    */
   start(): void {
     if (this.timer) return; // already running
-
-    const initialTimer = setTimeout(() => this.poll(), 10_000);
-    if (initialTimer.unref) initialTimer.unref();
 
     this.scheduleNextPoll();
     console.log(

@@ -577,4 +577,30 @@ describe('IssueUpdatePoller', () => {
     // Should NOT send a message — this is a re-initialization
     expect(mockManager.sendMessage).not.toHaveBeenCalled();
   });
+
+  it('stop() cancels pending poll so no poll fires after stop', async () => {
+    issueUpdatePoller.start();
+    issueUpdatePoller.stop();
+
+    // Advance well past the poll interval — no poll should fire
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(mockDb.getActiveTeams).not.toHaveBeenCalled();
+  });
+
+  it('start() is idempotent — calling twice does not create duplicate timers', async () => {
+    const team = makeTeam({ status: 'running' });
+    const project = makeProject();
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getProjects.mockReturnValue([project]);
+    mockExecGHAsync.mockResolvedValue(makeGHIssueView());
+
+    issueUpdatePoller.start();
+    issueUpdatePoller.start(); // second call should be no-op
+
+    // Advance past one poll interval — only one poll should fire
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(mockExecGHAsync).toHaveBeenCalledTimes(1);
+  });
 });
