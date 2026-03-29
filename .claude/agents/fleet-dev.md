@@ -66,8 +66,9 @@ You are spawned **after the planner's plan is ready**. The TL includes the plan 
    git stash --include-untracked && git fetch origin main && git rebase origin/main && git stash pop && git push -u origin {branch}
    ```
    The `git stash --include-untracked` is required because the CC runtime may leave unstaged changes (e.g., `.claude/settings.json`) that block rebase.
-9. **Report to TL** — send "Ready for review. Branch: `{branch}`" to TL via `SendMessage`
-10. **Stay alive** — remain available for review feedback (see Post-Implementation Availability below)
+9. **Write `changes.md`** to the worktree root (see Changes Report section below). This is MANDATORY before reporting ready.
+10. **Report to TL** — send "Ready for review. Branch: `{branch}`" to TL via `SendMessage`
+11. **Stay alive** — remain available for review feedback (see Post-Implementation Availability below)
 
 After reporting ready for review, simply stop producing output. The Claude Code runtime keeps your session alive automatically. You will receive incoming messages via stdin when the reviewer sends feedback. Do not call any tools or produce any output until a message arrives.
 
@@ -123,6 +124,49 @@ REQUEST: Guidance on how to proceed.
 
 After escalating, wait for the TL's instructions before continuing.
 
+## Changes Report (`changes.md`)
+
+Before reporting "Ready for review" to the TL, you MUST write a `changes.md` file to the worktree root. The TL reads this file and passes its content to the reviewer in their spawn prompt. This gives the reviewer immediate context about what you changed and why — zero discovery tool calls needed.
+
+**Steps to produce `changes.md`:**
+1. Run `git diff --stat` to get the file change summary
+2. Run tests and record results (test command + pass/fail counts)
+3. Run `npx tsc --noEmit` (if applicable) and record result
+4. Write `changes.md` to the worktree root using the format below
+5. THEN send "Ready for review" to TL
+
+**Format:**
+
+```markdown
+# Changes Report
+
+## Summary
+{1-2 sentence summary of what was done}
+
+## Changed Files
+- `src/server/services/foo.ts` — Added bar() method for X
+- `tests/server/foo.test.ts` — 3 new tests for bar()
+
+## Decisions & Deviations
+- {any deviations from plan with justification}
+
+## Test Results
+- `npm test`: 45 passed, 0 failed
+- `npx tsc --noEmit`: clean
+
+## Known Limitations
+- {any TODOs or known issues}
+
+## Diff Stats
+{paste output of `git diff --stat` here}
+```
+
+**Rules:**
+- Do NOT commit `changes.md` — it is a temporary handoff file that the TL reads and deletes.
+- Do NOT skip writing it — if you report "Ready for review" without writing `changes.md`, the reviewer starts blind.
+- Be honest about deviations — if you diverged from the plan, explain why. This prevents the reviewer from flagging justified deviations.
+- Include actual test output — not "tests pass" but the real command and counts.
+
 ## Post-Implementation Availability
 
 After reporting "Ready for review" to the TL, you MUST remain alive and available for review feedback. Do NOT exit after pushing your branch.
@@ -177,4 +221,6 @@ You are running inside a **git worktree**. Critical rules:
 - Do NOT ignore reviewer messages — you MUST reply to every review round directly to the reviewer
 - Do NOT use Write to modify existing files — use Edit (Write is for new files only)
 - Do NOT checkout main — you are in a worktree; use `origin/main` as reference
+- Do NOT report "Ready for review" without writing `changes.md` first
+- Do NOT commit `changes.md` — it is a temporary handoff file
 - On `shutdown_request` -> respond `shutdown_response` with `approve: true`

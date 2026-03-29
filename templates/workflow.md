@@ -64,6 +64,21 @@ All agents use `model: inherit` — they run on the same model as the TL.
 - Once spawned, **agents stay alive** until the team is done. Planner persists as a knowledge resource. Dev persists through review rounds and CI fixes. Reviewer persists through all review rounds. After completing your deliverable, simply stop producing output. The Claude Code runtime keeps your session alive automatically. You will receive incoming messages via stdin when another agent contacts you. Do not call any tools or produce any output until a message arrives.
 - Dev and Reviewer communicate **peer-to-peer** — TL does not relay messages between them.
 
+### Markdown Handoff Pipeline
+
+The Diamond Team uses a file-based handoff pattern. Each agent produces a markdown file, and the TL reads it and passes the content to the next agent in their spawn prompt:
+
+| Phase | Producer | File | Consumer (via TL) |
+|-------|----------|------|--------------------|
+| 0→1 | FC | `.fleet-issue-context.md` | Planner |
+| 1→2 | Planner | `plan.md` | Dev |
+| 2→3 | Dev | `changes.md` | Reviewer |
+| 3→TL | Reviewer | `review.md` | TL |
+
+**TL is the relay** — subagents never read each other's files directly. TL reads each file, deletes it, and includes the content in the next agent's spawn prompt.
+
+**Files are ephemeral** — each handoff file is written by the producer, read by the TL, then deleted. They are listed in `.gitignore` and must never be committed.
+
 ### TYPE to Guidebook Mapping
 
 All implementation work is assigned to the single `fleet-dev` agent. The Planner's TYPE and Guidebooks fields tell the dev which guidebooks to read for domain-specific conventions.
@@ -126,7 +141,7 @@ After spawning the first agent, the TL enters a continuous monitoring loop that 
 3. **Between phases** (e.g., planner done, waiting for dev), actively verify the next agent is alive via `TaskList`. If the agent is gone, respawn it (within the respawn budget).
 4. **After each subagent phase completes, immediately proceed** to the next action:
    - **Planner done** — validate the plan — spawn dev with the plan context
-   - **Dev done** — check dev output for completeness — spawn reviewer with branch context
+   - **Dev done** — read `changes.md`, delete it — spawn reviewer with branch context + changes report
    - **Reviewer done** — immediately proceed to PR creation (rebase, `gh pr create`, auto-merge)
 5. **Never passively wait** — if you have nothing to do, run `TaskList` to confirm all agents are healthy.
 
@@ -210,8 +225,9 @@ If the Planner is unresponsive for >5 minutes or produces an unusable plan:
 1. **TL spawns `fleet-dev`** with the planner's plan included in the task prompt (see Dev Task Format below)
 2. Dev starts implementing immediately — it has the plan, guidebook paths, and all context it needs
 3. Dev implements, tests locally, commits atomically
-4. **Dev sends review request directly to TL** via `SendMessage`: "Ready for review. Branch: `{branch}`"
-5. TL transitions to Phase 3 — spawns reviewer
+4. **Dev writes `changes.md`** to the worktree root (see Changes Report Format below) — summarizing what changed, decisions made, test results, and `git diff --stat` output
+5. **Dev sends review request directly to TL** via `SendMessage`: "Ready for review. Branch: `{branch}`"
+6. TL reads `changes.md`, deletes it, and transitions to Phase 3 — spawns reviewer with the changes report included in the spawn prompt
 
 ### Planner Task Format (sent via TaskCreate at spawn)
 
@@ -274,6 +290,32 @@ INSTRUCTIONS:
 8. Push the branch and report "Ready for review. Branch: {branch}" to TL
 ```
 
+### Changes Report Format (written by dev to `changes.md`)
+
+```markdown
+# Changes Report
+
+## Summary
+{1-2 sentence summary of what was done}
+
+## Changed Files
+- `src/server/services/foo.ts` — Added bar() method for X
+- `tests/server/foo.test.ts` — 3 new tests for bar()
+
+## Decisions & Deviations
+- {any deviations from plan with justification}
+
+## Test Results
+- `npm test`: 45 passed, 0 failed
+- `npx tsc --noEmit`: clean
+
+## Known Limitations
+- {any TODOs or known issues}
+
+## Diff Stats
+{paste output of `git diff --stat` here}
+```
+
 ### Edge Case: Dev Gets Stuck
 
 - FC's stuck detector will nudge TL if the team is idle too long
@@ -285,9 +327,10 @@ INSTRUCTIONS:
 
 ## Phase 3 — Review (Peer-to-Peer)
 
-1. **TL spawns `fleet-reviewer`** with the branch name, issue context, and guidebook paths (see Reviewer Task Format below)
-2. Reviewer starts reviewing immediately — it has all the context it needs
-3. **Dev and reviewer already know each other's names** (set at spawn time). No TL introduction needed.
+1. **TL reads `changes.md`** from the worktree root (written by dev). This contains the dev's change summary, decisions, test results, and diff stats. Delete it after reading (`rm changes.md`).
+2. **TL spawns `fleet-reviewer`** with the branch name, issue context, guidebook paths, and the dev's changes report (see Reviewer Task Format below)
+3. Reviewer starts reviewing immediately — it has all the context it needs, including the dev's own account of what changed and why
+4. **Dev and reviewer already know each other's names** (set at spawn time). No TL introduction needed.
 4. **TL steps back.** The dev-reviewer loop runs peer-to-peer:
    - Reviewer performs two-pass review (code quality + acceptance)
    - **REJECT** → reviewer sends actionable feedback directly to dev → dev fixes and re-requests review from reviewer directly
@@ -307,16 +350,20 @@ BASE: {{BASE_BRANCH}}
 ACCEPTANCE CRITERIA:
 {bulleted list of acceptance criteria from the issue or plan}
 
+CHANGES (from dev's changes.md):
+{paste the full changes report here — summary, changed files, decisions, test results, diff stats}
+
 GUIDEBOOKS (read these to verify compliance):
 {list of guidebook paths from the plan}
 
 INSTRUCTIONS:
 1. Read CLAUDE.md in the project root
 2. Read each guidebook file listed above
-3. Review the changes on the branch against the base branch
-4. Two-pass review: code quality + acceptance criteria from the issue
-5. Send rejection feedback DIRECTLY to dev via SendMessage
-6. Write final verdict to review.md in the worktree root (do NOT use SendMessage for the verdict)
+3. Read the dev's changes report above to understand what changed and why
+4. Verify against the actual `git diff` — the changes report is the dev's account, not a substitute for reviewing the code
+5. Two-pass review: code quality + acceptance criteria from the issue
+6. Send rejection feedback DIRECTLY to dev via SendMessage
+7. Write final verdict to review.md in the worktree root (do NOT use SendMessage for the verdict)
 
 PEERS:
 - Dev agent name: dev
@@ -556,7 +603,9 @@ Atomic commits — each commit should be a logical unit.
 | TL monitors CI manually | FC handles CI monitoring and sends updates via stdin |
 | TL goes idle after spawning agents without monitoring | TL runs active monitoring loop between phases |
 | Planner uses SendMessage to deliver plan | Planner writes plan.md file — TL reads it directly |
+| Dev skips writing changes.md | Dev writes changes.md before reporting ready — TL passes it to reviewer |
 | Reviewer uses SendMessage to deliver verdict | Reviewer writes review.md file — TL reads it directly |
+| Subagents read each other's handoff files | TL is the relay — reads each file, deletes it, pastes content into next spawn prompt |
 
 ## Decision Summary
 
@@ -564,9 +613,9 @@ Atomic commits — each commit should be a logical unit.
 Phase 0: TL → spawn planner only
 Phase 1: Planner analyzes → writes plan.md → TL reads plan.md → planner stays alive for p2p questions
          TL validates plan → spawns dev WITH the plan context
-Phase 2: Dev implements immediately (has plan) → reports "ready for review" to TL
-         TL spawns reviewer WITH branch context
-Phase 3: Reviewer reviews immediately (has branch) → dev + reviewer iterate p2p → reviewer writes review.md → TL reads review.md
+Phase 2: Dev implements immediately (has plan) → writes changes.md → reports "ready for review" to TL
+         TL reads changes.md → spawns reviewer WITH branch context + changes report
+Phase 3: Reviewer reviews immediately (has branch + changes report) → dev + reviewer iterate p2p → reviewer writes review.md → TL reads review.md
 Phase 4: TL → rebase → create PR → set auto-merge → FC monitors CI
 Phase 5: TL → close issue → shutdown agents → finish
 ```
