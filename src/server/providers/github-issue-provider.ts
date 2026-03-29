@@ -488,6 +488,12 @@ export class GitHubIssueProvider implements IssueProvider {
   // When this reaches 0, the next fetchRawIssueHierarchy() call re-enables blockedBySupported.
   private blockedByRetryCountdown = 0;
 
+  /**
+   * Optional callback invoked when `blockedBySupported` changes value.
+   * Set by the provider registry to persist state changes to the database.
+   */
+  onBlockedBySupportedChanged?: (supported: boolean) => void;
+
   // -------------------------------------------------------------------------
   // IssueProvider interface methods
   // -------------------------------------------------------------------------
@@ -828,6 +834,15 @@ export class GitHubIssueProvider implements IssueProvider {
   }
 
   /**
+   * Set the blockedBySupported flag directly (e.g. to inject persisted state
+   * on startup). Resets the retry countdown to 0.
+   */
+  setBlockedBySupported(value: boolean): void {
+    this.blockedBySupported = value;
+    this.blockedByRetryCountdown = 0;
+  }
+
+  /**
    * Decrement the retry countdown and re-enable blockedBy if it reaches 0.
    * Called by IssueFetcher at the start of each poll cycle.
    */
@@ -836,6 +851,7 @@ export class GitHubIssueProvider implements IssueProvider {
       this.blockedByRetryCountdown--;
       if (this.blockedByRetryCountdown === 0) {
         this.blockedBySupported = true;
+        this.onBlockedBySupportedChanged?.(true);
         console.info(
           '[GitHubIssueProvider] blockedBySupported changed: false -> true (retry countdown reached 0)'
         );
@@ -872,6 +888,7 @@ export class GitHubIssueProvider implements IssueProvider {
     if (this.blockedBySupported) {
       this.blockedBySupported = false;
       this.blockedByRetryCountdown = 5;
+      this.onBlockedBySupportedChanged?.(false);
       console.warn(
         '[GitHubIssueProvider] blockedBySupported changed: true -> false ' +
         '(batch query field error; will retry after 5 poll cycles)'

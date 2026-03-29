@@ -334,5 +334,14 @@ CREATE TABLE IF NOT EXISTS team_tasks (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_team_tasks_team_task ON team_tasks(team_id, task_id);
 CREATE INDEX IF NOT EXISTS idx_team_tasks_team ON team_tasks(team_id);
 
+-- ---------------------------------------------------------------------------
+-- PROVIDER STATE — key-value persistence for issue provider runtime state
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS provider_state (
+  key         TEXT PRIMARY KEY,
+  value       TEXT NOT NULL,
+  updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Insert schema version 9 (or upgrade from earlier versions)
 INSERT OR IGNORE INTO schema_version (version) VALUES (13);

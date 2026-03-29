@@ -370,4 +370,86 @@ describe('GitHubIssueProvider', () => {
 
     spy.mockRestore();
   });
+
+  // -----------------------------------------------------------------------
+  // setBlockedBySupported
+  // -----------------------------------------------------------------------
+
+  describe('setBlockedBySupported', () => {
+    it('should set blockedBySupported to false', () => {
+      provider.setBlockedBySupported(false);
+      expect(provider.isBlockedBySupported).toBe(false);
+    });
+
+    it('should set blockedBySupported to true', () => {
+      // Start by setting to false, then back to true
+      provider.setBlockedBySupported(false);
+      provider.setBlockedBySupported(true);
+      expect(provider.isBlockedBySupported).toBe(true);
+    });
+
+    it('should reset retry countdown when setting blockedBySupported', () => {
+      // Simulate a downgrade with countdown
+      (provider as any).blockedBySupported = false;
+      (provider as any).blockedByRetryCountdown = 3;
+
+      // setBlockedBySupported should reset the countdown
+      provider.setBlockedBySupported(false);
+      expect((provider as any).blockedByRetryCountdown).toBe(0);
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // onBlockedBySupportedChanged callback
+  // -----------------------------------------------------------------------
+
+  describe('onBlockedBySupportedChanged callback', () => {
+    it('should invoke callback when executeGraphQL downgrades blockedBySupported', async () => {
+      const callback = vi.fn();
+      provider.onBlockedBySupportedChanged = callback;
+
+      // Mock runGHGraphQL to fail with a field error so executeGraphQL downgrades
+      const ghSpy = vi.spyOn(provider as any, 'runGHGraphQL')
+        .mockResolvedValue(JSON.stringify({
+          data: null,
+          errors: [{ message: "Field 'blockedBy' doesn't exist on type 'Issue'" }],
+        }));
+
+      await (provider as any).executeGraphQL('owner', 'repo', null);
+
+      expect(callback).toHaveBeenCalledWith(false);
+
+      ghSpy.mockRestore();
+    });
+
+    it('should invoke callback when tickRetryCountdown re-enables blockedBySupported', () => {
+      const callback = vi.fn();
+      provider.onBlockedBySupportedChanged = callback;
+
+      // Set up state as if blockedBy was downgraded with 1 tick left
+      (provider as any).blockedBySupported = false;
+      (provider as any).blockedByRetryCountdown = 1;
+
+      provider.tickRetryCountdown();
+
+      expect(callback).toHaveBeenCalledWith(true);
+    });
+
+    it('should not invoke callback when callback is not set', async () => {
+      // Ensure no callback is set
+      provider.onBlockedBySupportedChanged = undefined;
+
+      // This should not throw even without a callback
+      const ghSpy = vi.spyOn(provider as any, 'runGHGraphQL')
+        .mockResolvedValue(JSON.stringify({
+          data: null,
+          errors: [{ message: "Field 'blockedBy' doesn't exist on type 'Issue'" }],
+        }));
+
+      await (provider as any).executeGraphQL('owner', 'repo', null);
+      expect(provider.isBlockedBySupported).toBe(false);
+
+      ghSpy.mockRestore();
+    });
+  });
 });

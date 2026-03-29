@@ -1152,3 +1152,4 @@ describe('batch launch dependency gate categorization', () => {
     expect(result.queueable.map((q) => q.issue.number)).toEqual([11, 12]);
   });
 });
+

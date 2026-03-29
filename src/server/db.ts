@@ -393,6 +393,9 @@ export class FleetDatabase {
     // Add project_issue_sources table and backfill from projects (v13 migration)
     this.addProjectIssueSourcesTable();
 
+    // Add provider_state table if missing (for persisting provider runtime state)
+    this.addProviderStateTable();
+
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
 
@@ -1013,6 +1016,24 @@ export class FleetDatabase {
       console.log(`[DB] Migrated to v13: project_issue_sources table created, backfilled ${projects.length} project(s)`);
     } catch {
       // Tables may not exist yet (fresh database) — schema.sql will create them
+    }
+  }
+
+  /**
+   * Add provider_state table for persisting issue provider runtime state
+   * (e.g. blockedBySupported flag for GitHubIssueProvider).
+   */
+  private addProviderStateTable(): void {
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS provider_state (
+          key         TEXT PRIMARY KEY,
+          value       TEXT NOT NULL,
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+    } catch {
+      // Table may already exist — safe to ignore
     }
   }
 
@@ -2932,6 +2953,32 @@ export class FleetDatabase {
       createdAt: utcify(row.created_at as string),
       updatedAt: utcify(row.updated_at as string),
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Provider State
+  // -------------------------------------------------------------------------
+
+  /**
+   * Get a persisted provider state value by key.
+   * Returns undefined if the key has not been set.
+   */
+  getProviderState(key: string): string | undefined {
+    const row = this.db.prepare(
+      'SELECT value FROM provider_state WHERE key = ?'
+    ).get(key) as { value: string } | undefined;
+    return row?.value;
+  }
+
+  /**
+   * Set (upsert) a provider state value by key.
+   */
+  setProviderState(key: string, value: string): void {
+    this.db.prepare(
+      `INSERT INTO provider_state (key, value, updated_at)
+       VALUES (?, ?, datetime('now'))
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+    ).run(key, value);
   }
 }
 

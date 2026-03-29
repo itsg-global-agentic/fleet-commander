@@ -12,7 +12,7 @@
 
 import config from '../config.js';
 import { getDatabase } from '../db.js';
-import type { DependencyRef, IssueDependencyInfo } from '../../shared/types.js';
+import type { DependencyRef, IssueDependencyInfo, Project } from '../../shared/types.js';
 import type { GenericIssue, GenericDependencyRef } from '../../shared/issue-provider.js';
 import { getIssueProvider, resetProviders } from '../providers/index.js';
 import {
@@ -970,8 +970,8 @@ export class IssueFetcher {
    *
    * Returns null if the API call fails (e.g. gh CLI too old).
    */
-  async fetchDependencies(owner: string, repo: string, issueNumber: number): Promise<IssueDependencyInfo | null> {
-    return this.fetchDependenciesFromProvider(owner, repo, issueNumber);
+  async fetchDependencies(owner: string, repo: string, issueNumber: number, project: Project): Promise<IssueDependencyInfo | null> {
+    return this.fetchDependenciesFromProvider(owner, repo, issueNumber, project);
   }
 
   /**
@@ -1015,7 +1015,7 @@ export class IssueFetcher {
       try {
         const config = JSON.parse(ghSource.configJson) as { owner: string; repo: string };
         if (config.owner && config.repo) {
-          return this.fetchDependencies(config.owner, config.repo, issueNumber);
+          return this.fetchDependencies(config.owner, config.repo, issueNumber, project);
         }
       } catch {
         // Fall through to project.githubRepo
@@ -1024,7 +1024,7 @@ export class IssueFetcher {
 
     if (!project.githubRepo) return null;
     const [owner, repo] = parseRepo(project.githubRepo);
-    return this.fetchDependencies(owner, repo, issueNumber);
+    return this.fetchDependencies(owner, repo, issueNumber, project);
   }
 
   // -------------------------------------------------------------------------
@@ -1036,22 +1036,16 @@ export class IssueFetcher {
    * Used for single-issue dependency fetching (e.g. launch-time check).
    *
    * Delegates GraphQL execution to the GitHubIssueProvider.
+   * Receives the project directly from the caller to avoid a redundant
+   * `getProjects({ status: 'active' })` lookup that would miss non-active projects.
    */
   private async fetchDependenciesFromProvider(
     owner: string,
     repo: string,
     issueNumber: number,
+    project: Project,
   ): Promise<IssueDependencyInfo | null> {
     try {
-      // Look up the project to get the provider
-      const db = getDatabase();
-      const projects = db.getProjects({ status: 'active' });
-      const project = projects.find((p) => p.githubRepo === `${owner}/${repo}`);
-      if (!project) {
-        console.error(`[IssueFetcher] No project found for ${owner}/${repo}`);
-        return null;
-      }
-
       const provider = getIssueProvider(project);
       if (!(provider instanceof GitHubIssueProvider)) {
         console.error(`[IssueFetcher] Provider for ${owner}/${repo} is not a GitHubIssueProvider`);
