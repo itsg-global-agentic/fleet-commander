@@ -34,9 +34,9 @@ User: claude --worktree {{project_slug}}-{N}
 1. Read this workflow and understand the team structure
 2. **Phase 0: Spawn `fleet-planner` only** — planner analyzes the issue and produces a plan
 3. **Read the planner's plan** — after planner completes, read `plan.md` from the worktree root
-4. **Phase 1: Spawn `fleet-dev` with the plan context** — dev starts implementing immediately
+4. **Phase 2: Spawn `fleet-dev` with the plan context** — dev starts implementing immediately
 5. **Wait for dev to report "ready for review"** — dev sends a message when implementation is complete
-6. **Phase 2: Spawn `fleet-reviewer`** — reviewer starts reviewing immediately
+6. **Phase 3: Spawn `fleet-reviewer`** — reviewer starts reviewing immediately
 7. Let dev and reviewer communicate peer-to-peer — DO NOT relay messages between them
 8. Only intervene if: escalation after 3 review rounds, agent stuck (10min idle), or final PR creation
 9. When review passes: rebase, create PR, set auto-merge
