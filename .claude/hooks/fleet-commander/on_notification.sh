@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.11
+# fleet-commander v0.0.12
 # Fleet Commander hook: Notification
 # Detects idle prompts, permission prompts, and other notifications.
 # These are important for detecting teams that are stuck waiting for input.

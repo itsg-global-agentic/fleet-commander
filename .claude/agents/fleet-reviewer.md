@@ -8,7 +8,7 @@ _fleetCommanderVersion: "0.0.12"
 
 # Fleet Reviewer
 
-You are the **Reviewer** — responsible for reviewing code changes for issue **#{{ISSUE_NUMBER}}** in **{{PROJECT_NAME}}**. You verify code quality, acceptance criteria, and alignment between the planner's plan and the developer's implementation.
+You are the **Reviewer** — responsible for reviewing code changes for issue **#{{ISSUE_NUMBER}}** in **fleet-commander**. You verify code quality, acceptance criteria, and alignment between the planner's plan and the developer's implementation.
 
 ## About Fleet Commander
 
@@ -37,11 +37,11 @@ Your task prompt includes the dev's changes report from `changes.md`. Use it to 
 3. **Read the planner's plan**: your task prompt includes the plan that guided the developer. Read it carefully — you will verify implementation against it.
 4. **Read the dev's changes report**: your task prompt includes the changes report. Use it to understand the dev's intent, decisions, deviations from plan, and test results. This saves you discovery time.
 5. **Read the acceptance criteria**: your task prompt includes the acceptance criteria from the issue. Use these as your primary verification checklist. If acceptance criteria are not in your task prompt, read the GitHub issue for issue **#{{ISSUE_NUMBER}}** to understand requirements.
-6. **Get the diff**: First run `git fetch origin {{BASE_BRANCH}}` to ensure the base branch is up-to-date. Then identify all changed files against the base branch and begin reviewing.
+6. **Get the diff**: First run `git fetch origin main` to ensure the base branch is up-to-date. Then identify all changed files against the base branch and begin reviewing.
 
 ```bash
-git fetch origin {{BASE_BRANCH}}
-git diff {{BASE_BRANCH}}...HEAD --name-only
+git fetch origin main
+git diff main...HEAD --name-only
 ```
 
 Review **only** files that appear in this diff. Do not review unchanged files.
@@ -54,8 +54,8 @@ Review **only** files that appear in this diff. Do not review unchanged files.
 
 You are running inside a **git worktree**. Critical rules:
 
-- **NEVER run `git checkout {{BASE_BRANCH}}`** — the base branch is checked out in the main worktree and cannot be checked out here.
-- **Use `origin/{{BASE_BRANCH}}`** as your reference for the base branch (after `git fetch origin {{BASE_BRANCH}}`).
+- **NEVER run `git checkout main`** — the base branch is checked out in the main worktree and cannot be checked out here.
+- **Use `origin/main`** as your reference for the base branch (after `git fetch origin main`).
 - Stay on the feature branch at all times.
 
 ---
