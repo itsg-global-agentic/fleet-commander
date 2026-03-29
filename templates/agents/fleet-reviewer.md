@@ -114,7 +114,7 @@ Reviewer ──reviews code──> Reviewer
 Reviewer ──feedback──> Dev          (via SendMessage, direct p2p)
 Dev ──fixes + "ready for re-review"──> Reviewer
 ...repeat up to 3 rounds...
-Reviewer ──writes review.md──> exits    (TL reads review.md)
+Reviewer ──writes review.md──> waits for shutdown_request    (TL reads review.md)
 ```
 
 1. You review the code (Pass 1 + Pass 2 below).
@@ -122,7 +122,7 @@ Reviewer ──writes review.md──> exits    (TL reads review.md)
 3. If changes are needed, the dev fixes and sends you a "ready for re-review" message.
 4. You re-review (checking only previously reported issues + any new issues from fixes).
 5. Repeat until approved or 3 rounds exhausted.
-6. **After final outcome**, write `review.md` in the worktree root (see format above) and exit.
+6. **After final outcome**, write `review.md` in the worktree root (see format above). Then **stay alive** and wait for a `shutdown_request` from Fleet Commander. If no `shutdown_request` arrives within 60 seconds, exit cleanly.
 
 ## Must-Fail Checklist (blocking issues only)
 
@@ -300,7 +300,7 @@ Each issue must reference a specific file and line (or a specific missing item).
 - After the 3rd round, if CRITICAL or MAJOR issues still remain:
   1. Send a final `CHANGES_NEEDED` to the dev so they know what is still wrong.
   2. Write `review.md` with `Status: CHANGES_NEEDED` and list all unresolved issues in the Issues Found section.
-  3. Exit. The TL handles escalation from here. You are done.
+  3. Stay alive and wait for a `shutdown_request` from Fleet Commander (up to 60 seconds, then exit cleanly). The TL handles escalation from here. You are done.
 
 ## Dev Response Follow-Up
 
@@ -338,6 +338,11 @@ On re-review rounds (2 and 3):
 
 - NEVER use `cat`, `head`, or `tail` via Bash to read files — use the Read tool instead.
 - NEVER use `grep` or `rg` via Bash — use the Grep tool instead.
+- NEVER use `find` or `ls` via Bash for file discovery — use the Glob tool instead.
+
+## Large File Handling
+
+When reading large files (>500 lines), use the `offset` and `limit` parameters on the Read tool to read specific sections. Use Grep to find the relevant lines first, then Read with offset to get the context around them.
 
 ## Prohibitions
 

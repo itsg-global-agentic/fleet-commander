@@ -1,8 +1,8 @@
 <!-- fleet-commander v0.0.11 -->
 <!-- Fleet Commander workflow template. Installed by Fleet Commander into your project. -->
-<!-- Placeholders fleet-commander, fleet-commander, main, {{ISSUE_NUMBER}} are replaced during installation. -->
+<!-- Placeholders {{PROJECT_NAME}}, {{project_slug}}, {{BASE_BRANCH}}, {{ISSUE_NUMBER}} are replaced during installation. -->
 
-# Diamond Workflow — fleet-commander
+# Diamond Workflow — {{PROJECT_NAME}}
 
 ## About Fleet Commander
 
@@ -18,15 +18,15 @@ Fleet Commander (FC) is the orchestration layer that manages your team. Key fact
 
 You are running inside a **git worktree**, not the main repository checkout. This has critical implications:
 
-- **NEVER run `git checkout main`** — the base branch is already checked out in the main worktree. Attempting to check it out here will fail with "already used by worktree."
-- **Use `git fetch origin main` and reference `origin/main`** whenever you need the latest base branch state. Do not try to switch to it.
-- **Your branch is your branch.** Create it, work on it, push it. Never switch away from it to main.
-- This applies to ALL agents (planner, dev, reviewer) — none of them should ever attempt to checkout main.
+- **NEVER run `git checkout {{BASE_BRANCH}}`** — the base branch is already checked out in the main worktree. Attempting to check it out here will fail with "already used by worktree."
+- **Use `git fetch origin {{BASE_BRANCH}}` and reference `origin/{{BASE_BRANCH}}`** whenever you need the latest base branch state. Do not try to switch to it.
+- **Your branch is your branch.** Create it, work on it, push it. Never switch away from it to {{BASE_BRANCH}}.
+- This applies to ALL agents (planner, dev, reviewer) — none of them should ever attempt to checkout {{BASE_BRANCH}}.
 
 ## Entry Point
 
 ```
-User: claude --worktree fleet-commander-{N}
+User: claude --worktree {{project_slug}}-{N}
 (prompt is sent via stdin from Fleet Commander's prompt file)
 ```
 
@@ -125,8 +125,9 @@ Note: These phases represent the workflow's internal progression, not FC's team 
 1. **TL reads `.fleet-issue-context.md`** from the worktree root (if it exists). This file contains the full issue body, comments, labels, acceptance criteria, and dependencies — pre-fetched by Fleet Commander at launch time.
 2. **TL spawns `fleet-planner`** with the full issue context included in the spawn prompt (see Planner Task Format below). The planner receives everything it needs — it should NOT need to call `gh issue view`. If `.fleet-issue-context.md` did not exist, tell the planner to fetch the issue itself via `gh issue view`.
 3. TL enters the Active Monitoring Loop (see below) while waiting for the plan.
-4. Planner analyzes the issue context (provided in its spawn prompt), explores the codebase, discovers guidebooks, and produces a structured plan.
-5. Planner writes the plan to `plan.md` in the worktree root. Planner stays alive for p2p questions from dev and reviewer.
+4. The planner stays alive after writing `plan.md`. Periodically check if `plan.md` exists (every 30s alongside TaskList). When it appears, read it and proceed to Phase 1. Do NOT wait for the planner to exit — it stays alive for p2p questions.
+5. Planner analyzes the issue context (provided in its spawn prompt), explores the codebase, discovers guidebooks, and produces a structured plan.
+6. Planner writes the plan to `plan.md` in the worktree root. Planner stays alive for p2p questions from dev and reviewer.
 
 ---
 
@@ -265,7 +266,7 @@ Read the issue thoroughly before starting your analysis.
 ```
 ISSUE: #{N} {title}
 BRANCH: {feat|fix|test}/{N}-{short-desc}
-BASE: main
+BASE: {{BASE_BRANCH}}
 
 ISSUE SUMMARY:
 {1-3 sentence summary of what the issue requests}
@@ -331,11 +332,11 @@ INSTRUCTIONS:
 2. **TL spawns `fleet-reviewer`** with the branch name, issue context, guidebook paths, and the dev's changes report (see Reviewer Task Format below)
 3. Reviewer starts reviewing immediately — it has all the context it needs, including the dev's own account of what changed and why
 4. **Dev and reviewer already know each other's names** (set at spawn time). No TL introduction needed.
-4. **TL steps back.** The dev-reviewer loop runs peer-to-peer:
+5. **TL steps back.** The dev-reviewer loop runs peer-to-peer:
    - Reviewer performs two-pass review (code quality + acceptance)
    - **REJECT** → reviewer sends actionable feedback directly to dev → dev fixes and re-requests review from reviewer directly
-   - **APPROVE** → reviewer writes `review.md` and exits
-5. TL monitors but does NOT intervene unless:
+   - **APPROVE** → reviewer writes `review.md` and waits for shutdown_request
+6. TL monitors but does NOT intervene unless:
    - **3 review rounds exhausted** → TL arbitrates (see Error Handling)
    - **Agent stuck** (10min idle) → TL sends a nudge
    - **Escalation request** from either agent → TL steps in
@@ -345,7 +346,7 @@ INSTRUCTIONS:
 ```
 ISSUE: #{N} {title}
 BRANCH: {branch_name}
-BASE: main
+BASE: {{BASE_BRANCH}}
 
 ACCEPTANCE CRITERIA:
 {bulleted list of acceptance criteria from the issue or plan}
@@ -374,12 +375,12 @@ PEERS:
 If you reject, include a numbered list of specific, actionable fixes with file:line references.
 Dev will fix and message you directly when ready for re-review.
 Max 3 review rounds total (initial + 2 re-reviews).
-After 3rd round, write review.md with CHANGES_NEEDED and exit.
+After 3rd round, write review.md with CHANGES_NEEDED and wait for shutdown_request.
 ```
 
 ### TL Reads review.md
 
-After the reviewer exits, the TL reads `review.md` from the worktree root and deletes it — following the same lifecycle as `plan.md` in Phase 1. After the reviewer exits, check if `review.md` exists. If it does not exist after 60 seconds, treat this as a reviewer failure and restart the reviewer (counts toward 5-spawn budget).
+After the reviewer writes `review.md`, the TL reads it from the worktree root and deletes it — following the same lifecycle as `plan.md` in Phase 1. The reviewer stays alive briefly for shutdown_request. Check if `review.md` exists. If it does not exist after 60 seconds, treat this as a reviewer failure and restart the reviewer (counts toward 5-spawn budget).
 
 1. **Read** `review.md` using the Read tool
 2. **Delete** it: `rm review.md`
@@ -410,14 +411,14 @@ After TL reads `review.md` with `Status: APPROVE`:
 
 1. **Branch freshness check** (MANDATORY):
    ```bash
-   git stash --include-untracked && git fetch origin main && git rebase origin/main && git stash pop && git push --force-with-lease
+   git stash --include-untracked && git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}} && git stash pop && git push --force-with-lease
    ```
    The `git stash --include-untracked` is required because the CC runtime may leave unstaged changes (e.g., `.claude/settings.json`) that block rebase.
    If rebase fails (conflicts) → state Blocked.
 
 2. **TL creates PR**:
    ```bash
-   gh pr create --base main --title "Issue #{N}: {description}" --body "Closes #{N}"
+   gh pr create --base {{BASE_BRANCH}} --title "Issue #{N}: {description}" --body "Closes #{N}"
    ```
 
 3. **Set auto-merge immediately** (mandatory, no exceptions):
@@ -540,7 +541,7 @@ If the same issue bounces back and forth between dev and reviewer:
 
 ### Rebase Conflict
 
-1. If `git stash --include-untracked && git rebase origin/main` fails with conflicts → state Blocked
+1. If `git stash --include-untracked && git rebase origin/{{BASE_BRANCH}}` fails with conflicts → state Blocked
 2. Comment on issue explaining the conflict
 3. STOP — do not attempt manual conflict resolution across worktrees
 
@@ -574,7 +575,7 @@ Atomic commits — each commit should be a logical unit.
 
 - **One issue at a time** — atomic changes only
 - **CI must be green** — PR CANNOT be merged with red CI
-- **Branch from main** — NEVER commit directly to main
+- **Branch from {{BASE_BRANCH}}** — NEVER commit directly to {{BASE_BRANCH}}
 - **TL creates the PR** — dev pushes code, TL creates the PR and sets auto-merge
 - **P2P for review** — dev and reviewer talk directly, TL does not relay
 - **Idle = normal** — agents waiting for messages are expected to be idle
@@ -592,9 +593,9 @@ Atomic commits — each commit should be a logical unit.
 | TL implements code while dev is active | Let dev do the implementation |
 | TL overrides reviewer without reading feedback | Read feedback, arbitrate only after 3 rounds |
 | Dev pushes without local tests | Build + tests locally BEFORE reporting ready |
-| Dev pushes without rebase | ALWAYS stash + rebase on main before push |
+| Dev pushes without rebase | ALWAYS stash + rebase on {{BASE_BRANCH}} before push |
 | Respawning agents endlessly | Max 5 total spawns — then TL takes over or reports BLOCKED |
-| Checking out main in a worktree | NEVER checkout main — use `origin/main` as reference |
+| Checking out {{BASE_BRANCH}} in a worktree | NEVER checkout {{BASE_BRANCH}} — use `origin/{{BASE_BRANCH}}` as reference |
 | Dev creates the PR | TL creates the PR after APPROVE |
 | Spawning a coordinator / 4th agent | Diamond team is exactly 3 agents: planner, dev, reviewer |
 | Spawning all 3 agents at once before analysis is done | Spawn sequentially: planner first, then dev with plan, then reviewer after dev ready |

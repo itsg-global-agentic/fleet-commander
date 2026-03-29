@@ -45,7 +45,7 @@ fleet-commander/
         github-poller.ts    # gh CLI polling (PRs, CI, merges) every 30s
         issue-fetcher.ts    # GraphQL issue fetch with 60s cache
         stuck-detector.ts   # Idle (5min) and stuck (10min) detection
-        sse-broker.ts       # SSE connection management, 14 event types, 30s heartbeat
+        sse-broker.ts       # SSE connection management, 17 event types, 30s heartbeat
         usage-tracker.ts    # Usage percentage polling
         startup-recovery.ts # Recover team state on server restart
         cleanup.ts          # Worktree and branch cleanup

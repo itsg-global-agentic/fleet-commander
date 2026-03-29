@@ -125,8 +125,9 @@ Note: These phases represent the workflow's internal progression, not FC's team 
 1. **TL reads `.fleet-issue-context.md`** from the worktree root (if it exists). This file contains the full issue body, comments, labels, acceptance criteria, and dependencies — pre-fetched by Fleet Commander at launch time.
 2. **TL spawns `fleet-planner`** with the full issue context included in the spawn prompt (see Planner Task Format below). The planner receives everything it needs — it should NOT need to call `gh issue view`. If `.fleet-issue-context.md` did not exist, tell the planner to fetch the issue itself via `gh issue view`.
 3. TL enters the Active Monitoring Loop (see below) while waiting for the plan.
-4. Planner analyzes the issue context (provided in its spawn prompt), explores the codebase, discovers guidebooks, and produces a structured plan.
-5. Planner writes the plan to `plan.md` in the worktree root. Planner stays alive for p2p questions from dev and reviewer.
+4. The planner stays alive after writing `plan.md`. Periodically check if `plan.md` exists (every 30s alongside TaskList). When it appears, read it and proceed to Phase 1. Do NOT wait for the planner to exit — it stays alive for p2p questions.
+5. Planner analyzes the issue context (provided in its spawn prompt), explores the codebase, discovers guidebooks, and produces a structured plan.
+6. Planner writes the plan to `plan.md` in the worktree root. Planner stays alive for p2p questions from dev and reviewer.
 
 ---
 
@@ -331,11 +332,11 @@ INSTRUCTIONS:
 2. **TL spawns `fleet-reviewer`** with the branch name, issue context, guidebook paths, and the dev's changes report (see Reviewer Task Format below)
 3. Reviewer starts reviewing immediately — it has all the context it needs, including the dev's own account of what changed and why
 4. **Dev and reviewer already know each other's names** (set at spawn time). No TL introduction needed.
-4. **TL steps back.** The dev-reviewer loop runs peer-to-peer:
+5. **TL steps back.** The dev-reviewer loop runs peer-to-peer:
    - Reviewer performs two-pass review (code quality + acceptance)
    - **REJECT** → reviewer sends actionable feedback directly to dev → dev fixes and re-requests review from reviewer directly
-   - **APPROVE** → reviewer writes `review.md` and exits
-5. TL monitors but does NOT intervene unless:
+   - **APPROVE** → reviewer writes `review.md` and waits for shutdown_request
+6. TL monitors but does NOT intervene unless:
    - **3 review rounds exhausted** → TL arbitrates (see Error Handling)
    - **Agent stuck** (10min idle) → TL sends a nudge
    - **Escalation request** from either agent → TL steps in
@@ -374,12 +375,12 @@ PEERS:
 If you reject, include a numbered list of specific, actionable fixes with file:line references.
 Dev will fix and message you directly when ready for re-review.
 Max 3 review rounds total (initial + 2 re-reviews).
-After 3rd round, write review.md with CHANGES_NEEDED and exit.
+After 3rd round, write review.md with CHANGES_NEEDED and wait for shutdown_request.
 ```
 
 ### TL Reads review.md
 
-After the reviewer exits, the TL reads `review.md` from the worktree root and deletes it — following the same lifecycle as `plan.md` in Phase 1. After the reviewer exits, check if `review.md` exists. If it does not exist after 60 seconds, treat this as a reviewer failure and restart the reviewer (counts toward 5-spawn budget).
+After the reviewer writes `review.md`, the TL reads it from the worktree root and deletes it — following the same lifecycle as `plan.md` in Phase 1. The reviewer stays alive briefly for shutdown_request. Check if `review.md` exists. If it does not exist after 60 seconds, treat this as a reviewer failure and restart the reviewer (counts toward 5-spawn budget).
 
 1. **Read** `review.md` using the Read tool
 2. **Delete** it: `rm review.md`

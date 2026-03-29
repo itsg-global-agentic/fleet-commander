@@ -112,6 +112,8 @@ When the reviewer sends you feedback via `SendMessage`:
 
 **Do NOT ignore reviewer messages.** If the reviewer sends feedback, you MUST reply directly to the reviewer with your response. Silent fixes without acknowledgment break the review loop.
 
+**Respond to reviewer feedback promptly.** The reviewer expects a response within 2 minutes and will escalate to the TL if you are unresponsive.
+
 ### Max Review Rounds
 
 If the reviewer sends you feedback **more than 3 times** (i.e., you have gone through 3 rounds of fixes and the reviewer still rejects), **escalate to the TL** via `SendMessage`:
