@@ -867,12 +867,14 @@ function RunAllConfirmDialog({ issues, skippedActive, blockedIssues, projectId, 
           number: n.number,
           title: n.title,
           issueKey: n.issueKey,
+          issueProvider: n.issueProvider,
         })),
         blockedIssues: blockedIssues.length > 0
           ? blockedIssues.map((n) => ({
               number: n.number,
               title: n.title,
               issueKey: n.issueKey,
+              issueProvider: n.issueProvider,
               blockedBy: n.dependencies?.blockedBy
                 ?.filter((b) => b.state === 'open')
                 .map((b) => b.number) ?? [],

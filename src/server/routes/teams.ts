@@ -35,8 +35,8 @@ interface LaunchBody {
 
 interface LaunchBatchBody {
   projectId: number;
-  issues: Array<{ number: number; title?: string; issueKey?: string }>;
-  blockedIssues?: Array<{ number: number; title?: string; issueKey?: string; blockedBy?: number[] }>;
+  issues: Array<{ number: number; title?: string; issueKey?: string; issueProvider?: string }>;
+  blockedIssues?: Array<{ number: number; title?: string; issueKey?: string; issueProvider?: string; blockedBy?: number[] }>;
   prompt?: string;
   delayMs?: number;
   headless?: boolean;

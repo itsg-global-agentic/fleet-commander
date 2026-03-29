@@ -730,12 +730,48 @@ export class IssueFetcher {
   }
 
   /**
+   * Get a single issue by issueKey (string) from the cache.
+   * Searches by node.issueKey via findInTreeByKey. Falls back to numeric
+   * lookup if the key is a purely numeric string (backward compat for GitHub).
+   * Searches across all project caches if projectId is not specified.
+   */
+  getIssueByKey(key: string, projectId?: number): IssueNode | undefined {
+    if (projectId !== undefined) {
+      const cached = this.cacheByProject.get(projectId);
+      if (!cached) return undefined;
+      const found = this.findInTreeByKey(cached.issues, key);
+      if (found) return found;
+      // Fallback: try numeric lookup for backward compat
+      const num = Number(key);
+      if (Number.isInteger(num) && num > 0) {
+        return this.findInTree(cached.issues, num);
+      }
+      return undefined;
+    }
+
+    // Search all project caches
+    for (const cache of this.cacheByProject.values()) {
+      const found = this.findInTreeByKey(cache.issues, key);
+      if (found) return found;
+    }
+    // Fallback: try numeric lookup across all caches
+    const num = Number(key);
+    if (Number.isInteger(num) && num > 0) {
+      for (const cache of this.cacheByProject.values()) {
+        const found = this.findInTree(cache.issues, num);
+        if (found) return found;
+      }
+    }
+    return undefined;
+  }
+
+  /**
    * Suggest the next issue to work on for a specific project.
    * Criteria: Ready status, no active team, not in activeTeamIssues list.
    * Returns the highest priority issue (P0 > P1 > P2 > unlabeled).
    */
-  getNextIssue(activeTeamIssues: number[], projectId?: number): IssueNode | null {
-    const available = this.getAvailableIssues(activeTeamIssues, projectId);
+  getNextIssue(activeTeamIssues: number[], projectId?: number, activeTeamIssueKeys: string[] = []): IssueNode | null {
+    const available = this.getAvailableIssues(activeTeamIssues, projectId, activeTeamIssueKeys);
 
     if (available.length === 0) return null;
 
@@ -753,9 +789,14 @@ export class IssueFetcher {
    * Get all issues that have no active team assigned.
    * Filters by Ready board status and excludes issues in activeTeamIssues.
    * Uses cached issues synchronously -- does not trigger a fetch.
+   *
+   * @param activeTeamIssues - Issue numbers with active teams
+   * @param projectId - Optional project ID to filter by
+   * @param activeTeamIssueKeys - Issue keys (strings) with active teams, for Jira/Linear dedup
    */
-  getAvailableIssues(activeTeamIssues: number[], projectId?: number): IssueNode[] {
-    const activeSet = new Set(activeTeamIssues);
+  getAvailableIssues(activeTeamIssues: number[], projectId?: number, activeTeamIssueKeys: string[] = []): IssueNode[] {
+    const activeNumberSet = new Set(activeTeamIssues);
+    const activeKeySet = new Set(activeTeamIssueKeys);
     const issues = this.getIssuesCached(projectId);
     const allIssues = this.flattenTree(issues);
 
@@ -763,8 +804,9 @@ export class IssueFetcher {
       // Must be open
       if (issue.state !== 'open') return false;
 
-      // Must not already have an active team
-      if (activeSet.has(issue.number)) return false;
+      // Must not already have an active team (check by issueKey first, then by number)
+      if (issue.issueKey && activeKeySet.has(issue.issueKey)) return false;
+      if (activeNumberSet.has(issue.number)) return false;
 
       // Prefer "Ready" board status, but include issues without board status
       // (they might not be on the project board yet)
@@ -883,18 +925,24 @@ export class IssueFetcher {
         ? db.getActiveTeamsByProject(projectId)
         : db.getActiveTeams();
 
-      // Build a map of issue number -> active team
-      const teamByIssue = new Map<number, { id: number; status: string }>();
+      // Build dual maps: issueKey (string) -> team and issueNumber (number) -> team.
+      // The issueKey map is the primary lookup to avoid collisions between
+      // Jira issues with the same trailing number (e.g. FRONTEND-42 vs BACKEND-42).
+      const teamByIssueKey = new Map<string, { id: number; status: string }>();
+      const teamByIssueNumber = new Map<number, { id: number; status: string }>();
       for (const team of activeTeams) {
-        teamByIssue.set(team.issueNumber, {
-          id: team.id,
-          status: team.status,
-        });
+        const teamInfo = { id: team.id, status: team.status };
+        if (team.issueKey) {
+          teamByIssueKey.set(team.issueKey, teamInfo);
+        }
+        teamByIssueNumber.set(team.issueNumber, teamInfo);
       }
 
-      // Recursively create shallow copies with team info set
+      // Recursively create shallow copies with team info set.
+      // Look up by issueKey first (if available), then fall back to number.
       const enrichNode = (node: IssueNode): IssueNode => {
-        const team = teamByIssue.get(node.number);
+        const team = (node.issueKey ? teamByIssueKey.get(node.issueKey) : undefined)
+          ?? teamByIssueNumber.get(node.number);
         return {
           ...node,
           labels: [...node.labels],
@@ -1101,6 +1149,20 @@ export class IssueFetcher {
     for (const node of nodes) {
       if (node.number === number) return node;
       const found = this.findInTree(node.children, number);
+      if (found) return found;
+    }
+    return undefined;
+  }
+
+  /**
+   * Recursively search for an issue by issueKey (string) in the tree.
+   * Used for Jira/Linear-style keys like "PROJ-123" that cannot be
+   * uniquely identified by numeric issue number alone.
+   */
+  private findInTreeByKey(nodes: IssueNode[], key: string): IssueNode | undefined {
+    for (const node of nodes) {
+      if (node.issueKey === key) return node;
+      const found = this.findInTreeByKey(node.children, key);
       if (found) return found;
     }
     return undefined;

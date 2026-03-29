@@ -1613,7 +1613,7 @@ export class TeamManager {
 
   async launchBatch(
     projectId: number,
-    issues: Array<{ number: number; title?: string; issueKey?: string }>,
+    issues: Array<{ number: number; title?: string; issueKey?: string; issueProvider?: string }>,
     prompt?: string,
     delayMs?: number,
     headless?: boolean,

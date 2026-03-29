@@ -159,8 +159,8 @@ export class TeamService {
    */
   async launchBatch(params: {
     projectId: number;
-    issues: Array<{ number: number; title?: string; issueKey?: string }>;
-    blockedIssues?: Array<{ number: number; title?: string; issueKey?: string; blockedBy?: number[] }>;
+    issues: Array<{ number: number; title?: string; issueKey?: string; issueProvider?: string }>;
+    blockedIssues?: Array<{ number: number; title?: string; issueKey?: string; issueProvider?: string; blockedBy?: number[] }>;
     prompt?: string;
     delayMs?: number;
     headless?: boolean;
@@ -179,8 +179,11 @@ export class TeamService {
 
     if (hasIssues) {
       for (const issue of issues) {
-        if (!issue.number || typeof issue.number !== 'number' || issue.number < 1) {
-          throw validationError(`Invalid issue number: ${JSON.stringify(issue)}`);
+        // Allow number=0 when issueKey is present (e.g. Jira keys like "PROJ-123")
+        const hasValidNumber = typeof issue.number === 'number' && issue.number >= 1;
+        const hasValidKey = typeof issue.issueKey === 'string' && issue.issueKey.trim().length > 0;
+        if (!hasValidNumber && !hasValidKey) {
+          throw validationError(`Invalid issue: must have a positive number or a non-empty issueKey: ${JSON.stringify(issue)}`);
         }
       }
     }
@@ -195,8 +198,8 @@ export class TeamService {
     }
 
     // Dependency check for batch launch — separate launchable from queueable
-    const launchable: Array<{ number: number; title?: string; issueKey?: string }> = [];
-    const queueable: Array<{ issue: { number: number; title?: string; issueKey?: string }; blockerNumbers: number[] }> = [];
+    const launchable: Array<{ number: number; title?: string; issueKey?: string; issueProvider?: string }> = [];
+    const queueable: Array<{ issue: { number: number; title?: string; issueKey?: string; issueProvider?: string }; blockerNumbers: number[] }> = [];
 
     for (const issue of (issues ?? [])) {
       const depInfo = await checkDependencies(projectId, issue.number);

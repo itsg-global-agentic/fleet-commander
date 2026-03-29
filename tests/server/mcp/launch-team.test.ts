@@ -155,4 +155,62 @@ describe('fleet_launch_team MCP tool', () => {
     const handler = registeredTools[0]!.handler;
     await expect(handler({ projectId: 1, issueNumber: 42 })).rejects.toThrow('unexpected');
   });
+
+  it('handler derives issueNumber=0 from non-numeric Jira issueKey', async () => {
+    registerLaunchTeamTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await handler({ projectId: 1, issueKey: 'PROJ-123' });
+
+    expect(mockLaunchTeam).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 1,
+        issueNumber: 0,
+        issueKey: 'PROJ-123',
+      }),
+    );
+  });
+
+  it('handler derives issueNumber from purely numeric issueKey', async () => {
+    registerLaunchTeamTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await handler({ projectId: 1, issueKey: '42' });
+
+    expect(mockLaunchTeam).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 1,
+        issueNumber: 42,
+        issueKey: '42',
+      }),
+    );
+  });
+
+  it('handler returns error when neither issueNumber nor issueKey provided', async () => {
+    registerLaunchTeamTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    const result = (await handler({ projectId: 1 })) as {
+      content: Array<{ type: string; text: string }>;
+      isError: boolean;
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toContain('Either issueNumber or issueKey');
+  });
+
+  it('handler prefers explicit issueNumber over issueKey derivation', async () => {
+    registerLaunchTeamTool(mockMcpServer as any);
+
+    const handler = registeredTools[0]!.handler;
+    await handler({ projectId: 1, issueNumber: 99, issueKey: 'PROJ-123' });
+
+    expect(mockLaunchTeam).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 1,
+        issueNumber: 99,
+        issueKey: 'PROJ-123',
+      }),
+    );
+  });
 });

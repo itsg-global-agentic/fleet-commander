@@ -81,6 +81,24 @@ function getActiveTeamIssueNumbers(projectId?: number): number[] {
   }
 }
 
+/**
+ * Get issue keys (strings) for all active teams from the database.
+ * Filters out null keys (old teams that predate issueKey tracking).
+ */
+function getActiveTeamIssueKeys(projectId?: number): string[] {
+  try {
+    const db = getDatabase();
+    const activeTeams = projectId !== undefined
+      ? db.getActiveTeamsByProject(projectId)
+      : db.getActiveTeams();
+    return activeTeams
+      .map((t) => t.issueKey)
+      .filter((k): k is string => k !== null);
+  } catch {
+    return [];
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Service
 // ---------------------------------------------------------------------------
@@ -186,7 +204,8 @@ export class IssueService {
   getNextIssue(): { issue: IssueNode | null; reason: string } {
     const fetcher = getIssueFetcher();
     const activeIssues = getActiveTeamIssueNumbers();
-    const nextIssue = fetcher.getNextIssue(activeIssues);
+    const activeKeys = getActiveTeamIssueKeys();
+    const nextIssue = fetcher.getNextIssue(activeIssues, undefined, activeKeys);
 
     if (!nextIssue) {
       return {
@@ -211,7 +230,8 @@ export class IssueService {
   getAvailableIssues(): { issues: IssueNode[]; count: number } {
     const fetcher = getIssueFetcher();
     const activeIssues = getActiveTeamIssueNumbers();
-    const available = fetcher.getAvailableIssues(activeIssues);
+    const activeKeys = getActiveTeamIssueKeys();
+    const available = fetcher.getAvailableIssues(activeIssues, undefined, activeKeys);
 
     const enriched = fetcher.enrichWithTeamInfo(available);
 
@@ -240,6 +260,34 @@ export class IssueService {
     if (!issue) {
       throw notFoundError(
         `Issue #${issueNumber} not found in cache. Try POST /api/issues/refresh first.`,
+      );
+    }
+
+    const [enriched] = fetcher.enrichWithTeamInfo([issue]);
+
+    return enriched;
+  }
+
+  /**
+   * Get a single issue by its string key (e.g. "42" for GitHub, "PROJ-123" for Jira).
+   * Falls back to numeric lookup if the key is a purely numeric string.
+   *
+   * @param key - The issue key string
+   * @returns The enriched issue
+   * @throws ServiceError with code VALIDATION if key is empty
+   * @throws ServiceError with code NOT_FOUND if issue not in cache
+   */
+  getIssueByKey(key: string): IssueNode {
+    if (!key || typeof key !== 'string' || !key.trim()) {
+      throw validationError('Issue key must be a non-empty string');
+    }
+
+    const fetcher = getIssueFetcher();
+    const issue = fetcher.getIssueByKey(key.trim());
+
+    if (!issue) {
+      throw notFoundError(
+        `Issue "${key}" not found in cache. Try POST /api/issues/refresh first.`,
       );
     }
 

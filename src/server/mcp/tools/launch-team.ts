@@ -34,8 +34,11 @@ export function registerLaunchTeamTool(server: McpServer): void {
     },
     async ({ projectId, issueNumber, issueKey, headless, force }) => {
       try {
-        // Derive issueNumber from issueKey if not provided
-        const effectiveIssueNumber = issueNumber ?? (issueKey ? parseInt(issueKey, 10) || 0 : 0);
+        // Derive issueNumber from issueKey if not provided.
+        // For Jira keys like "PROJ-123", parseInt yields NaN -- use 0 instead.
+        // For purely numeric keys like "42", derive the number normally.
+        const numericKey = issueKey ? Number(issueKey) : NaN;
+        const effectiveIssueNumber = issueNumber ?? (Number.isInteger(numericKey) && numericKey > 0 ? numericKey : 0);
         if (!effectiveIssueNumber && !issueKey) {
           return {
             content: [{ type: 'text' as const, text: 'Either issueNumber or issueKey must be provided' }],

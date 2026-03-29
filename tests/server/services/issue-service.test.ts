@@ -60,6 +60,7 @@ const mockGetIssuesByProject = vi.fn().mockReturnValue([]);
 const mockGetCachedAt = vi.fn().mockReturnValue('2026-03-25T12:00:00Z');
 const mockGetAvailableIssues = vi.fn().mockReturnValue(mockFlatIssues);
 const mockGetIssue = vi.fn().mockReturnValue(null);
+const mockGetIssueByKey = vi.fn().mockReturnValue(undefined);
 const mockRefresh = vi.fn().mockResolvedValue(mockIssueTree);
 const mockStart = vi.fn();
 const mockStop = vi.fn();
@@ -75,6 +76,7 @@ vi.mock('../../../src/server/services/issue-fetcher.js', () => ({
     getCachedAt: mockGetCachedAt,
     getAvailableIssues: mockGetAvailableIssues,
     getIssue: mockGetIssue,
+    getIssueByKey: mockGetIssueByKey,
     start: mockStart,
     stop: mockStop,
     refresh: mockRefresh,
@@ -133,6 +135,7 @@ beforeEach(() => {
   mockGetCachedAt.mockReturnValue('2026-03-25T12:00:00Z');
   mockGetAvailableIssues.mockReturnValue(mockFlatIssues);
   mockGetIssue.mockReturnValue(null);
+  mockGetIssueByKey.mockReturnValue(undefined);
   mockGetNextIssue.mockReturnValue(null);
   mockRefresh.mockResolvedValue(mockIssueTree);
 });
@@ -389,6 +392,63 @@ describe('IssueService.getIssue', () => {
 
     expect(result.number).toBe(42);
     expect(result.title).toBe('Test issue');
+  });
+});
+
+// =============================================================================
+// Tests: getIssueByKey
+// =============================================================================
+
+describe('IssueService.getIssueByKey', () => {
+  it('should throw VALIDATION for empty key', () => {
+    try {
+      service.getIssueByKey('');
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('VALIDATION');
+    }
+  });
+
+  it('should throw VALIDATION for whitespace-only key', () => {
+    try {
+      service.getIssueByKey('   ');
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('VALIDATION');
+    }
+  });
+
+  it('should throw NOT_FOUND when issue not in cache', () => {
+    try {
+      service.getIssueByKey('NONEXIST-999');
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('NOT_FOUND');
+      expect((err as ServiceError).message).toContain('NONEXIST-999');
+    }
+  });
+
+  it('should return enriched issue when found by key', () => {
+    const mockIssue = {
+      number: 42,
+      title: 'Jira issue',
+      state: 'open',
+      labels: [],
+      children: [],
+      issueKey: 'PROJ-42',
+      issueProvider: 'jira',
+    };
+    mockGetIssueByKey.mockReturnValue(mockIssue);
+    mockEnrichWithTeamInfo.mockReturnValue([mockIssue]);
+
+    const result = service.getIssueByKey('PROJ-42');
+
+    expect(result.number).toBe(42);
+    expect(result.title).toBe('Jira issue');
+    expect(mockGetIssueByKey).toHaveBeenCalledWith('PROJ-42');
   });
 });
 

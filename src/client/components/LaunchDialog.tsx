@@ -14,6 +14,8 @@ interface IssueItem {
   state: 'open' | 'closed';
   labels: string[];
   activeTeam?: { id: number; status: string } | null;
+  issueKey?: string;
+  issueProvider?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -27,6 +29,8 @@ interface IssueTreeNode {
   labels: string[];
   children: IssueTreeNode[];
   activeTeam?: { id: number; status: string } | null;
+  issueKey?: string;
+  issueProvider?: string;
 }
 
 /** Flatten an issue tree into a single-level array */
@@ -40,6 +44,8 @@ function flattenIssueTree(nodes: IssueTreeNode[]): IssueItem[] {
         state: node.state,
         labels: node.labels,
         activeTeam: node.activeTeam,
+        issueKey: node.issueKey,
+        issueProvider: node.issueProvider,
       });
       if (node.children.length > 0) {
         walk(node.children);
@@ -202,10 +208,11 @@ function summarizeStreamEvent(event: StreamEvent): string {
 interface LaunchLogProps {
   teamId: number;
   issueKey: string;
+  issueProvider: string | null;
   onClose: () => void;
 }
 
-function LaunchLog({ teamId, issueKey, onClose }: LaunchLogProps) {
+function LaunchLog({ teamId, issueKey, issueProvider, onClose }: LaunchLogProps) {
   const api = useApi();
   const [teamStatus, setTeamStatus] = useState<TeamStatus>('queued');
   const [outputLines, setOutputLines] = useState<string[]>([]);
@@ -329,7 +336,7 @@ function LaunchLog({ teamId, issueKey, onClose }: LaunchLogProps) {
           {statusLabel(teamStatus)}
         </span>
         <span className="text-xs text-dark-muted ml-auto">
-          {formatIssueKey(issueKey, null)} &middot; Team #{teamId}
+          {formatIssueKey(issueKey, issueProvider)} &middot; Team #{teamId}
         </span>
       </div>
 
@@ -461,6 +468,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
   // --- Launch log state ---
   const [launchedTeamId, setLaunchedTeamId] = useState<number | null>(null);
   const [launchedIssueKey, setLaunchedIssueKey] = useState<string | null>(null);
+  const [launchedIssueProvider, setLaunchedIssueProvider] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -543,6 +551,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       setSelectedProjectId('');
       setLaunchedTeamId(null);
       setLaunchedIssueKey(null);
+      setLaunchedIssueProvider(null);
       setZone('green');
       setIssues([]);
       setIssuesError(null);
@@ -580,7 +589,8 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
     return issues.filter((issue) =>
       (!isNaN(numMatch) && issue.number === numMatch) ||
       issue.title.toLowerCase().includes(q) ||
-      String(issue.number).includes(q),
+      String(issue.number).includes(q) ||
+      (issue.issueKey && issue.issueKey.toLowerCase().includes(q)),
     );
   }, [issues, issueSearch]);
 
@@ -604,7 +614,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
 
   // --- Select an issue from the picker ---
   const handleSelectIssue = useCallback((issue: IssueItem) => {
-    setIssueNumber(String(issue.number));
+    setIssueNumber(issue.issueKey ?? String(issue.number));
     setIssueSearch('');
   }, []);
 
@@ -643,13 +653,16 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       // Switch to launch log view instead of closing
       setLaunchedTeamId(team.id);
       setLaunchedIssueKey(trimmed);
+      // Determine issueProvider from the matched issue in the picker
+      const matchedIssue = issues.find((i) => i.issueKey === trimmed || String(i.number) === trimmed);
+      setLaunchedIssueProvider(matchedIssue?.issueProvider ?? (isNumeric ? 'github' : null));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message || 'Failed to launch team');
     } finally {
       setLoading(false);
     }
-  }, [issueNumber, prompt, api, projects, selectedProjectId, headless]);
+  }, [issueNumber, prompt, api, projects, selectedProjectId, headless, issues]);
 
   // --- Batch launch ---
   const handleLaunchBatch = useCallback(async () => {
@@ -661,19 +674,13 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       return;
     }
 
-    const numbers = raw
+    const keys = raw
       .split(/[,\s]+/)
       .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => parseInt(s, 10));
+      .filter(Boolean);
 
-    if (numbers.some((n) => isNaN(n) || n < 1)) {
-      setError('All issue numbers must be positive integers');
-      return;
-    }
-
-    if (numbers.length === 0) {
-      setError('Enter at least one issue number');
+    if (keys.length === 0) {
+      setError('Enter at least one issue key');
       return;
     }
 
@@ -688,7 +695,15 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
       return;
     }
 
-    const batchIssueList = numbers.map((n) => ({ number: n }));
+    // Build batch issue list: parse each key as numeric or non-numeric
+    const batchIssueList = keys.map((key) => {
+      const num = parseInt(key, 10);
+      const isNumeric = !isNaN(num) && num > 0 && String(num) === key;
+      return {
+        number: isNumeric ? num : 0,
+        issueKey: key,
+      };
+    });
     const effectivePrompt = prompt.trim() || undefined;
     const projectId = selectedProjectId ? parseInt(selectedProjectId, 10) : undefined;
 
@@ -701,7 +716,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
         projectId,
         headless,
       });
-      setToast(`Launched ${numbers.length} team${numbers.length > 1 ? 's' : ''}`);
+      setToast(`Launched ${keys.length} team${keys.length > 1 ? 's' : ''}`);
       onClose();
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -773,6 +788,7 @@ export function LaunchDialog({ open, onClose }: LaunchDialogProps) {
               <LaunchLog
                 teamId={launchedTeamId}
                 issueKey={launchedIssueKey}
+                issueProvider={launchedIssueProvider}
                 onClose={onClose}
               />
             ) : (
