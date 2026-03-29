@@ -1603,7 +1603,7 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
         prioritizing={prioritization.loading}
         collapsedNodes={collapsedNodes}
         onToggleCollapse={onToggleCollapse}
-        className="flex-1"
+        className="max-h-[70vh]"
       />
 
       {/* Run All confirmation dialog */}
