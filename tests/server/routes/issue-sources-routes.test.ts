@@ -115,6 +115,49 @@ describe('GET /api/projects/:projectId/issue-sources', () => {
     expect(body.sources[1].provider).toBe('jira');
   });
 
+  it('should not include credentialsJson in list response', async () => {
+    const db = getDatabase();
+    db.insertIssueSource({
+      projectId,
+      provider: 'jira',
+      label: 'Secure Jira',
+      configJson: JSON.stringify({ projectKey: 'SEC' }),
+      credentialsJson: JSON.stringify({ email: 'a@b.com', apiToken: 'secret-token' }),
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/issue-sources`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.sources).toHaveLength(1);
+    expect(body.sources[0]).not.toHaveProperty('credentialsJson');
+    expect(body.sources[0].hasCredentials).toBe(true);
+  });
+
+  it('should return hasCredentials: false when source has no credentials', async () => {
+    const db = getDatabase();
+    db.insertIssueSource({
+      projectId,
+      provider: 'github',
+      label: 'No creds',
+      configJson: JSON.stringify({ owner: 'a', repo: 'b' }),
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/issue-sources`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.sources).toHaveLength(1);
+    expect(body.sources[0]).not.toHaveProperty('credentialsJson');
+    expect(body.sources[0].hasCredentials).toBe(false);
+  });
+
   it('should return 404 when project does not exist', async () => {
     const res = await app.inject({
       method: 'GET',
@@ -152,6 +195,25 @@ describe('POST /api/projects/:projectId/issue-sources', () => {
     expect(body.label).toBe('GitHub Issues');
     expect(body.enabled).toBe(true);
     expect(body.projectId).toBe(projectId);
+  });
+
+  it('should not include credentialsJson in create response', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${projectId}/issue-sources`,
+      payload: {
+        provider: 'jira',
+        label: 'Jira with creds',
+        configJson: JSON.stringify({ projectKey: 'CRED' }),
+        credentialsJson: JSON.stringify({ email: 'x@y.com', apiToken: 'super-secret' }),
+      },
+    });
+
+    expect(res.statusCode).toBe(201);
+    const body = JSON.parse(res.body);
+    expect(body).not.toHaveProperty('credentialsJson');
+    expect(body.hasCredentials).toBe(true);
+    expect(body.provider).toBe('jira');
   });
 
   it('should return 400 when provider is missing', async () => {
@@ -246,6 +308,30 @@ describe('PATCH /api/projects/:projectId/issue-sources/:sourceId', () => {
     const body = JSON.parse(res.body);
     expect(body.label).toBe('New Label');
     expect(body.enabled).toBe(false);
+  });
+
+  it('should not include credentialsJson in update response', async () => {
+    const db = getDatabase();
+    const source = db.insertIssueSource({
+      projectId,
+      provider: 'jira',
+      label: 'Patch Test',
+      configJson: JSON.stringify({ projectKey: 'PT' }),
+      credentialsJson: JSON.stringify({ email: 'u@v.com', apiToken: 'old-token' }),
+    });
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/projects/${projectId}/issue-sources/${source.id}`,
+      payload: {
+        credentialsJson: JSON.stringify({ email: 'u@v.com', apiToken: 'new-token' }),
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body).not.toHaveProperty('credentialsJson');
+    expect(body.hasCredentials).toBe(true);
   });
 
   it('should return 404 when source does not exist', async () => {
@@ -347,6 +433,98 @@ describe('DELETE /api/projects/:projectId/issue-sources/:sourceId', () => {
     const res = await app.inject({
       method: 'DELETE',
       url: `/api/projects/${projectId}/issue-sources/${source.id}`,
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/projects/:projectId/issue-sources/:sourceId/credentials
+// ---------------------------------------------------------------------------
+
+describe('GET /api/projects/:projectId/issue-sources/:sourceId/credentials', () => {
+  it('should return decrypted credentialsJson for existing source', async () => {
+    const db = getDatabase();
+    const creds = JSON.stringify({ email: 'cred@test.com', apiToken: 'the-secret' });
+    const source = db.insertIssueSource({
+      projectId,
+      provider: 'jira',
+      label: 'Cred Test',
+      configJson: JSON.stringify({ projectKey: 'CT' }),
+      credentialsJson: creds,
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/issue-sources/${source.id}/credentials`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.credentialsJson).toBeTruthy();
+    // Verify the decrypted credentials are returned (may be encrypted at rest,
+    // but mapIssueSourceRow decrypts them)
+    const parsed = JSON.parse(body.credentialsJson);
+    expect(parsed.email).toBe('cred@test.com');
+    expect(parsed.apiToken).toBe('the-secret');
+  });
+
+  it('should return null credentialsJson when source has no credentials', async () => {
+    const db = getDatabase();
+    const source = db.insertIssueSource({
+      projectId,
+      provider: 'github',
+      label: 'No creds',
+      configJson: JSON.stringify({ owner: 'a', repo: 'b' }),
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/issue-sources/${source.id}/credentials`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.credentialsJson).toBeNull();
+  });
+
+  it('should return 404 when source does not exist', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/issue-sources/99999/credentials`,
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('should return 404 when source belongs to a different project', async () => {
+    const db = getDatabase();
+    const otherProject = db.insertProject({
+      name: `cred-other-${Date.now()}`,
+      repoPath: `/tmp/cred-other-${Date.now()}`,
+      githubRepo: 'credother/repo',
+    });
+
+    const source = db.insertIssueSource({
+      projectId: otherProject.id,
+      provider: 'jira',
+      configJson: JSON.stringify({ projectKey: 'OTH' }),
+      credentialsJson: JSON.stringify({ email: 'a@b.com', apiToken: 'tok' }),
+    });
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/${projectId}/issue-sources/${source.id}/credentials`,
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('should return 404 when project does not exist', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/projects/99999/issue-sources/1/credentials',
     });
 
     expect(res.statusCode).toBe(404);

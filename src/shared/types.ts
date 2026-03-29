@@ -74,6 +74,18 @@ export interface ProjectIssueSource {
   createdAt: string;
 }
 
+/** API response shape for issue sources — credentials stripped, hasCredentials flag added */
+export interface ProjectIssueSourceResponse {
+  id: number;
+  projectId: number;
+  provider: string;
+  label: string | null;
+  configJson: string;
+  hasCredentials: boolean;
+  enabled: boolean;
+  createdAt: string;
+}
+
 /** Jira source configuration stored in configJson */
 export interface JiraSourceConfig {
   jiraUrl: string;

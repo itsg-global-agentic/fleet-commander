@@ -4,16 +4,36 @@
 // Registered as a Fastify plugin. Provides CRUD endpoints for managing
 // per-project issue sources (multi-provider support).
 //
-//   GET    /api/projects/:projectId/issue-sources              — list all sources
-//   POST   /api/projects/:projectId/issue-sources              — create a source
-//   PATCH  /api/projects/:projectId/issue-sources/:sourceId    — update a source
-//   DELETE /api/projects/:projectId/issue-sources/:sourceId    — delete a source
+//   GET    /api/projects/:projectId/issue-sources                          — list all sources
+//   POST   /api/projects/:projectId/issue-sources                          — create a source
+//   PATCH  /api/projects/:projectId/issue-sources/:sourceId                — update a source
+//   GET    /api/projects/:projectId/issue-sources/:sourceId/credentials    — get decrypted credentials
+//   DELETE /api/projects/:projectId/issue-sources/:sourceId                — delete a source
 // =============================================================================
 
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { getDatabase } from '../db.js';
 import { ServiceError, validationError, notFoundError } from '../services/service-error.js';
 import { parseIdParam } from '../utils/parse-params.js';
+import type { ProjectIssueSource, ProjectIssueSourceResponse } from '../../shared/types.js';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Strip credentialsJson from a source and replace with hasCredentials boolean */
+function toIssueSourceResponse(source: ProjectIssueSource): ProjectIssueSourceResponse {
+  return {
+    id: source.id,
+    projectId: source.projectId,
+    provider: source.provider,
+    label: source.label,
+    configJson: source.configJson,
+    hasCredentials: source.credentialsJson !== null && source.credentialsJson !== '',
+    enabled: source.enabled,
+    createdAt: source.createdAt,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Fastify plugin
@@ -36,7 +56,7 @@ async function issueSourcesRoutes(server: FastifyInstance): Promise<void> {
         }
 
         const sources = db.getIssueSources(projectId);
-        return { sources };
+        return { sources: sources.map(toIssueSourceResponse) };
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
           return reply.code(err.statusCode).send({ error: err.code, message: err.message });
@@ -95,7 +115,7 @@ async function issueSourcesRoutes(server: FastifyInstance): Promise<void> {
           credentialsJson: typeof body.credentialsJson === 'string' ? body.credentialsJson : null,
         });
 
-        return reply.code(201).send(source);
+        return reply.code(201).send(toIssueSourceResponse(source));
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
           return reply.code(err.statusCode).send({ error: err.code, message: err.message });
@@ -166,12 +186,53 @@ async function issueSourcesRoutes(server: FastifyInstance): Promise<void> {
           enabled: typeof body.enabled === 'boolean' ? body.enabled : undefined,
         });
 
-        return updated;
+        return toIssueSourceResponse(updated!);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
           return reply.code(err.statusCode).send({ error: err.code, message: err.message });
         }
         request.log.error(err, 'Failed to update issue source');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  );
+
+  /**
+   * GET /api/projects/:projectId/issue-sources/:sourceId/credentials
+   *
+   * Returns the decrypted credentialsJson for a single issue source.
+   * Used by the edit dialog to populate credential fields.
+   */
+  server.get<{ Params: { projectId: string; sourceId: string } }>(
+    '/api/projects/:projectId/issue-sources/:sourceId/credentials',
+    async (
+      request: FastifyRequest<{ Params: { projectId: string; sourceId: string } }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const projectId = parseIdParam(request.params.projectId, 'projectId');
+        const sourceId = parseIdParam(request.params.sourceId, 'sourceId');
+        const db = getDatabase();
+
+        const project = db.getProject(projectId);
+        if (!project) {
+          throw notFoundError(`Project ${projectId} not found`);
+        }
+
+        const source = db.getIssueSource(sourceId);
+        if (!source || source.projectId !== projectId) {
+          throw notFoundError(`Issue source ${sourceId} not found for project ${projectId}`);
+        }
+
+        return { credentialsJson: source.credentialsJson };
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        request.log.error(err, 'Failed to get issue source credentials');
         return reply.code(500).send({
           error: 'Internal Server Error',
           message: err instanceof Error ? err.message : String(err),

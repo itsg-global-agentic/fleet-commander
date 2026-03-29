@@ -6,7 +6,7 @@ import { CleanupModal } from '../components/CleanupModal';
 import { JiraSourceDialog } from '../components/JiraSourceDialog';
 import { OverflowMenu } from '../components/OverflowMenu';
 import { ChevronRightIcon, PencilIcon } from '../components/Icons';
-import type { ProjectSummary, ProjectStatus, ProjectGroup, ProjectIssueSource, RepoSettings } from '../../shared/types';
+import type { ProjectSummary, ProjectStatus, ProjectGroup, ProjectIssueSourceResponse, RepoSettings } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Status badge colors
@@ -362,14 +362,14 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
 // ---------------------------------------------------------------------------
 
 /** Status badge color: green=enabled+credentials, red=enabled+no credentials, gray=disabled */
-function sourceStatusColor(source: ProjectIssueSource): string {
+function sourceStatusColor(source: ProjectIssueSourceResponse): string {
   if (!source.enabled) return '#8B949E';
-  return source.credentialsJson ? '#3FB950' : '#F85149';
+  return source.hasCredentials ? '#3FB950' : '#F85149';
 }
 
-function sourceStatusLabel(source: ProjectIssueSource): string {
+function sourceStatusLabel(source: ProjectIssueSourceResponse): string {
   if (!source.enabled) return 'Disabled';
-  return source.credentialsJson ? 'Connected' : 'No credentials';
+  return source.hasCredentials ? 'Connected' : 'No credentials';
 }
 
 function IssueSourcesSection({
@@ -378,15 +378,15 @@ function IssueSourcesSection({
   projectId: number;
 }) {
   const api = useApi();
-  const [sources, setSources] = useState<ProjectIssueSource[]>([]);
+  const [sources, setSources] = useState<ProjectIssueSourceResponse[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingSource, setEditingSource] = useState<ProjectIssueSource | null>(null);
+  const [editingSource, setEditingSource] = useState<ProjectIssueSourceResponse | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
 
   const fetchSources = useCallback(async () => {
     try {
-      const data = await api.get<{ sources: ProjectIssueSource[] }>(`projects/${projectId}/issue-sources`);
+      const data = await api.get<{ sources: ProjectIssueSourceResponse[] }>(`projects/${projectId}/issue-sources`);
       setSources(Array.isArray(data.sources) ? data.sources : []);
     } catch {
       // Silently handle — sources section is supplementary
@@ -416,7 +416,7 @@ function IssueSourcesSection({
     await fetchSources();
   }, [api, projectId, editingSource, fetchSources]);
 
-  const handleToggle = useCallback(async (source: ProjectIssueSource) => {
+  const handleToggle = useCallback(async (source: ProjectIssueSourceResponse) => {
     const prev = sources;
     // Optimistic update
     setSources(sources.map((s) => s.id === source.id ? { ...s, enabled: !s.enabled } : s));

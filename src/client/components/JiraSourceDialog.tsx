@@ -6,7 +6,7 @@
 // =============================================================================
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import type { ProjectIssueSource, JiraSourceConfig, JiraSourceCredentials } from '../../shared/types';
+import type { ProjectIssueSourceResponse, JiraSourceConfig, JiraSourceCredentials } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -15,7 +15,7 @@ import type { ProjectIssueSource, JiraSourceConfig, JiraSourceCredentials } from
 interface JiraSourceDialogProps {
   open: boolean;
   projectId: number;
-  source?: ProjectIssueSource | null;
+  source?: ProjectIssueSourceResponse | null;
   onClose: () => void;
   onSave: (data: {
     provider: string;
@@ -55,7 +55,7 @@ export function JiraSourceDialog({ open, projectId, source, onClose, onSave }: J
   useEffect(() => {
     if (open) {
       if (source) {
-        // Edit mode: parse existing config/credentials
+        // Edit mode: parse existing config
         try {
           const config: JiraSourceConfig = JSON.parse(source.configJson);
           setJiraUrl(config.jiraUrl || '');
@@ -64,18 +64,26 @@ export function JiraSourceDialog({ open, projectId, source, onClose, onSave }: J
           setJiraUrl('');
           setProjectKey('');
         }
-        try {
-          if (source.credentialsJson) {
-            const creds: JiraSourceCredentials = JSON.parse(source.credentialsJson);
-            setEmail(creds.email || '');
-            setApiToken(creds.apiToken || '');
-          } else {
-            setEmail('');
-            setApiToken('');
-          }
-        } catch {
-          setEmail('');
-          setApiToken('');
+        // Fetch credentials from the dedicated endpoint
+        setEmail('');
+        setApiToken('');
+        if (source.hasCredentials) {
+          fetch(`/api/projects/${projectId}/issue-sources/${source.id}/credentials`)
+            .then((res) => res.json())
+            .then((data: { credentialsJson: string | null }) => {
+              if (data.credentialsJson) {
+                try {
+                  const creds: JiraSourceCredentials = JSON.parse(data.credentialsJson);
+                  setEmail(creds.email || '');
+                  setApiToken(creds.apiToken || '');
+                } catch {
+                  // Invalid credentials JSON — leave fields empty
+                }
+              }
+            })
+            .catch(() => {
+              // Failed to fetch credentials — leave fields empty
+            });
         }
         setLabel(source.label || '');
         setEnabled(source.enabled);
@@ -94,7 +102,7 @@ export function JiraSourceDialog({ open, projectId, source, onClose, onSave }: J
       setTesting(false);
       setTimeout(() => urlInputRef.current?.focus(), 50);
     }
-  }, [open, source]);
+  }, [open, source, projectId]);
 
   const validate = useCallback((): string | null => {
     if (!jiraUrl.trim()) return 'Jira URL is required';
