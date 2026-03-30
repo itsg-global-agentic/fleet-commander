@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.13 -->
+<!-- fleet-commander v0.0.12 -->
 <!-- Fleet Commander workflow template. Installed by Fleet Commander into your project. -->
 <!-- Placeholders fleet-commander, fleet-commander, main, {{ISSUE_NUMBER}} are replaced during installation. -->
 
@@ -75,16 +75,9 @@ The Diamond Team uses a file-based handoff pattern. Each agent produces a markdo
 | 2→3 | Dev | `changes.md` | Reviewer |
 | 3→TL | Reviewer | `review.md` | TL |
 
-**TL is the relay** — subagents never read each other's files directly. TL reads each file and includes the content in the next agent's spawn prompt. Files stay in the worktree (listed in `.gitignore`, never committed, cleaned up with the worktree).
+**TL is the relay** — subagents never read each other's files directly. TL reads each file, deletes it, and includes the content in the next agent's spawn prompt.
 
-**SendMessage = notification only** — agents write their file, then send a short ping to TL:
-- Planner: `"Done. Plan written to plan.md."`
-- Dev: `"Ready for review. Branch: {branch}. Changes in changes.md."`
-- Reviewer: `"Review complete. Verdict in review.md."`
-
-Agents NEVER put deliverable content in SendMessage. The file is the delivery mechanism, the message is just a ping.
-
-**Do NOT delete handoff files** — they are in `.gitignore` and will be cleaned up when the worktree is removed. Keeping them allows TL to re-read if needed.
+**Files are ephemeral** — each handoff file is written by the producer, read by the TL, then deleted. They are listed in `.gitignore` and must never be committed.
 
 ### TYPE to Guidebook Mapping
 
@@ -132,7 +125,7 @@ Note: These phases represent the workflow's internal progression, not FC's team 
 1. **TL reads `.fleet-issue-context.md`** from the worktree root (if it exists). This file contains the full issue body, comments, labels, acceptance criteria, and dependencies — pre-fetched by Fleet Commander at launch time.
 2. **TL spawns `fleet-planner`** with the full issue context included in the spawn prompt (see Planner Task Format below). The planner receives everything it needs — it should NOT need to call `gh issue view`. If `.fleet-issue-context.md` did not exist, tell the planner to fetch the issue itself via `gh issue view`.
 3. TL enters the Active Monitoring Loop (see below) while waiting for the plan.
-4. The planner stays alive after writing `plan.md`. Wait for the planner's ping via SendMessage (`"Done. Plan written to plan.md."`), or periodically check if `plan.md` exists (every 30s alongside TaskList). When the ping arrives or the file appears, read it and proceed to Phase 1. Do NOT wait for the planner to exit — it stays alive for p2p questions.
+4. The planner stays alive after writing `plan.md`. Periodically check if `plan.md` exists (every 30s alongside TaskList). When it appears, read it and proceed to Phase 1. Do NOT wait for the planner to exit — it stays alive for p2p questions.
 5. Planner analyzes the issue context (provided in its spawn prompt), explores the codebase, discovers guidebooks, and produces a structured plan.
 6. Planner writes the plan to `plan.md` in the worktree root. Planner stays alive for p2p questions from dev and reviewer.
 
@@ -149,7 +142,7 @@ After spawning the first agent, the TL enters a continuous monitoring loop that 
 3. **Between phases** (e.g., planner done, waiting for dev), actively verify the next agent is alive via `TaskList`. If the agent is gone, respawn it (within the respawn budget).
 4. **After each subagent phase completes, immediately proceed** to the next action:
    - **Planner done** — validate the plan — spawn dev with the plan context
-   - **Dev done** — read `changes.md` — spawn reviewer with branch context + changes report
+   - **Dev done** — read `changes.md`, delete it — spawn reviewer with branch context + changes report
    - **Reviewer done** — immediately proceed to PR creation (rebase, `gh pr create`, auto-merge)
 5. **Never passively wait** — if you have nothing to do, run `TaskList` to confirm all agents are healthy.
 
@@ -175,8 +168,8 @@ If `TaskList` shows an agent is no longer running:
 ## Phase 1 — Analysis
 
 1. Planner (spawned in Phase 0) reads the issue, explores the codebase, discovers guidebooks, and produces a structured plan
-2. **Planner writes the plan to `plan.md` in the worktree root** using the Write tool, then pings TL via SendMessage
-3. TL reads `plan.md` from the worktree root using the Read tool. Do NOT delete it — it stays in `.gitignore`. If `plan.md` does not exist after the planner's ping (or after 60 seconds), treat this as a planner failure and restart the planner (counts toward 5-spawn budget).
+2. **Planner writes the plan to `plan.md` in the worktree root**
+3. TL reads `plan.md` from the worktree root using the Read tool, then deletes it (`rm plan.md`) to keep the worktree clean. After the planner exits, check if `plan.md` exists. If it does not exist after 60 seconds, treat this as a planner failure and restart the planner (counts toward 5-spawn budget).
 4. TL validates the plan has all required fields (see format below)
 5. TL evaluates the plan:
    - `BLOCKED=yes` → state Blocked, comment on issue, STOP
@@ -233,9 +226,9 @@ If the Planner is unresponsive for >5 minutes or produces an unusable plan:
 1. **TL spawns `fleet-dev`** with the planner's plan included in the task prompt (see Dev Task Format below)
 2. Dev starts implementing immediately — it has the plan, guidebook paths, and all context it needs
 3. Dev implements, tests locally, commits atomically
-4. **Dev writes `changes.md`** to the worktree root using the Write tool (see Changes Report Format below) — summarizing what changed, decisions made, test results, and `git diff --stat` output
-5. **Dev pings TL** via SendMessage: `"Ready for review. Branch: {branch}. Changes in changes.md."` — the message is just a ping, report content is in the file
-6. TL reads `changes.md` (do NOT delete it) and transitions to Phase 3 — spawns reviewer with the changes report included in the spawn prompt
+4. **Dev writes `changes.md`** to the worktree root (see Changes Report Format below) — summarizing what changed, decisions made, test results, and `git diff --stat` output
+5. **Dev sends review request directly to TL** via `SendMessage`: "Ready for review. Branch: `{branch}`"
+6. TL reads `changes.md`, deletes it, and transitions to Phase 3 — spawns reviewer with the changes report included in the spawn prompt
 
 ### Planner Task Format (sent via TaskCreate at spawn)
 
@@ -335,14 +328,14 @@ INSTRUCTIONS:
 
 ## Phase 3 — Review (Peer-to-Peer)
 
-1. **TL reads `changes.md`** from the worktree root (written by dev). This contains the dev's change summary, decisions, test results, and diff stats. Do NOT delete it — it stays in `.gitignore`.
+1. **TL reads `changes.md`** from the worktree root (written by dev). This contains the dev's change summary, decisions, test results, and diff stats. Delete it after reading (`rm changes.md`).
 2. **TL spawns `fleet-reviewer`** with the branch name, issue context, guidebook paths, and the dev's changes report (see Reviewer Task Format below)
 3. Reviewer starts reviewing immediately — it has all the context it needs, including the dev's own account of what changed and why
 4. **Dev and reviewer already know each other's names** (set at spawn time). No TL introduction needed.
 5. **TL steps back.** The dev-reviewer loop runs peer-to-peer:
    - Reviewer performs two-pass review (code quality + acceptance)
    - **REJECT** → reviewer sends actionable feedback directly to dev → dev fixes and re-requests review from reviewer directly
-   - **APPROVE** → reviewer writes `review.md` using Write tool, pings TL, and waits for shutdown_request
+   - **APPROVE** → reviewer writes `review.md` and waits for shutdown_request
 6. TL monitors but does NOT intervene unless:
    - **3 review rounds exhausted** → TL arbitrates (see Error Handling)
    - **Agent stuck** (10min idle) → TL sends a nudge
@@ -371,13 +364,13 @@ INSTRUCTIONS:
 4. Verify against the actual `git diff` — the changes report is the dev's account, not a substitute for reviewing the code
 5. Two-pass review: code quality + acceptance criteria from the issue
 6. Send rejection feedback DIRECTLY to dev via SendMessage
-7. Write final verdict to review.md in the worktree root using the Write tool, then ping TL: "Review complete. Verdict in review.md."
+7. Write final verdict to review.md in the worktree root (do NOT use SendMessage for the verdict)
 
 PEERS:
 - Dev agent name: dev
 - Planner agent name: planner
 - Send rejection feedback DIRECTLY to dev via SendMessage
-- Write final verdict (APPROVE or CHANGES_NEEDED) to review.md using Write tool — then ping TL (SendMessage is only the ping, NOT the verdict)
+- Write final verdict (APPROVE or CHANGES_NEEDED) to review.md — TL reads it
 
 If you reject, include a numbered list of specific, actionable fixes with file:line references.
 Dev will fix and message you directly when ready for re-review.
@@ -387,10 +380,11 @@ After 3rd round, write review.md with CHANGES_NEEDED and wait for shutdown_reque
 
 ### TL Reads review.md
 
-After the reviewer writes `review.md` and pings TL, the TL reads it from the worktree root. Do NOT delete it — it stays in `.gitignore`. The reviewer stays alive briefly for shutdown_request. If `review.md` does not exist after the reviewer's ping (or after 60 seconds), treat this as a reviewer failure and restart the reviewer (counts toward 5-spawn budget).
+After the reviewer writes `review.md`, the TL reads it from the worktree root and deletes it — following the same lifecycle as `plan.md` in Phase 1. The reviewer stays alive briefly for shutdown_request. Check if `review.md` exists. If it does not exist after 60 seconds, treat this as a reviewer failure and restart the reviewer (counts toward 5-spawn budget).
 
-1. **Read** `review.md` using the Read tool (do NOT delete it)
-2. **Act on the verdict**:
+1. **Read** `review.md` using the Read tool
+2. **Delete** it: `rm review.md`
+3. **Act on the verdict**:
    - `Status: APPROVE` → proceed to Phase 4 (PR creation)
    - `Status: CHANGES_NEEDED` → relay the issues to the dev via SendMessage, dev fixes, and TL re-spawns the reviewer (or arbitrates if rounds are exhausted)
 
@@ -609,22 +603,20 @@ Atomic commits — each commit should be a logical unit.
 | Respawning agent after 2 min idle | Idle is normal — only act at 10min stuck threshold |
 | TL monitors CI manually | FC handles CI monitoring and sends updates via stdin |
 | TL goes idle after spawning agents without monitoring | TL runs active monitoring loop between phases |
-| Planner puts plan content in SendMessage | Planner writes plan.md, pings TL: "Done. Plan in plan.md." — TL reads file directly |
-| Dev puts changes report in SendMessage | Dev writes changes.md, pings TL: "Ready. Changes in changes.md." — TL reads file directly |
-| Reviewer puts verdict in SendMessage | Reviewer writes review.md, pings TL: "Review complete. Verdict in review.md." — TL reads file directly |
-| Dev skips writing changes.md | Dev writes changes.md before pinging TL — TL passes content to reviewer |
-| TL deletes handoff files (plan.md, changes.md, review.md) | Leave them — they're in .gitignore and cleaned up with the worktree |
+| Planner uses SendMessage to deliver plan | Planner writes plan.md file — TL reads it directly |
+| Dev skips writing changes.md | Dev writes changes.md before reporting ready — TL passes it to reviewer |
+| Reviewer uses SendMessage to deliver verdict | Reviewer writes review.md file — TL reads it directly |
 | Subagents read each other's handoff files | TL is the relay — reads each file, deletes it, pastes content into next spawn prompt |
 
 ## Decision Summary
 
 ```
 Phase 0: TL → spawn planner only
-Phase 1: Planner analyzes → writes plan.md → pings TL → TL reads plan.md → planner stays alive for p2p questions
+Phase 1: Planner analyzes → writes plan.md → TL reads plan.md → planner stays alive for p2p questions
          TL validates plan → spawns dev WITH the plan context
-Phase 2: Dev implements immediately (has plan) → writes changes.md → pings TL ("Ready for review")
+Phase 2: Dev implements immediately (has plan) → writes changes.md → reports "ready for review" to TL
          TL reads changes.md → spawns reviewer WITH branch context + changes report
-Phase 3: Reviewer reviews immediately (has branch + changes report) → dev + reviewer iterate p2p → reviewer writes review.md → pings TL → TL reads review.md
+Phase 3: Reviewer reviews immediately (has branch + changes report) → dev + reviewer iterate p2p → reviewer writes review.md → TL reads review.md
 Phase 4: TL → rebase → create PR → set auto-merge → FC monitors CI
 Phase 5: TL → close issue → shutdown agents → finish
 ```
