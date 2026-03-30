@@ -198,6 +198,77 @@ describe('TeamRow', () => {
     expect(screen.getByText('thinking...')).toBeInTheDocument();
   });
 
+  // -------------------------------------------------------------------------
+  // Retry / Restart buttons for failed teams
+  // -------------------------------------------------------------------------
+
+  it('shows Retry button for failed teams', () => {
+    renderRow(fullTeam({ status: 'failed' }));
+    expect(screen.getByTitle('Re-queue team (respects queue order)')).toBeInTheDocument();
+  });
+
+  it('shows Restart button for failed teams', () => {
+    renderRow(fullTeam({ status: 'failed' }));
+    expect(screen.getByTitle('Restart team (bypasses queue)')).toBeInTheDocument();
+  });
+
+  it('does not show Retry button for running teams', () => {
+    renderRow(fullTeam({ status: 'running' }));
+    expect(screen.queryByTitle('Re-queue team (respects queue order)')).not.toBeInTheDocument();
+  });
+
+  it('does not show Restart button for done teams', () => {
+    renderRow(fullTeam({ status: 'done' }));
+    expect(screen.queryByTitle('Restart team (bypasses queue)')).not.toBeInTheDocument();
+  });
+
+  it('calls resume API when Retry is clicked', async () => {
+    const team = fullTeam({ id: 99, status: 'failed' });
+    renderRow(team);
+    const retryBtn = screen.getByTitle('Re-queue team (respects queue order)');
+    await fireEvent.click(retryBtn);
+    expect(mockPost).toHaveBeenCalledWith('teams/99/resume');
+  });
+
+  it('calls restart API when Restart is clicked', async () => {
+    const team = fullTeam({ id: 77, status: 'failed' });
+    renderRow(team);
+    const restartBtn = screen.getByTitle('Restart team (bypasses queue)');
+    await fireEvent.click(restartBtn);
+    expect(mockPost).toHaveBeenCalledWith('teams/77/restart');
+  });
+
+  it('shows loading state on Retry button while retrying', async () => {
+    // Make the post hang indefinitely so we can observe the loading state
+    let resolvePost!: () => void;
+    mockPost.mockImplementation(() => new Promise<void>(r => { resolvePost = r; }));
+    const team = fullTeam({ id: 10, status: 'failed' });
+    renderRow(team);
+    const retryBtn = screen.getByTitle('Re-queue team (respects queue order)');
+    expect(retryBtn.textContent).toBe('Retry');
+    fireEvent.click(retryBtn);
+    // Wait for the state update to propagate
+    await vi.waitFor(() => {
+      expect(retryBtn.textContent).toBe('Retrying\u2026');
+    });
+    // Resolve the pending post to clean up
+    resolvePost();
+  });
+
+  it('shows loading state on Restart button while restarting', async () => {
+    let resolvePost!: () => void;
+    mockPost.mockImplementation(() => new Promise<void>(r => { resolvePost = r; }));
+    const team = fullTeam({ id: 11, status: 'failed' });
+    renderRow(team);
+    const restartBtn = screen.getByTitle('Restart team (bypasses queue)');
+    expect(restartBtn.textContent).toBe('Restart');
+    fireEvent.click(restartBtn);
+    await vi.waitFor(() => {
+      expect(restartBtn.textContent).toBe('Restarting\u2026');
+    });
+    resolvePost();
+  });
+
   it('does not re-render when props are reference-equal', () => {
     const team = fullTeam();
     const onSelect = vi.fn();

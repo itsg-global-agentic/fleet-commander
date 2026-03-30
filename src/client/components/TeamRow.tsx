@@ -91,6 +91,8 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
   const api = useApi();
   const [stopping, setStopping] = useState(false);
   const [forceLaunching, setForceLaunching] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [restarting, setRestarting] = useState(false);
 
   const handleStop = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -115,6 +117,32 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
       // Ignore — the SSE stream will reflect actual state
     } finally {
       setForceLaunching(false);
+    }
+  };
+
+  const handleRetry = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (retrying) return;
+    setRetrying(true);
+    try {
+      await api.post(`teams/${team.id}/resume`);
+    } catch {
+      // Ignore — the SSE stream will reflect actual state
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const handleRestart = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (restarting) return;
+    setRestarting(true);
+    try {
+      await api.post(`teams/${team.id}/restart`);
+    } catch {
+      // Ignore — the SSE stream will reflect actual state
+    } finally {
+      setRestarting(false);
     }
   };
 
@@ -245,6 +273,26 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
             >
               {stopping ? 'Stopping\u2026' : 'Stop'}
             </button>
+          )}
+          {team.status === 'failed' && (
+            <>
+              <button
+                onClick={handleRetry}
+                disabled={retrying}
+                className="px-2 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-[#3FB950] hover:border-[#3FB950]/50 transition-colors disabled:opacity-50"
+                title="Re-queue team (respects queue order)"
+              >
+                {retrying ? 'Retrying\u2026' : 'Retry'}
+              </button>
+              <button
+                onClick={handleRestart}
+                disabled={restarting}
+                className="px-2 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-dark-accent hover:border-dark-accent/50 transition-colors disabled:opacity-50"
+                title="Restart team (bypasses queue)"
+              >
+                {restarting ? 'Restarting\u2026' : 'Restart'}
+              </button>
+            </>
           )}
         </span>
       </td>
