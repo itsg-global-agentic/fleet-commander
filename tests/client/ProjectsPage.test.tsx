@@ -99,6 +99,8 @@ describe('ProjectsPage', () => {
     mockPost.mockReset();
     mockPut.mockReset();
     mockDel.mockReset();
+    // Clear persisted expand state between tests to prevent cross-contamination
+    localStorage.removeItem('fleet-projects-expanded');
   });
 
   afterEach(() => {
@@ -333,5 +335,84 @@ describe('ProjectsPage', () => {
     await screen.findByText('test-project');
     expect(mockGet).toHaveBeenCalledWith('projects');
     expect(mockGet).toHaveBeenCalledWith('project-groups');
+  });
+
+  // -----------------------------------------------------------------------
+  // Expand/collapse persistence (issue #630)
+  // -----------------------------------------------------------------------
+
+  it('persists project card expand state to localStorage', async () => {
+    setupDefaultMocks([makeProject({ id: 1, name: 'persist-proj' })]);
+    render(<ProjectsPage />);
+    const projectName = await screen.findByText('persist-proj');
+    const row = projectName.closest('[class*="cursor-pointer"]');
+    expect(row).not.toBeNull();
+
+    // Expand the project card
+    fireEvent.click(row!);
+    await screen.findByText('Repository');
+
+    // Verify localStorage was written with the project key
+    const stored = JSON.parse(localStorage.getItem('fleet-projects-expanded') || '[]');
+    expect(stored).toContain('project:1');
+  });
+
+  it('restores expanded project state from localStorage on mount', async () => {
+    // Pre-populate localStorage with an expanded project
+    localStorage.setItem('fleet-projects-expanded', JSON.stringify(['project:1', 'group:ungrouped']));
+
+    setupDefaultMocks([makeProject({ id: 1, name: 'restored-proj' })]);
+    render(<ProjectsPage />);
+
+    // Project details should be visible without clicking (restored from storage)
+    expect(await screen.findByText('Repository')).toBeInTheDocument();
+    expect(await screen.findByText('Configuration')).toBeInTheDocument();
+  });
+
+  it('persists group collapse state to localStorage', async () => {
+    const group = makeGroup({ id: 5, name: 'Collapsible Group' });
+    setupDefaultMocks(
+      [makeProject({ id: 1, name: 'group-proj', groupId: 5 })],
+      [group],
+    );
+    render(<ProjectsPage />);
+
+    // Group should start expanded (default behavior)
+    expect(await screen.findByText('group-proj')).toBeInTheDocument();
+
+    // Collapse the group by clicking its header
+    const groupButton = screen.getByText('Collapsible Group').closest('button');
+    expect(groupButton).not.toBeNull();
+    fireEvent.click(groupButton!);
+
+    // Project inside group should no longer be visible
+    await waitFor(() => {
+      expect(screen.queryByText('group-proj')).not.toBeInTheDocument();
+    });
+
+    // Verify localStorage reflects the collapsed state (group:5 removed from expanded set)
+    const stored = JSON.parse(localStorage.getItem('fleet-projects-expanded') || '[]');
+    expect(stored).not.toContain('group:5');
+  });
+
+  it('survives page refresh by restoring from localStorage', async () => {
+    const group = makeGroup({ id: 3, name: 'Persistent Group' });
+    // Pre-populate localStorage: group:3 expanded, project:2 expanded
+    localStorage.setItem(
+      'fleet-projects-expanded',
+      JSON.stringify(['group:3', 'project:2']),
+    );
+
+    setupDefaultMocks(
+      [makeProject({ id: 2, name: 'expanded-proj', groupId: 3 })],
+      [group],
+    );
+    render(<ProjectsPage />);
+
+    // Group should be expanded (from localStorage)
+    expect(await screen.findByText('expanded-proj')).toBeInTheDocument();
+
+    // Project should be expanded (from localStorage) — check for detail content
+    expect(await screen.findByText('Repository')).toBeInTheDocument();
   });
 });

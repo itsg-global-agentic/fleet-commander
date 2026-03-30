@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useApi } from '../hooks/useApi';
 import { useInlineEdit } from '../hooks/useInlineEdit';
+import { useExpandState } from '../hooks/useExpandState';
 import { AddProjectDialog } from '../components/AddProjectDialog';
 import { CleanupModal } from '../components/CleanupModal';
 import { JiraSourceDialog } from '../components/JiraSourceDialog';
@@ -580,6 +581,8 @@ function ProjectCard({
   groups,
   reinstalling,
   reinstallResult,
+  expanded,
+  onToggleExpand,
   onSaveLimit,
   onSaveModel,
   onReinstall,
@@ -594,6 +597,8 @@ function ProjectCard({
   groups: ProjectGroupWithCount[];
   reinstalling: number | null;
   reinstallResult: { id: number; ok: boolean; error?: string } | null;
+  expanded: boolean;
+  onToggleExpand: () => void;
   onSaveLimit: (projectId: number, value: number) => void;
   onSaveModel: (projectId: number, value: string) => void;
   onReinstall: (p: ProjectSummary) => void;
@@ -604,7 +609,6 @@ function ProjectCard({
   fetchRepoSettings: (projectId: number) => Promise<RepoSettings | null>;
   onCommitClaudeFiles: (projectId: number, options?: { reinstall?: boolean }) => Promise<{ ok: boolean; error?: string; message?: string }>;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const [repoSettings, setRepoSettings] = useState<RepoSettings | null | undefined>(undefined);
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<{ ok: boolean; error?: string; message?: string } | null>(null);
@@ -647,7 +651,7 @@ function ProjectCard({
       {/* ── Tier 1: Compact summary line ── */}
       <div
         className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-dark-border/10 transition-colors"
-        onClick={() => setExpanded(!expanded)}
+        onClick={onToggleExpand}
       >
         {/* Chevron */}
         <ChevronRightIcon
@@ -960,7 +964,8 @@ function GroupSection({
   title,
   description,
   projectCount,
-  defaultExpanded,
+  expanded,
+  onToggleExpand,
   onEdit,
   onDelete,
   children,
@@ -968,17 +973,16 @@ function GroupSection({
   title: string;
   description?: string | null;
   projectCount: number;
-  defaultExpanded?: boolean;
+  expanded: boolean;
+  onToggleExpand: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
   children: React.ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded ?? true);
-
   return (
     <div className="mb-4">
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={onToggleExpand}
         className="flex items-center gap-2 w-full text-left py-2 group"
       >
         <svg
@@ -1145,6 +1149,9 @@ export function ProjectsPage() {
   const [groups, setGroups] = useState<ProjectGroupWithCount[]>([]);
   const [loading, setLoading] = useState(true);
   const [addOpen, setAddOpen] = useState(false);
+
+  // Expand/collapse persistence
+  const expandState = useExpandState();
 
   // Group dialog state
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -1440,6 +1447,16 @@ export function ProjectsPage() {
     return { groupedSections: sections, ungroupedProjects: ungrouped };
   }, [projects, groups]);
 
+  // Seed default expanded state for groups on first load (all groups expanded)
+  useEffect(() => {
+    if (groups.length === 0 && ungroupedProjects.length === 0) return;
+    const defaultExpanded = [
+      ...groups.map((g) => `group:${g.id}`),
+      ...(ungroupedProjects.length > 0 ? ['group:ungrouped'] : []),
+    ];
+    expandState.seedExpanded(defaultExpanded);
+  }, [groups, ungroupedProjects.length, expandState.seedExpanded]);
+
   // Shared card props
   const cardProps = {
     groups,
@@ -1518,6 +1535,8 @@ export function ProjectsPage() {
                 title={group.name}
                 description={group.description}
                 projectCount={groupProjects.length}
+                expanded={expandState.isExpanded(`group:${group.id}`)}
+                onToggleExpand={() => expandState.toggle(`group:${group.id}`)}
                 onEdit={() => handleEditGroup(group)}
                 onDelete={() => handleDeleteGroup(group)}
               >
@@ -1528,6 +1547,8 @@ export function ProjectsPage() {
                     <ProjectCard
                       key={project.id}
                       project={project}
+                      expanded={expandState.isExpanded(`project:${project.id}`)}
+                      onToggleExpand={() => expandState.toggle(`project:${project.id}`)}
                       {...cardProps}
                     />
                   ))
@@ -1540,12 +1561,15 @@ export function ProjectsPage() {
               <GroupSection
                 title="Ungrouped"
                 projectCount={ungroupedProjects.length}
-                defaultExpanded={true}
+                expanded={expandState.isExpanded('group:ungrouped')}
+                onToggleExpand={() => expandState.toggle('group:ungrouped')}
               >
                 {ungroupedProjects.map((project) => (
                   <ProjectCard
                     key={project.id}
                     project={project}
+                    expanded={expandState.isExpanded(`project:${project.id}`)}
+                    onToggleExpand={() => expandState.toggle(`project:${project.id}`)}
                     {...cardProps}
                   />
                 ))}
