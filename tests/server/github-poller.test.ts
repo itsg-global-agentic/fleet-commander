@@ -215,6 +215,9 @@ describe('PR state transitions', () => {
 
     // Graceful shutdown should be initiated
     expect(mockManager.gracefulShutdown).toHaveBeenCalledWith(1, 42, 120000);
+
+    // Queue should be processed immediately to advance queued teams
+    expect(mockManager.processQueue).toHaveBeenCalledWith(1);
   });
 
   it('does not call gracefulShutdown again when team is already done', async () => {
@@ -244,11 +247,43 @@ describe('PR state transitions', () => {
 
     // gracefulShutdown should NOT be called since team is already done
     expect(mockManager.gracefulShutdown).not.toHaveBeenCalled();
+    // processQueue should NOT be called since team is already done
+    expect(mockManager.processQueue).not.toHaveBeenCalled();
     // mergedAt should NOT be written again either
     expect(mockDb.updatePullRequest).not.toHaveBeenCalledWith(
       42,
       expect.objectContaining({ mergedAt: expect.any(String) }),
     );
+  });
+
+  it('calls processQueue immediately on PR merge to advance queued teams', async () => {
+    const project = makeProject({ id: 7 });
+    const team = makeTeam({ id: 5, prNumber: 99, status: 'running', projectId: 7 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 99,
+      state: 'open',
+      ciStatus: 'passing',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+    mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        state: 'CLOSED',
+        mergedAt: '2025-06-15T12:00:00Z',
+      }),
+    );
+
+    await githubPoller.poll();
+
+    // processQueue should be called with the team's projectId immediately
+    expect(mockManager.processQueue).toHaveBeenCalledWith(7);
+    // And it should be called exactly once (not duplicated)
+    expect(mockManager.processQueue).toHaveBeenCalledTimes(1);
   });
 
   it('detects new PR state (no existing PR record) and inserts it', async () => {

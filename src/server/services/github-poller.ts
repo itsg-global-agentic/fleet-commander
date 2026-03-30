@@ -482,6 +482,16 @@ class GitHubPoller {
           const { getTeamManager } = await import('./team-manager.js');
           const manager = getTeamManager();
           manager.gracefulShutdown(teamId, prNumber, config.mergeShutdownGraceMs);
+
+          // Immediately advance the queue — the slot is already free (status=done)
+          if (team.projectId) {
+            manager.processQueue(team.projectId).catch((err) => {
+              console.error(
+                `[GitHubPoller] processQueue error after PR merge for team ${teamId}:`,
+                err instanceof Error ? err.message : err,
+              );
+            });
+          }
         } catch (err) {
           console.error(`[GitHubPoller] Failed to initiate graceful shutdown for team ${teamId}:`, err);
         }
