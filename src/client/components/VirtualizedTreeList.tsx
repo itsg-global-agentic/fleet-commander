@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { TreeNode, type IssueNode } from './TreeNode';
 import type { FlatTreeRow } from '../hooks/useVirtualizedTree';
 import type { PrioritizedIssue } from '../../shared/types';
+import type { IssueRelations } from '../../shared/issue-provider';
 
 // ---------------------------------------------------------------------------
 // Props
@@ -21,6 +22,14 @@ interface VirtualizedTreeListProps {
   prioritizing?: boolean;
   collapsedNodes: Set<string>;
   onToggleCollapse: (nodeId: string) => void;
+  /** Relations panel: set of issue keys with open panels */
+  relationsOpenKeys?: Set<string>;
+  /** Relations panel: toggle callback */
+  onToggleRelations?: (issueKey: string) => void;
+  /** Relations panel: cached relations data */
+  relationsMap?: Map<string, IssueRelations>;
+  /** Relations panel: relation change callback */
+  onRelationChanged?: (issueKey: string) => void;
   /** Additional CSS class for the scrollable container */
   className?: string;
 }
@@ -45,6 +54,10 @@ export const VirtualizedTreeList = React.memo(function VirtualizedTreeList({
   prioritizing,
   collapsedNodes,
   onToggleCollapse,
+  relationsOpenKeys,
+  onToggleRelations,
+  relationsMap,
+  onRelationChanged,
   className,
 }: VirtualizedTreeListProps) {
   const parentRef = useRef<HTMLDivElement>(null);
@@ -110,6 +123,10 @@ export const VirtualizedTreeList = React.memo(function VirtualizedTreeList({
                 prioritizing={prioritizing}
                 collapsedNodes={collapsedNodes}
                 onToggleCollapse={onToggleCollapse}
+                relationsOpenKeys={relationsOpenKeys}
+                onToggleRelations={onToggleRelations}
+                relationsMap={relationsMap}
+                onRelationChanged={onRelationChanged}
               />
             </div>
           );

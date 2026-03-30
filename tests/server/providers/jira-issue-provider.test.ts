@@ -588,3 +588,177 @@ describe('JiraIssueProvider.fetchAllOpenIssues', () => {
     expect(issues[2].key).toBe('TEST-3');
   });
 });
+
+// ---------------------------------------------------------------------------
+// Relations CRUD
+// ---------------------------------------------------------------------------
+
+describe('JiraIssueProvider.getRelationsJira', () => {
+  it('should parse relations from Jira issue response', async () => {
+    const provider = new JiraIssueProvider(makeConfig());
+
+    mockFetchResponse({
+      key: 'TEST-42',
+      id: '10042',
+      fields: {
+        summary: 'Main issue',
+        status: { name: 'In Progress', statusCategory: { key: 'indeterminate', name: 'In Progress' } },
+        parent: { key: 'TEST-10', fields: { summary: 'Parent issue' } },
+        subtasks: [
+          { key: 'TEST-43', fields: { summary: 'Sub task 1', status: { name: 'Open', statusCategory: { key: 'new', name: 'To Do' } } } },
+        ],
+        issuelinks: [
+          {
+            id: '100',
+            type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+            inwardIssue: { key: 'TEST-20', fields: { summary: 'Blocker issue', status: { name: 'Open', statusCategory: { key: 'new', name: 'To Do' } } } },
+          },
+          {
+            id: '101',
+            type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+            outwardIssue: { key: 'TEST-30', fields: { summary: 'Blocked issue', status: { name: 'Done', statusCategory: { key: 'done', name: 'Done' } } } },
+          },
+        ],
+      },
+      self: 'https://test.atlassian.net/rest/api/3/issue/10042',
+    });
+
+    const relations = await provider.getRelationsJira('TEST-42');
+
+    expect(relations.parent).not.toBeNull();
+    expect(relations.parent!.key).toBe('TEST-10');
+    expect(relations.parent!.title).toBe('Parent issue');
+    expect(relations.children).toHaveLength(1);
+    expect(relations.children[0].key).toBe('TEST-43');
+    expect(relations.blockedBy).toHaveLength(1);
+    expect(relations.blockedBy[0].key).toBe('TEST-20');
+    expect(relations.blocking).toHaveLength(1);
+    expect(relations.blocking[0].key).toBe('TEST-30');
+  });
+});
+
+describe('JiraIssueProvider.addBlockedByJira', () => {
+  it('should POST correct issue link body', async () => {
+    const provider = new JiraIssueProvider(makeConfig());
+
+    // Mock the POST response (201, no body content — will be handled by status check)
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 201,
+      json: async () => ({}),
+      text: async () => '{}',
+    } as Response);
+
+    await provider.addBlockedByJira('TEST-42', 'TEST-20');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const callArgs = fetchMock.mock.calls[0];
+    expect(callArgs[0]).toContain('/rest/api/3/issueLink');
+    const body = JSON.parse(callArgs[1].body);
+    expect(body.type.name).toBe('Blocks');
+    expect(body.inwardIssue.key).toBe('TEST-20');
+    expect(body.outwardIssue.key).toBe('TEST-42');
+  });
+});
+
+describe('JiraIssueProvider.removeBlockedByJira', () => {
+  it('should find and delete the correct issue link', async () => {
+    const provider = new JiraIssueProvider(makeConfig());
+
+    // First fetch: get issue with issuelinks
+    mockFetchResponse({
+      key: 'TEST-42',
+      id: '10042',
+      fields: {
+        summary: 'Issue',
+        status: { name: 'Open', statusCategory: { key: 'new', name: 'To Do' } },
+        issuetype: { name: 'Story', subtask: false },
+        issuelinks: [
+          {
+            id: '100',
+            type: { name: 'Blocks', inward: 'is blocked by', outward: 'blocks' },
+            inwardIssue: { key: 'TEST-20', fields: { summary: 'Blocker', status: { name: 'Open', statusCategory: { key: 'new', name: 'To Do' } } } },
+          },
+        ],
+      },
+      self: 'https://test.atlassian.net/rest/api/3/issue/10042',
+    });
+
+    // Second fetch: DELETE issueLink (204 No Content)
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 204,
+      json: async () => undefined,
+      text: async () => '',
+    } as unknown as Response);
+
+    await provider.removeBlockedByJira('TEST-42', 'TEST-20');
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const deleteCall = fetchMock.mock.calls[1];
+    expect(deleteCall[0]).toContain('/rest/api/3/issueLink/100');
+    expect(deleteCall[1].method).toBe('DELETE');
+  });
+
+  it('should throw when no matching link is found', async () => {
+    const provider = new JiraIssueProvider(makeConfig());
+
+    mockFetchResponse({
+      key: 'TEST-42',
+      id: '10042',
+      fields: {
+        summary: 'Issue',
+        status: { name: 'Open', statusCategory: { key: 'new', name: 'To Do' } },
+        issuetype: { name: 'Story', subtask: false },
+        issuelinks: [],
+      },
+      self: 'https://test.atlassian.net/rest/api/3/issue/10042',
+    });
+
+    await expect(provider.removeBlockedByJira('TEST-42', 'TEST-99'))
+      .rejects.toThrow('No "blocked by" link found');
+  });
+});
+
+describe('JiraIssueProvider.setParentJira', () => {
+  it('should PUT correct parent field', async () => {
+    const provider = new JiraIssueProvider(makeConfig());
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 204,
+      json: async () => undefined,
+      text: async () => '',
+    } as unknown as Response);
+
+    await provider.setParentJira('TEST-42', 'TEST-10');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const callArgs = fetchMock.mock.calls[0];
+    expect(callArgs[0]).toContain('/rest/api/3/issue/TEST-42');
+    expect(callArgs[1].method).toBe('PUT');
+    const body = JSON.parse(callArgs[1].body);
+    expect(body.fields.parent.key).toBe('TEST-10');
+  });
+});
+
+describe('JiraIssueProvider.removeParentJira', () => {
+  it('should PUT null parent field', async () => {
+    const provider = new JiraIssueProvider(makeConfig());
+
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 204,
+      json: async () => undefined,
+      text: async () => '',
+    } as unknown as Response);
+
+    await provider.removeParentJira('TEST-42');
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const callArgs = fetchMock.mock.calls[0];
+    expect(callArgs[1].method).toBe('PUT');
+    const body = JSON.parse(callArgs[1].body);
+    expect(body.fields.parent).toBeNull();
+  });
+});

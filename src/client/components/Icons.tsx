@@ -283,6 +283,28 @@ export function DependencyGraphIcon({ size = 20, className }: IconProps) {
  * Maps a provider name to its icon component.
  * Falls back to a generic circle icon for unknown providers.
  */
+export function LinkIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+    </svg>
+  );
+}
+
+export function XIcon({ size = 14, className }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <line x1="18" y1="6" x2="6" y2="18" />
+      <line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+  );
+}
+
+/**
+ * Maps a provider name to its icon component.
+ * Falls back to a generic circle icon for unknown providers.
+ */
 export function ProviderIcon({ provider, size = 14, className }: { provider: string; size?: number; className?: string }) {
   switch (provider) {
     case 'github':

@@ -1,6 +1,7 @@
 import { FastifyReply } from 'fastify';
 import { randomUUID } from 'crypto';
 import type { UsageZone } from '../../shared/types.js';
+import type { IssueRelations } from '../../shared/issue-provider.js';
 
 // ---------------------------------------------------------------------------
 // Stream Event — JSON objects from Claude Code's --output-format stream-json
@@ -34,7 +35,8 @@ export type SSEEventType =
   | 'dependency_resolved'
   | 'team_thinking_start'
   | 'team_thinking_stop'
-  | 'task_updated';
+  | 'task_updated'
+  | 'relations_updated';
 
 /** Payload shapes for each event type */
 export interface SSEEventPayloads {
@@ -55,6 +57,7 @@ export interface SSEEventPayloads {
   team_thinking_start: { team_id: number };
   team_thinking_stop: { team_id: number; duration_ms: number };
   task_updated: { team_id: number; task_id: string; subject: string; status: string; owner: string };
+  relations_updated: { project_id: number; issue_key: string; relations: IssueRelations };
 }
 
 // ---------------------------------------------------------------------------

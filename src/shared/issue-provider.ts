@@ -53,6 +53,32 @@ export interface GenericIssue {
 }
 
 // ---------------------------------------------------------------------------
+// Issue Relation Reference (for relations CRUD)
+// ---------------------------------------------------------------------------
+
+/** A reference to a related issue (parent, child, blocker, etc.). */
+export interface IssueRelationRef {
+  /** Universal issue key (e.g. "42" for GitHub, "PROJ-123" for Jira) */
+  key: string;
+  /** Issue title */
+  title: string;
+  /** Normalized status of the related issue */
+  state: NormalizedStatus;
+}
+
+/** Full set of relations for an issue. */
+export interface IssueRelations {
+  /** Parent issue, or null if top-level */
+  parent: IssueRelationRef | null;
+  /** Child / sub-issues */
+  children: IssueRelationRef[];
+  /** Issues that block this one */
+  blockedBy: IssueRelationRef[];
+  /** Issues that this one blocks */
+  blocking: IssueRelationRef[];
+}
+
+// ---------------------------------------------------------------------------
 // Dependency Reference
 // ---------------------------------------------------------------------------
 
@@ -156,6 +182,22 @@ export interface IssueProvider {
   getDependencies(key: string): Promise<GenericDependencyRef[]>;
   /** Get pull requests linked to a given issue. */
   getLinkedPRs(key: string): Promise<LinkedPR[]>;
+
+  // Relations CRUD (optional — check capabilities.dependencies / capabilities.subIssues)
+  /** Get all relations for an issue. */
+  getRelations?(key: string, ...args: unknown[]): Promise<IssueRelations>;
+  /** Mark issueKey as blocked by blockerKey. */
+  addBlockedBy?(issueKey: string, blockerKey: string, ...args: unknown[]): Promise<void>;
+  /** Remove blockerKey from issueKey's blocked-by list. */
+  removeBlockedBy?(issueKey: string, blockerKey: string, ...args: unknown[]): Promise<void>;
+  /** Set parentKey as the parent of issueKey. */
+  setParent?(issueKey: string, parentKey: string, ...args: unknown[]): Promise<void>;
+  /** Remove the parent from issueKey. */
+  removeParent?(issueKey: string, ...args: unknown[]): Promise<void>;
+  /** Add childKey as a child of parentKey. */
+  addChild?(parentKey: string, childKey: string, ...args: unknown[]): Promise<void>;
+  /** Remove childKey from parentKey's children. */
+  removeChild?(parentKey: string, childKey: string, ...args: unknown[]): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

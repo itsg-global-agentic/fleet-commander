@@ -1,9 +1,11 @@
 import React from 'react';
 import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
-import { PlayIcon, LockIcon, GitHubIcon, JiraIcon } from './Icons';
+import { RelationsPanel } from './RelationsPanel';
+import { PlayIcon, LockIcon, GitHubIcon, JiraIcon, LinkIcon } from './Icons';
 import type { TeamStatus, PrioritizedIssue, IssueDependencyInfo, CIStatus } from '../../shared/types';
 import { formatIssueKey } from '../../shared/issue-provider';
+import type { IssueRelations } from '../../shared/issue-provider';
 
 // ---------------------------------------------------------------------------
 // Types (mirrors IssueNode from the server issue-fetcher)
@@ -212,16 +214,27 @@ interface TreeNodeProps {
   collapsedNodes?: Set<string>;
   /** Callback when a node's collapse state is toggled */
   onToggleCollapse?: (nodeId: string) => void;
+  /** Set of issue keys that have their relations panel open */
+  relationsOpenKeys?: Set<string>;
+  /** Callback to toggle the relations panel for an issue */
+  onToggleRelations?: (issueKey: string) => void;
+  /** Map of issue key -> relations data (fetched when panel opened) */
+  relationsMap?: Map<string, IssueRelations>;
+  /** Callback when a relation has been changed (for re-fetch) */
+  onRelationChanged?: (issueKey: string) => void;
 }
 
-export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, projectId, priorityMap, checkedIssues, onCheckChange, onPrioritizeSubtree, prioritizing, collapsedNodes, onToggleCollapse }: TreeNodeProps) {
+export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, projectId, priorityMap, checkedIssues, onCheckChange, onPrioritizeSubtree, prioritizing, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: TreeNodeProps) {
   const nodeId = node.number.toString();
+  const nodeKey = node.issueKey ?? String(node.number);
   const isExpanded = collapsedNodes ? !collapsedNodes.has(nodeId) : true;
   const hasChildren = node.children.length > 0;
   const hasActiveTeam = node.activeTeam != null;
   const isBlocked = !!(node.dependencies && !node.dependencies.resolved && node.dependencies.openCount > 0);
   const launching = launchingIssues.has(node.number);
   const launchError = launchErrors.get(node.number) ?? null;
+  const relationsOpen = relationsOpenKeys?.has(nodeKey) ?? false;
+  const relations = relationsMap?.get(nodeKey) ?? null;
 
   const handleLaunch = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -331,6 +344,24 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
           </span>
         )}
 
+        {/* Relations toggle button */}
+        {onToggleRelations && projectId !== undefined && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleRelations(nodeKey);
+            }}
+            className={`shrink-0 ml-1 transition-opacity px-1 py-0.5 rounded ${
+              relationsOpen
+                ? 'text-dark-accent opacity-100'
+                : 'text-dark-muted opacity-0 group-hover:opacity-100 hover:text-dark-accent'
+            }`}
+            title={relationsOpen ? 'Hide relations' : 'Manage relations'}
+          >
+            <LinkIcon size={12} />
+          </button>
+        )}
+
         {/* PR badge */}
         {firstPR && (
           <span className="shrink-0 ml-1">
@@ -413,6 +444,20 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
             <path d="M2.343 13.657A8 8 0 1 1 13.657 2.343 8 8 0 0 1 2.343 13.657ZM6.03 4.97a.751.751 0 0 0-1.042.018.751.751 0 0 0-.018 1.042L6.94 8 4.97 9.97a.749.749 0 0 0 .326 1.275.749.749 0 0 0 .734-.215L8 9.06l1.97 1.97a.749.749 0 0 0 1.275-.326.749.749 0 0 0-.215-.734L9.06 8l1.97-1.97a.749.749 0 0 0-.326-1.275.749.749 0 0 0-.734.215L8 6.94Z" />
           </svg>
           <span>{launchError}</span>
+        </div>
+      )}
+
+      {/* Inline relations panel */}
+      {relationsOpen && relations && projectId !== undefined && onToggleRelations && onRelationChanged && (
+        <div style={{ paddingLeft: `${Math.min(depth * 20, 200) + 32}px` }}>
+          <RelationsPanel
+            issueKey={nodeKey}
+            projectId={projectId}
+            issueProvider={node.issueProvider ?? 'github'}
+            relations={relations}
+            onClose={() => onToggleRelations(nodeKey)}
+            onRelationChanged={() => onRelationChanged(nodeKey)}
+          />
         </div>
       )}
     </div>

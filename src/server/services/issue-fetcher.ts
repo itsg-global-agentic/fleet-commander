@@ -13,7 +13,7 @@
 import config from '../config.js';
 import { getDatabase } from '../db.js';
 import type { DependencyRef, IssueDependencyInfo, Project } from '../../shared/types.js';
-import type { GenericIssue, GenericDependencyRef } from '../../shared/issue-provider.js';
+import type { GenericIssue, GenericDependencyRef, IssueRelations } from '../../shared/issue-provider.js';
 import { getIssueProvider, resetProviders } from '../providers/index.js';
 import {
   type GraphQLIssueNode,
@@ -834,6 +834,62 @@ export class IssueFetcher {
     this.stop();
     this.clearAll();
     resetProviders();
+  }
+
+  /**
+   * Surgically update an issue's dependency data in the cache without a full refresh.
+   * Called after a successful relation mutation to keep the cache consistent.
+   * Synchronous — no network calls; operates on cached data in place.
+   *
+   * @param projectId - The project owning the issue
+   * @param issueKey - Universal issue key (e.g. "42" for GitHub, "PROJ-123" for Jira)
+   * @param relations - The updated relations from the provider
+   */
+  updateIssueDependencies(projectId: number, issueKey: string, relations: IssueRelations): void {
+    const cache = this.cacheByProject.get(projectId);
+    if (!cache) return;
+
+    // Find the node by issueKey (recursive DFS)
+    const findNode = (nodes: IssueNode[]): IssueNode | null => {
+      for (const node of nodes) {
+        const nodeKey = node.issueKey ?? String(node.number);
+        if (nodeKey === issueKey) return node;
+        const found = findNode(node.children);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const node = findNode(cache.issues);
+    if (!node) return;
+
+    // Update blockedBy dependency data
+    const blockedBy: DependencyRef[] = relations.blockedBy.map((ref) => {
+      const numMatch = ref.key.match(/(\d+)$/);
+      const number = numMatch ? parseInt(numMatch[1], 10) : 0;
+      return {
+        number,
+        owner: '',
+        repo: '',
+        state: ref.state === 'closed' ? 'closed' as const : 'open' as const,
+        title: ref.title,
+        issueKey: ref.key,
+      };
+    });
+
+    const openCount = blockedBy.filter((d) => d.state === 'open').length;
+
+    if (blockedBy.length > 0) {
+      node.dependencies = {
+        issueNumber: node.number,
+        issueKey,
+        blockedBy,
+        resolved: openCount === 0,
+        openCount,
+      };
+    } else {
+      node.dependencies = undefined;
+    }
   }
 
   /**
