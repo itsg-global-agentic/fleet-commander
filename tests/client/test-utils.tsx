@@ -53,6 +53,8 @@ export function makeTeam(overrides: Partial<TeamDashboardRow> = {}): TeamDashboa
     totalCacheReadTokens: 0,
     totalCostUsd: 0,
     retryCount: 0,
+    blockedByJson: null,
+    maxActiveTeams: 5,
     prState: null,
     ciStatus: null,
     mergeStatus: null,

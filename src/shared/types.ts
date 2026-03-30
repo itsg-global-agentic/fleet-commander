@@ -514,7 +514,9 @@ export interface TeamDashboardRow {
   totalCacheReadTokens: number;
   totalCostUsd: number;
   retryCount: number;
+  blockedByJson: string | null;
   githubRepo: string | null;
+  maxActiveTeams: number | null;
   prState: PRState | null;
   ciStatus: CIStatus | null;
   mergeStatus: MergeStatus | null;

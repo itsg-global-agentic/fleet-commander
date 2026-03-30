@@ -2,6 +2,7 @@ import { memo, useState } from 'react';
 import type { TeamDashboardRow } from '../../shared/types';
 import { formatIssueKey } from '../../shared/issue-provider';
 import { StatusBadge } from './StatusBadge';
+import { QueueBlockReason } from './QueueBlockReason';
 import { PRBadge } from './PRBadge';
 import { useApi } from '../hooks/useApi';
 
@@ -79,7 +80,9 @@ function areTeamRowPropsEqual(prev: TeamRowProps, next: TeamRowProps): boolean {
     a.issueKey === b.issueKey &&
     a.issueProvider === b.issueProvider &&
     a.githubRepo === b.githubRepo &&
-    a.retryCount === b.retryCount
+    a.retryCount === b.retryCount &&
+    a.blockedByJson === b.blockedByJson &&
+    a.maxActiveTeams === b.maxActiveTeams
   );
 }
 
@@ -187,6 +190,7 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
       {/* Status */}
       <td className="px-4 whitespace-nowrap">
         <StatusBadge status={team.status} retryCount={team.retryCount} />
+        {team.status === 'queued' && <QueueBlockReason team={team} />}
       </td>
 
       {/* Project */}

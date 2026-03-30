@@ -23,6 +23,13 @@ vi.mock('../../src/client/hooks/useApi', () => ({
   }),
 }));
 
+/** Mutable teams array — tests can push items before rendering */
+let mockTeamsList: TeamDashboardRow[] = [];
+
+vi.mock('../../src/client/context/FleetContext', () => ({
+  useTeams: () => ({ teams: mockTeamsList, fetchError: null }),
+}));
+
 // Import after mocks
 import { TeamRow } from '../../src/client/components/TeamRow';
 
@@ -69,6 +76,7 @@ describe('TeamRow', () => {
   beforeEach(() => {
     mockPost.mockReset();
     mockPost.mockResolvedValue({});
+    mockTeamsList = [];
   });
 
   afterEach(() => {
@@ -289,5 +297,97 @@ describe('TeamRow', () => {
     );
     // If it renders, the content is still correct
     expect(screen.getByText('#100')).toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // Queue block reason integration
+  // -------------------------------------------------------------------------
+
+  it('shows "Blocked by #49, #50" for queued teams with blockedByJson', () => {
+    const team = fullTeam({
+      status: 'queued',
+      blockedByJson: '[49, 50]',
+      projectId: 1,
+    });
+    mockTeamsList = [team];
+
+    renderRow(team);
+
+    expect(screen.getByText(/Blocked by/)).toBeInTheDocument();
+    expect(screen.getByText('#49')).toBeInTheDocument();
+    expect(screen.getByText('#50')).toBeInTheDocument();
+  });
+
+  it('shows "Blocked by FAILED #49" when blocker team has failed status', () => {
+    const blockerTeam = fullTeam({
+      id: 2,
+      issueNumber: 49,
+      issueKey: '49',
+      status: 'failed',
+      projectId: 1,
+    });
+    const team = fullTeam({
+      id: 1,
+      status: 'queued',
+      blockedByJson: '[49]',
+      projectId: 1,
+    });
+    mockTeamsList = [team, blockerTeam];
+
+    renderRow(team);
+
+    expect(screen.getByText(/FAILED #49/)).toBeInTheDocument();
+  });
+
+  it('shows "Waiting for slot" when all slots are full', () => {
+    const runningTeam = fullTeam({
+      id: 2,
+      issueNumber: 99,
+      status: 'running',
+      projectId: 1,
+    });
+    const team = fullTeam({
+      id: 1,
+      status: 'queued',
+      blockedByJson: null,
+      maxActiveTeams: 1,
+      projectId: 1,
+    });
+    mockTeamsList = [team, runningTeam];
+
+    renderRow(team);
+
+    expect(screen.getByText('Waiting for slot')).toBeInTheDocument();
+  });
+
+  it('shows nothing extra for generic queued team with available slots', () => {
+    const team = fullTeam({
+      status: 'queued',
+      blockedByJson: null,
+      maxActiveTeams: 5,
+      projectId: 1,
+    });
+    mockTeamsList = [team];
+
+    renderRow(team);
+
+    // Status badge "Queued" is present, but no additional block reason text
+    expect(screen.queryByText(/Blocked by/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Waiting for slot')).not.toBeInTheDocument();
+  });
+
+  it('renders blocker numbers as clickable links when githubRepo is set', () => {
+    const team = fullTeam({
+      status: 'queued',
+      blockedByJson: '[49]',
+      githubRepo: 'org/repo',
+      projectId: 1,
+    });
+    mockTeamsList = [team];
+
+    renderRow(team);
+
+    const link = screen.getByRole('link', { name: '#49' });
+    expect(link).toHaveAttribute('href', 'https://github.com/org/repo/issues/49');
   });
 });
