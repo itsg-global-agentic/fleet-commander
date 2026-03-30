@@ -20,6 +20,8 @@ import type {
   IssueQueryResult,
   ProviderCapabilities,
   NormalizedStatus,
+  IssueRelations,
+  IssueRelationRef,
 } from '../../shared/issue-provider.js';
 import type { DependencyRef } from '../../shared/types.js';
 import type {
@@ -686,8 +688,295 @@ export class GitHubIssueProvider implements IssueProvider {
   }
 
   // -------------------------------------------------------------------------
+  // Relations CRUD — GitHub-specific (require owner/repo context)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Get the GitHub GraphQL node ID for an issue.
+   * Runs `gh issue view N --repo owner/repo --json id --jq '.id'`.
+   */
+  async getNodeId(owner: string, repo: string, issueNumber: number): Promise<string> {
+    const { stdout } = await execAsync(
+      `gh issue view ${issueNumber} --repo ${owner}/${repo} --json id --jq ".id"`,
+      { encoding: 'utf-8', timeout: 15_000 },
+    );
+    const nodeId = stdout.trim();
+    if (!nodeId) {
+      throw new Error(`Could not resolve node ID for ${owner}/${repo}#${issueNumber}`);
+    }
+    return nodeId;
+  }
+
+  /**
+   * Fetch all relations (parent, children, blockedBy, blocking) for an issue.
+   */
+  async getRelationsGH(
+    owner: string,
+    repo: string,
+    issueKey: string,
+  ): Promise<IssueRelations> {
+    const issueNumber = parseInt(issueKey, 10);
+    if (isNaN(issueNumber) || issueNumber < 1) {
+      throw new Error(`Invalid GitHub issue key: "${issueKey}"`);
+    }
+
+    const query = `
+      query($owner: String!, $repo: String!, $issueNumber: Int!) {
+        repository(owner: $owner, name: $repo) {
+          issue(number: $issueNumber) {
+            parent { number title state }
+            subIssues(first: 50) { nodes { number title state } }
+            blockedBy(first: 20) {
+              nodes { number title state repository { owner { login } name } }
+            }
+            blocking(first: 20) {
+              nodes { number title state repository { owner { login } name } }
+            }
+          }
+        }
+      }
+    `;
+
+    const compactQuery = query.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+    const requestBody = JSON.stringify({
+      query: compactQuery,
+      variables: { owner, repo, issueNumber },
+    });
+
+    const stdout = await this.runGHGraphQL(requestBody, 15_000);
+    const parsed = JSON.parse(stdout) as {
+      data?: {
+        repository?: {
+          issue?: {
+            parent?: { number: number; title: string; state: string } | null;
+            subIssues?: { nodes?: Array<{ number: number; title: string; state: string }> };
+            blockedBy?: {
+              nodes?: Array<{
+                number: number; title: string; state: string;
+                repository: { owner: { login: string }; name: string };
+              }>;
+            };
+            blocking?: {
+              nodes?: Array<{
+                number: number; title: string; state: string;
+                repository: { owner: { login: string }; name: string };
+              }>;
+            };
+          };
+        };
+      };
+      errors?: Array<{ message: string }>;
+    };
+
+    if (parsed.errors?.length) {
+      // Check for field-not-found errors (blockedBy/blocking not available)
+      const hasFieldError = parsed.errors.some(
+        (e) => /field\b.*\bdoesn't exist/i.test(e.message),
+      );
+      if (hasFieldError) {
+        console.warn(
+          `[GitHubIssueProvider] getRelationsGH field errors: ${parsed.errors.map((e) => e.message).join('; ')}`,
+        );
+      }
+    }
+
+    const issue = parsed.data?.repository?.issue;
+    if (!issue) {
+      throw new Error(`Issue ${owner}/${repo}#${issueKey} not found`);
+    }
+
+    const mapState = (state: string): NormalizedStatus =>
+      GITHUB_STATUS_MAP[state] ?? 'unknown';
+
+    const parent: IssueRelationRef | null = issue.parent
+      ? { key: String(issue.parent.number), title: issue.parent.title, state: mapState(issue.parent.state) }
+      : null;
+
+    const children: IssueRelationRef[] = (issue.subIssues?.nodes ?? []).map((c) => ({
+      key: String(c.number),
+      title: c.title,
+      state: mapState(c.state),
+    }));
+
+    const blockedBy: IssueRelationRef[] = (issue.blockedBy?.nodes ?? []).map((d) => ({
+      key: String(d.number),
+      title: d.title,
+      state: mapState(d.state),
+    }));
+
+    const blocking: IssueRelationRef[] = (issue.blocking?.nodes ?? []).map((d) => ({
+      key: String(d.number),
+      title: d.title,
+      state: mapState(d.state),
+    }));
+
+    return { parent, children, blockedBy, blocking };
+  }
+
+  /**
+   * Add a blockedBy relation between two issues.
+   * issueKey is blocked by blockerKey.
+   */
+  async addBlockedByGH(
+    owner: string,
+    repo: string,
+    issueKey: string,
+    blockerKey: string,
+  ): Promise<void> {
+    const issueNumber = parseInt(issueKey, 10);
+    const blockerNumber = parseInt(blockerKey, 10);
+    if (isNaN(issueNumber) || isNaN(blockerNumber)) {
+      throw new Error(`Invalid issue keys: issueKey="${issueKey}", blockerKey="${blockerKey}"`);
+    }
+
+    const [issueNodeId, blockerNodeId] = await Promise.all([
+      this.getNodeId(owner, repo, issueNumber),
+      this.getNodeId(owner, repo, blockerNumber),
+    ]);
+
+    const mutation = `mutation { addBlockedBy(input: { issueId: "${issueNodeId}", blockingIssueId: "${blockerNodeId}" }) { clientMutationId } }`;
+    const requestBody = JSON.stringify({ query: mutation });
+    const stdout = await this.runGHGraphQL(requestBody, 15_000);
+    this.checkMutationErrors(stdout, 'addBlockedBy');
+  }
+
+  /**
+   * Remove a blockedBy relation between two issues.
+   */
+  async removeBlockedByGH(
+    owner: string,
+    repo: string,
+    issueKey: string,
+    blockerKey: string,
+  ): Promise<void> {
+    const issueNumber = parseInt(issueKey, 10);
+    const blockerNumber = parseInt(blockerKey, 10);
+    if (isNaN(issueNumber) || isNaN(blockerNumber)) {
+      throw new Error(`Invalid issue keys: issueKey="${issueKey}", blockerKey="${blockerKey}"`);
+    }
+
+    const [issueNodeId, blockerNodeId] = await Promise.all([
+      this.getNodeId(owner, repo, issueNumber),
+      this.getNodeId(owner, repo, blockerNumber),
+    ]);
+
+    const mutation = `mutation { removeBlockedBy(input: { issueId: "${issueNodeId}", blockingIssueId: "${blockerNodeId}" }) { clientMutationId } }`;
+    const requestBody = JSON.stringify({ query: mutation });
+    const stdout = await this.runGHGraphQL(requestBody, 15_000);
+    this.checkMutationErrors(stdout, 'removeBlockedBy');
+  }
+
+  /**
+   * Add a child (sub-issue) to a parent issue.
+   */
+  async addChildGH(
+    owner: string,
+    repo: string,
+    parentKey: string,
+    childKey: string,
+  ): Promise<void> {
+    const parentNumber = parseInt(parentKey, 10);
+    const childNumber = parseInt(childKey, 10);
+    if (isNaN(parentNumber) || isNaN(childNumber)) {
+      throw new Error(`Invalid issue keys: parentKey="${parentKey}", childKey="${childKey}"`);
+    }
+
+    const [parentNodeId, childNodeId] = await Promise.all([
+      this.getNodeId(owner, repo, parentNumber),
+      this.getNodeId(owner, repo, childNumber),
+    ]);
+
+    const mutation = `mutation { addSubIssue(input: { issueId: "${parentNodeId}", subIssueId: "${childNodeId}" }) { clientMutationId } }`;
+    const requestBody = JSON.stringify({ query: mutation });
+    const stdout = await this.runGHGraphQL(requestBody, 15_000);
+    this.checkMutationErrors(stdout, 'addSubIssue');
+  }
+
+  /**
+   * Remove a child (sub-issue) from a parent issue.
+   */
+  async removeChildGH(
+    owner: string,
+    repo: string,
+    parentKey: string,
+    childKey: string,
+  ): Promise<void> {
+    const parentNumber = parseInt(parentKey, 10);
+    const childNumber = parseInt(childKey, 10);
+    if (isNaN(parentNumber) || isNaN(childNumber)) {
+      throw new Error(`Invalid issue keys: parentKey="${parentKey}", childKey="${childKey}"`);
+    }
+
+    const [parentNodeId, childNodeId] = await Promise.all([
+      this.getNodeId(owner, repo, parentNumber),
+      this.getNodeId(owner, repo, childNumber),
+    ]);
+
+    const mutation = `mutation { removeSubIssue(input: { issueId: "${parentNodeId}", subIssueId: "${childNodeId}" }) { clientMutationId } }`;
+    const requestBody = JSON.stringify({ query: mutation });
+    const stdout = await this.runGHGraphQL(requestBody, 15_000);
+    this.checkMutationErrors(stdout, 'removeSubIssue');
+  }
+
+  /**
+   * Set a parent for an issue (replaces any existing parent).
+   */
+  async setParentGH(
+    owner: string,
+    repo: string,
+    issueKey: string,
+    parentKey: string,
+  ): Promise<void> {
+    const issueNumber = parseInt(issueKey, 10);
+    const parentNumber = parseInt(parentKey, 10);
+    if (isNaN(issueNumber) || isNaN(parentNumber)) {
+      throw new Error(`Invalid issue keys: issueKey="${issueKey}", parentKey="${parentKey}"`);
+    }
+
+    const [parentNodeId, childNodeId] = await Promise.all([
+      this.getNodeId(owner, repo, parentNumber),
+      this.getNodeId(owner, repo, issueNumber),
+    ]);
+
+    const mutation = `mutation { addSubIssue(input: { issueId: "${parentNodeId}", subIssueId: "${childNodeId}", replaceParent: true }) { clientMutationId } }`;
+    const requestBody = JSON.stringify({ query: mutation });
+    const stdout = await this.runGHGraphQL(requestBody, 15_000);
+    this.checkMutationErrors(stdout, 'addSubIssue (setParent)');
+  }
+
+  /**
+   * Remove the parent from an issue.
+   * First fetches the current parent via getRelationsGH, then calls removeSubIssue.
+   */
+  async removeParentGH(
+    owner: string,
+    repo: string,
+    issueKey: string,
+  ): Promise<void> {
+    const relations = await this.getRelationsGH(owner, repo, issueKey);
+    if (!relations.parent) {
+      // No parent — nothing to do
+      return;
+    }
+
+    const parentKey = relations.parent.key;
+    await this.removeChildGH(owner, repo, parentKey, issueKey);
+  }
+
+  // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Check a GraphQL mutation response for errors and throw if found.
+   */
+  private checkMutationErrors(stdout: string, mutationName: string): void {
+    const parsed = JSON.parse(stdout) as { errors?: Array<{ message: string }> };
+    if (parsed.errors?.length) {
+      const messages = parsed.errors.map((e) => e.message).join('; ');
+      throw new Error(`GraphQL mutation ${mutationName} failed: ${messages}`);
+    }
+  }
 
   /**
    * Execute a GraphQL query via `gh api graphql`.

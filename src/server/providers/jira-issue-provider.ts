@@ -18,6 +18,8 @@ import type {
   IssueQueryResult,
   ProviderCapabilities,
   NormalizedStatus,
+  IssueRelations,
+  IssueRelationRef,
 } from '../../shared/issue-provider.js';
 
 // ---------------------------------------------------------------------------
@@ -351,6 +353,184 @@ export class JiraIssueProvider implements IssueProvider {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Relations CRUD — Jira-specific
+  // -------------------------------------------------------------------------
+
+  /**
+   * Get all relations for a Jira issue (parent, children, blockedBy, blocking).
+   */
+  async getRelationsJira(key: string): Promise<IssueRelations> {
+    const fields = 'issuelinks,parent,subtasks,status,summary';
+    const issue = await this.jiraFetch<JiraIssue>(
+      `/rest/api/3/issue/${encodeURIComponent(key)}?fields=${fields}`,
+    );
+
+    const parent: IssueRelationRef | null = issue.fields.parent
+      ? {
+          key: issue.fields.parent.key,
+          title: issue.fields.parent.fields?.summary ?? '',
+          state: 'unknown' as NormalizedStatus,
+        }
+      : null;
+
+    // Subtasks are the children in Jira's hierarchy
+    const subtasks = (issue.fields as Record<string, unknown>).subtasks as
+      Array<{ key: string; fields?: { summary?: string; status?: { name: string; statusCategory?: { key: string; name: string } } } }> | undefined;
+    const children: IssueRelationRef[] = (subtasks ?? []).map((st) => ({
+      key: st.key,
+      title: st.fields?.summary ?? '',
+      state: st.fields?.status ? this.mapStatus(st.fields.status as JiraStatus) : 'unknown' as NormalizedStatus,
+    }));
+
+    const blockedBy: IssueRelationRef[] = [];
+    const blocking: IssueRelationRef[] = [];
+    const links = issue.fields.issuelinks ?? [];
+
+    for (const link of links) {
+      const linkTypeName = link.type.name.toLowerCase();
+      const isBlockingType = linkTypeName.includes('block');
+      if (!isBlockingType) continue;
+
+      const inwardDesc = link.type.inward.toLowerCase();
+      const isBlockedByDirection = inwardDesc.includes('blocked by');
+
+      if (isBlockedByDirection && link.inwardIssue) {
+        const blockerKey = link.inwardIssue.key ?? '';
+        if (blockerKey) {
+          const blockerStatus = link.inwardIssue.fields?.status
+            ? this.mapStatus(link.inwardIssue.fields.status)
+            : 'unknown' as NormalizedStatus;
+          blockedBy.push({
+            key: blockerKey,
+            title: link.inwardIssue.fields?.summary ?? '',
+            state: blockerStatus,
+          });
+        }
+      }
+
+      if (!isBlockedByDirection && link.outwardIssue) {
+        const blockedKey = link.outwardIssue.key ?? '';
+        if (blockedKey) {
+          const blockedStatus = link.outwardIssue.fields?.status
+            ? this.mapStatus(link.outwardIssue.fields.status)
+            : 'unknown' as NormalizedStatus;
+          blocking.push({
+            key: blockedKey,
+            title: link.outwardIssue.fields?.summary ?? '',
+            state: blockedStatus,
+          });
+        }
+      } else if (isBlockedByDirection && link.outwardIssue) {
+        // Outward on a "blocked by" type = this issue blocks the outward issue
+        const blockedKey = link.outwardIssue.key ?? '';
+        if (blockedKey) {
+          const blockedStatus = link.outwardIssue.fields?.status
+            ? this.mapStatus(link.outwardIssue.fields.status)
+            : 'unknown' as NormalizedStatus;
+          blocking.push({
+            key: blockedKey,
+            title: link.outwardIssue.fields?.summary ?? '',
+            state: blockedStatus,
+          });
+        }
+      }
+    }
+
+    return { parent, children, blockedBy, blocking };
+  }
+
+  /**
+   * Add a blockedBy relation. Creates an issue link of type "Blocks".
+   * inwardIssue = the blocker (blocks the other), outwardIssue = the blocked issue.
+   *
+   * Jira link semantics: inwardIssue "blocks" outwardIssue, so
+   * outwardIssue "is blocked by" inwardIssue.
+   */
+  async addBlockedByJira(issueKey: string, blockerKey: string): Promise<void> {
+    await this.jiraFetch<unknown>('/rest/api/3/issueLink', {
+      method: 'POST',
+      body: JSON.stringify({
+        type: { name: 'Blocks' },
+        inwardIssue: { key: blockerKey },
+        outwardIssue: { key: issueKey },
+      }),
+    });
+  }
+
+  /**
+   * Remove a blockedBy relation. Finds the link ID and deletes it.
+   */
+  async removeBlockedByJira(issueKey: string, blockerKey: string): Promise<void> {
+    const fields = 'issuelinks';
+    const issue = await this.jiraFetch<JiraIssue>(
+      `/rest/api/3/issue/${encodeURIComponent(issueKey)}?fields=${fields}`,
+    );
+
+    const links = issue.fields.issuelinks ?? [];
+    let linkId: string | null = null;
+
+    for (const link of links) {
+      const linkTypeName = link.type.name.toLowerCase();
+      if (!linkTypeName.includes('block')) continue;
+
+      const inwardDesc = link.type.inward.toLowerCase();
+      if (inwardDesc.includes('blocked by') && link.inwardIssue) {
+        const inKey = link.inwardIssue.key ?? '';
+        if (inKey === blockerKey) {
+          linkId = link.id;
+          break;
+        }
+      }
+    }
+
+    if (!linkId) {
+      throw new Error(`No "blocked by" link found between ${issueKey} and ${blockerKey}`);
+    }
+
+    await this.jiraFetch<unknown>(`/rest/api/3/issueLink/${linkId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  /**
+   * Set the parent of an issue (via the parent field).
+   */
+  async setParentJira(issueKey: string, parentKey: string): Promise<void> {
+    await this.jiraFetch<unknown>(`/rest/api/3/issue/${encodeURIComponent(issueKey)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        fields: { parent: { key: parentKey } },
+      }),
+    });
+  }
+
+  /**
+   * Remove the parent of an issue (clear the parent field).
+   */
+  async removeParentJira(issueKey: string): Promise<void> {
+    await this.jiraFetch<unknown>(`/rest/api/3/issue/${encodeURIComponent(issueKey)}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        fields: { parent: null },
+      }),
+    });
+  }
+
+  /**
+   * Add a child issue (set the child's parent to parentKey).
+   */
+  async addChildJira(parentKey: string, childKey: string): Promise<void> {
+    await this.setParentJira(childKey, parentKey);
+  }
+
+  /**
+   * Remove a child issue (clear the child's parent field).
+   */
+  async removeChildJira(_parentKey: string, childKey: string): Promise<void> {
+    await this.removeParentJira(childKey);
+  }
+
   /**
    * Fetch all open issues with pagination for the full hierarchy.
    * Used by IssueFetcher's generic fetch path to build the issue tree.
@@ -405,6 +585,11 @@ export class JiraIssueProvider implements IssueProvider {
       if (!response.ok) {
         const text = await response.text().catch(() => '');
         throw new Error(`Jira API ${method} ${path} failed (${response.status}): ${text.slice(0, 200)}`);
+      }
+
+      // Some responses (204 No Content, some PUT/DELETE) have no body
+      if (response.status === 204) {
+        return undefined as T;
       }
 
       return await response.json() as T;

@@ -347,3 +347,234 @@ describe('GitHubIssueProvider', () => {
     spy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Relations CRUD methods
+// ---------------------------------------------------------------------------
+
+describe('GitHubIssueProvider.getRelationsGH', () => {
+  let provider: GitHubIssueProvider;
+
+  beforeEach(() => {
+    provider = new GitHubIssueProvider();
+  });
+
+  it('should parse relations from GraphQL response', async () => {
+    const mockResponse = JSON.stringify({
+      data: {
+        repository: {
+          issue: {
+            parent: { number: 10, title: 'Parent Issue', state: 'OPEN' },
+            subIssues: {
+              nodes: [
+                { number: 43, title: 'Child 1', state: 'OPEN' },
+                { number: 44, title: 'Child 2', state: 'CLOSED' },
+              ],
+            },
+            blockedBy: {
+              nodes: [
+                { number: 20, title: 'Blocker', state: 'OPEN', repository: { owner: { login: 'owner' }, name: 'repo' } },
+              ],
+            },
+            blocking: {
+              nodes: [
+                { number: 30, title: 'Blocked', state: 'OPEN', repository: { owner: { login: 'owner' }, name: 'repo' } },
+              ],
+            },
+          },
+        },
+      },
+    });
+
+    const spy = vi.spyOn(provider as any, 'runGHGraphQL').mockResolvedValue(mockResponse);
+
+    const relations = await provider.getRelationsGH('owner', 'repo', '42');
+
+    expect(relations.parent).toEqual({ key: '10', title: 'Parent Issue', state: 'open' });
+    expect(relations.children).toHaveLength(2);
+    expect(relations.children[0].key).toBe('43');
+    expect(relations.children[1].state).toBe('closed');
+    expect(relations.blockedBy).toHaveLength(1);
+    expect(relations.blockedBy[0].key).toBe('20');
+    expect(relations.blocking).toHaveLength(1);
+    expect(relations.blocking[0].key).toBe('30');
+
+    spy.mockRestore();
+  });
+
+  it('should return empty relations when issue has none', async () => {
+    const mockResponse = JSON.stringify({
+      data: {
+        repository: {
+          issue: {
+            parent: null,
+            subIssues: { nodes: [] },
+            blockedBy: { nodes: [] },
+            blocking: { nodes: [] },
+          },
+        },
+      },
+    });
+
+    const spy = vi.spyOn(provider as any, 'runGHGraphQL').mockResolvedValue(mockResponse);
+
+    const relations = await provider.getRelationsGH('owner', 'repo', '42');
+
+    expect(relations.parent).toBeNull();
+    expect(relations.children).toEqual([]);
+    expect(relations.blockedBy).toEqual([]);
+    expect(relations.blocking).toEqual([]);
+
+    spy.mockRestore();
+  });
+
+  it('should throw on invalid issue key', async () => {
+    await expect(provider.getRelationsGH('owner', 'repo', 'abc'))
+      .rejects.toThrow('Invalid GitHub issue key');
+  });
+});
+
+describe('GitHubIssueProvider.addBlockedByGH', () => {
+  let provider: GitHubIssueProvider;
+
+  beforeEach(() => {
+    provider = new GitHubIssueProvider();
+  });
+
+  it('should construct correct addBlockedBy mutation', async () => {
+    const getNodeIdSpy = vi.spyOn(provider, 'getNodeId')
+      .mockResolvedValueOnce('I_node_42')
+      .mockResolvedValueOnce('I_node_10');
+
+    const graphQLSpy = vi.spyOn(provider as any, 'runGHGraphQL')
+      .mockResolvedValue(JSON.stringify({ data: { addBlockedBy: { clientMutationId: null } } }));
+
+    await provider.addBlockedByGH('owner', 'repo', '42', '10');
+
+    expect(getNodeIdSpy).toHaveBeenCalledTimes(2);
+    expect(graphQLSpy).toHaveBeenCalledTimes(1);
+
+    const callArg = graphQLSpy.mock.calls[0][0];
+    const parsed = JSON.parse(callArg);
+    expect(parsed.query).toContain('addBlockedBy');
+    expect(parsed.query).toContain('I_node_42');
+    expect(parsed.query).toContain('I_node_10');
+
+    getNodeIdSpy.mockRestore();
+    graphQLSpy.mockRestore();
+  });
+
+  it('should throw on GraphQL mutation error', async () => {
+    vi.spyOn(provider, 'getNodeId')
+      .mockResolvedValueOnce('I_node_42')
+      .mockResolvedValueOnce('I_node_10');
+
+    vi.spyOn(provider as any, 'runGHGraphQL')
+      .mockResolvedValue(JSON.stringify({
+        errors: [{ message: 'Permission denied' }],
+      }));
+
+    await expect(provider.addBlockedByGH('owner', 'repo', '42', '10'))
+      .rejects.toThrow('GraphQL mutation addBlockedBy failed: Permission denied');
+  });
+});
+
+describe('GitHubIssueProvider.addChildGH', () => {
+  let provider: GitHubIssueProvider;
+
+  beforeEach(() => {
+    provider = new GitHubIssueProvider();
+  });
+
+  it('should construct correct addSubIssue mutation', async () => {
+    const getNodeIdSpy = vi.spyOn(provider, 'getNodeId')
+      .mockResolvedValueOnce('I_node_10') // parent
+      .mockResolvedValueOnce('I_node_43'); // child
+
+    const graphQLSpy = vi.spyOn(provider as any, 'runGHGraphQL')
+      .mockResolvedValue(JSON.stringify({ data: { addSubIssue: { clientMutationId: null } } }));
+
+    await provider.addChildGH('owner', 'repo', '10', '43');
+
+    const callArg = graphQLSpy.mock.calls[0][0];
+    const parsed = JSON.parse(callArg);
+    expect(parsed.query).toContain('addSubIssue');
+    expect(parsed.query).toContain('I_node_10');
+    expect(parsed.query).toContain('I_node_43');
+
+    getNodeIdSpy.mockRestore();
+    graphQLSpy.mockRestore();
+  });
+});
+
+describe('GitHubIssueProvider.setParentGH', () => {
+  let provider: GitHubIssueProvider;
+
+  beforeEach(() => {
+    provider = new GitHubIssueProvider();
+  });
+
+  it('should use addSubIssue with replaceParent: true', async () => {
+    const getNodeIdSpy = vi.spyOn(provider, 'getNodeId')
+      .mockResolvedValueOnce('I_node_10') // parent
+      .mockResolvedValueOnce('I_node_42'); // child (the issue)
+
+    const graphQLSpy = vi.spyOn(provider as any, 'runGHGraphQL')
+      .mockResolvedValue(JSON.stringify({ data: { addSubIssue: { clientMutationId: null } } }));
+
+    await provider.setParentGH('owner', 'repo', '42', '10');
+
+    const callArg = graphQLSpy.mock.calls[0][0];
+    const parsed = JSON.parse(callArg);
+    expect(parsed.query).toContain('addSubIssue');
+    expect(parsed.query).toContain('replaceParent: true');
+
+    getNodeIdSpy.mockRestore();
+    graphQLSpy.mockRestore();
+  });
+});
+
+describe('GitHubIssueProvider.removeParentGH', () => {
+  let provider: GitHubIssueProvider;
+
+  beforeEach(() => {
+    provider = new GitHubIssueProvider();
+  });
+
+  it('should be a no-op when issue has no parent', async () => {
+    const getRelationsSpy = vi.spyOn(provider, 'getRelationsGH').mockResolvedValue({
+      parent: null,
+      children: [],
+      blockedBy: [],
+      blocking: [],
+    });
+
+    const removeChildSpy = vi.spyOn(provider, 'removeChildGH');
+
+    await provider.removeParentGH('owner', 'repo', '42');
+
+    expect(getRelationsSpy).toHaveBeenCalled();
+    expect(removeChildSpy).not.toHaveBeenCalled();
+
+    getRelationsSpy.mockRestore();
+    removeChildSpy.mockRestore();
+  });
+
+  it('should call removeChildGH with current parent', async () => {
+    const getRelationsSpy = vi.spyOn(provider, 'getRelationsGH').mockResolvedValue({
+      parent: { key: '10', title: 'Parent', state: 'open' },
+      children: [],
+      blockedBy: [],
+      blocking: [],
+    });
+
+    const removeChildSpy = vi.spyOn(provider, 'removeChildGH').mockResolvedValue(undefined);
+
+    await provider.removeParentGH('owner', 'repo', '42');
+
+    expect(removeChildSpy).toHaveBeenCalledWith('owner', 'repo', '10', '42');
+
+    getRelationsSpy.mockRestore();
+    removeChildSpy.mockRestore();
+  });
+});

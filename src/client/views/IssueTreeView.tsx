@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useApi } from '../hooks/useApi';
 import { useFleetSSE } from '../hooks/useFleetSSE';
+import type { IssueRelations } from '../../shared/issue-provider';
 import { usePrioritization, sortTreeByPriority } from '../hooks/usePrioritization';
 import { useCollapseState } from '../hooks/useCollapseState';
 import { useFlattenedTree } from '../hooks/useVirtualizedTree';
@@ -85,6 +86,10 @@ export function IssueTreeView() {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [providerFilter, setProviderFilter] = useState<string>('all');
 
+  // Relations panel state
+  const [relationsOpenKeys, setRelationsOpenKeys] = useState<Set<string>>(new Set());
+  const [relationsMap, setRelationsMap] = useState<Map<string, IssueRelations>>(new Map());
+
   // Collapse state — persisted to localStorage
   const collapseState = useCollapseState();
 
@@ -152,13 +157,28 @@ export function IssueTreeView() {
   // SSE: auto-refresh when a dependency is resolved
   // -------------------------------------------------------------------------
 
-  const handleSSEEvent = useCallback((type: string) => {
+  const handleSSEEvent = useCallback((type: string, data: unknown) => {
     if (type === 'dependency_resolved') {
+      fetchTree();
+    }
+    const rec = data as Record<string, unknown> | undefined;
+    if (type === 'relations_updated' && rec) {
+      const issueKey = rec.issue_key as string | undefined;
+      const relations = rec.relations as IssueRelations | undefined;
+      if (issueKey && relations) {
+        setRelationsMap((prev) => {
+          const next = new Map(prev);
+          next.set(issueKey, relations);
+          return next;
+        });
+      }
+      // Also refresh the tree to pick up cache updates
       fetchTree();
     }
   }, [fetchTree]);
 
   useFleetSSE('dependency_resolved', handleSSEEvent);
+  useFleetSSE('relations_updated', handleSSEEvent);
 
   // -------------------------------------------------------------------------
   // Refresh (force re-fetch from GitHub)
@@ -179,6 +199,109 @@ export function IssueTreeView() {
       setRefreshing(false);
     }
   }, [api, refreshing, fetchTree]);
+
+  // -------------------------------------------------------------------------
+  // Relations panel toggle + relation change handler
+  // -------------------------------------------------------------------------
+
+  const handleToggleRelations = useCallback(
+    async (issueKey: string) => {
+      setRelationsOpenKeys((prev) => {
+        const next = new Set(prev);
+        if (next.has(issueKey)) {
+          next.delete(issueKey);
+        } else {
+          next.add(issueKey);
+        }
+        return next;
+      });
+
+      // If opening, fetch relations data if not already loaded
+      if (!relationsOpenKeys.has(issueKey)) {
+        // Find the project ID for this issue from the groups
+        let pid: number | undefined;
+        for (const g of groups) {
+          // Walk the tree to find this issue
+          const walk = (nodes: IssueNode[]): boolean => {
+            for (const n of nodes) {
+              const nk = n.issueKey ?? String(n.number);
+              if (nk === issueKey) {
+                pid = g.projectId;
+                return true;
+              }
+              if (walk(n.children)) return true;
+            }
+            return false;
+          };
+          if (walk(g.tree)) break;
+        }
+
+        if (pid === undefined && launchProjectId) {
+          pid = launchProjectId;
+        }
+
+        if (pid !== undefined) {
+          try {
+            const relations = await api.get<IssueRelations>(
+              `projects/${pid}/issues/${issueKey}/relations`,
+            );
+            setRelationsMap((prev) => {
+              const next = new Map(prev);
+              next.set(issueKey, relations);
+              return next;
+            });
+          } catch (err) {
+            console.warn(`Failed to fetch relations for ${issueKey}:`, err);
+          }
+        }
+      }
+    },
+    [api, groups, launchProjectId, relationsOpenKeys],
+  );
+
+  const handleRelationChanged = useCallback(
+    async (issueKey: string) => {
+      // Find the project ID for this issue
+      let pid: number | undefined;
+      for (const g of groups) {
+        const walk = (nodes: IssueNode[]): boolean => {
+          for (const n of nodes) {
+            const nk = n.issueKey ?? String(n.number);
+            if (nk === issueKey) {
+              pid = g.projectId;
+              return true;
+            }
+            if (walk(n.children)) return true;
+          }
+          return false;
+        };
+        if (walk(g.tree)) break;
+      }
+
+      if (pid === undefined && launchProjectId) {
+        pid = launchProjectId;
+      }
+
+      if (pid !== undefined) {
+        try {
+          const relations = await api.get<IssueRelations>(
+            `projects/${pid}/issues/${issueKey}/relations`,
+          );
+          setRelationsMap((prev) => {
+            const next = new Map(prev);
+            next.set(issueKey, relations);
+            return next;
+          });
+        } catch (err) {
+          console.warn(`Failed to refresh relations for ${issueKey}:`, err);
+        }
+      }
+
+      // Also refresh the full tree
+      fetchTree();
+    },
+    [api, groups, launchProjectId, fetchTree],
+  );
 
   // -------------------------------------------------------------------------
   // Launch team for an issue (play button)
@@ -733,6 +856,10 @@ export function IssueTreeView() {
                 fetchTree={fetchTree}
                 collapsedNodes={collapseState.collapsedNodes}
                 onToggleCollapse={collapseState.toggleCollapse}
+                relationsOpenKeys={relationsOpenKeys}
+                onToggleRelations={handleToggleRelations}
+                relationsMap={relationsMap}
+                onRelationChanged={handleRelationChanged}
               />
             ))}
           </div>
@@ -750,6 +877,10 @@ export function IssueTreeView() {
                 fetchTree={fetchTree}
                 collapsedNodes={collapseState.collapsedNodes}
                 onToggleCollapse={collapseState.toggleCollapse}
+                relationsOpenKeys={relationsOpenKeys}
+                onToggleRelations={handleToggleRelations}
+                relationsMap={relationsMap}
+                onRelationChanged={handleRelationChanged}
               />
             ))}
           </div>
@@ -766,6 +897,10 @@ export function IssueTreeView() {
             fetchTree={fetchTree}
             collapsedNodes={collapseState.collapsedNodes}
             onToggleCollapse={collapseState.toggleCollapse}
+            relationsOpenKeys={relationsOpenKeys}
+            onToggleRelations={handleToggleRelations}
+            relationsMap={relationsMap}
+            onRelationChanged={handleRelationChanged}
           />
         )}
       </div>
@@ -1150,9 +1285,13 @@ interface ProjectGroupSectionProps {
   fetchTree: () => Promise<void>;
   collapsedNodes: Set<string>;
   onToggleCollapse: (nodeId: string) => void;
+  relationsOpenKeys?: Set<string>;
+  onToggleRelations?: (issueKey: string) => void;
+  relationsMap?: Map<string, IssueRelations>;
+  onRelationChanged?: (issueKey: string) => void;
 }
 
-function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: ProjectGroupSectionProps) {
+function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: ProjectGroupSectionProps) {
   const expanded = !collapsedNodes.has(bucket.key);
   const totalIssueCount = (bucket.projects ?? []).reduce((sum, p) => sum + countNodes(p.tree), 0);
 
@@ -1200,6 +1339,10 @@ function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, 
                 fetchTree={fetchTree}
                 collapsedNodes={collapsedNodes}
                 onToggleCollapse={onToggleCollapse}
+                relationsOpenKeys={relationsOpenKeys}
+                onToggleRelations={onToggleRelations}
+                relationsMap={relationsMap}
+                onRelationChanged={onRelationChanged}
               />
             ))}
           </div>
@@ -1222,9 +1365,13 @@ interface ProjectGroupProps {
   fetchTree: () => Promise<void>;
   collapsedNodes: Set<string>;
   onToggleCollapse: (nodeId: string) => void;
+  relationsOpenKeys?: Set<string>;
+  onToggleRelations?: (issueKey: string) => void;
+  relationsMap?: Map<string, IssueRelations>;
+  onRelationChanged?: (issueKey: string) => void;
 }
 
-function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: ProjectGroupProps) {
+function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: ProjectGroupProps) {
   const api = useApi();
   const projectNodeId = `project-${group.projectId}`;
   const expanded = !collapsedNodes.has(projectNodeId);
@@ -1392,6 +1539,10 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
                     collapsedNodes={collapsedNodes}
                     onToggleCollapse={onToggleCollapse}
                     api={api}
+                    relationsOpenKeys={relationsOpenKeys}
+                    onToggleRelations={onToggleRelations}
+                    relationsMap={relationsMap}
+                    onRelationChanged={onRelationChanged}
                   />
                 );
               })}
@@ -1411,6 +1562,10 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
               prioritizing={prioritization.loading}
               collapsedNodes={collapsedNodes}
               onToggleCollapse={onToggleCollapse}
+              relationsOpenKeys={relationsOpenKeys}
+              onToggleRelations={onToggleRelations}
+              relationsMap={relationsMap}
+              onRelationChanged={onRelationChanged}
               className="max-h-[70vh]"
             />
           )}
@@ -1459,9 +1614,13 @@ interface ProviderSubGroupProps {
   collapsedNodes: Set<string>;
   onToggleCollapse: (nodeId: string) => void;
   api: ReturnType<typeof useApi>;
+  relationsOpenKeys?: Set<string>;
+  onToggleRelations?: (issueKey: string) => void;
+  relationsMap?: Map<string, IssueRelations>;
+  onRelationChanged?: (issueKey: string) => void;
 }
 
-function ProviderSubGroup({ provider, issues, projectId, nodeKey, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, api }: ProviderSubGroupProps) {
+function ProviderSubGroup({ provider, issues, projectId, nodeKey, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, api, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: ProviderSubGroupProps) {
   const expanded = !collapsedNodes.has(nodeKey);
   const [showRunAllDialog, setShowRunAllDialog] = useState(false);
 
@@ -1519,6 +1678,10 @@ function ProviderSubGroup({ provider, issues, projectId, nodeKey, onLaunch, laun
             projectId={projectId}
             collapsedNodes={collapsedNodes}
             onToggleCollapse={onToggleCollapse}
+            relationsOpenKeys={relationsOpenKeys}
+            onToggleRelations={onToggleRelations}
+            relationsMap={relationsMap}
+            onRelationChanged={onRelationChanged}
             className="max-h-[60vh]"
           />
         </div>
@@ -1555,9 +1718,13 @@ interface SingleProjectTreeProps {
   fetchTree: () => Promise<void>;
   collapsedNodes: Set<string>;
   onToggleCollapse: (nodeId: string) => void;
+  relationsOpenKeys?: Set<string>;
+  onToggleRelations?: (issueKey: string) => void;
+  relationsMap?: Map<string, IssueRelations>;
+  onRelationChanged?: (issueKey: string) => void;
 }
 
-function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: SingleProjectTreeProps) {
+function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: SingleProjectTreeProps) {
   const api = useApi();
   const prioritization = usePrioritization();
   const [showRunAllDialog, setShowRunAllDialog] = useState(false);
@@ -1633,6 +1800,10 @@ function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIs
         prioritizing={prioritization.loading}
         collapsedNodes={collapsedNodes}
         onToggleCollapse={onToggleCollapse}
+        relationsOpenKeys={relationsOpenKeys}
+        onToggleRelations={onToggleRelations}
+        relationsMap={relationsMap}
+        onRelationChanged={onRelationChanged}
         className="max-h-[70vh]"
       />
 
