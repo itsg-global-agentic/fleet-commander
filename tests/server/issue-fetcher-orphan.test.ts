@@ -77,8 +77,6 @@ vi.mock('../../src/server/providers/github-issue-provider.js', () => {
     fetchMissingParents = mockFetchMissingParents;
     fetchSingleIssueDeps = mockFetchSingleIssueDeps;
     resolveIssueStates = mockResolveIssueStates;
-    isBlockedBySupported = true;
-    resetBlockedBySupport = vi.fn();
     getIssue = vi.fn().mockResolvedValue(null);
     queryIssues = vi.fn().mockResolvedValue({ issues: [], cursor: null, hasMore: false });
     getDependencies = vi.fn().mockResolvedValue([]);
@@ -109,9 +107,7 @@ vi.mock('../../src/server/providers/github-issue-provider.js', () => {
     GITHUB_STATUS_MAP: { OPEN: 'open', CLOSED: 'closed' },
     MAX_CONCURRENT_RESOLVE: 5,
     ISSUES_QUERY_FULL: '',
-    ISSUES_QUERY_BASIC: '',
     SINGLE_ISSUE_DEPS_QUERY_FULL: '',
-    SINGLE_ISSUE_DEPS_QUERY_BASIC: '',
   };
 });
 

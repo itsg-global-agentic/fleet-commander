@@ -497,18 +497,6 @@ export class IssueFetcher {
    * serial iteration, significantly reducing total wall-clock time.
    */
   async fetchAllProjects(): Promise<void> {
-    // Recovery mechanism: tick the GitHub provider's retry countdown so it
-    // re-enables blockedBy support after a few poll cycles (circuit-breaker pattern).
-    // Only applies to GitHub providers; Jira/Linear do not have this mechanism.
-    try {
-      const ghProvider = getIssueProvider({ issueProvider: 'github' } as Parameters<typeof getIssueProvider>[0]);
-      if (ghProvider instanceof GitHubIssueProvider) {
-        ghProvider.tickRetryCountdown();
-      }
-    } catch {
-      // No GitHub provider configured -- that's fine, Jira-only setups skip this
-    }
-
     const db = getDatabase();
     const projects = db.getProjects({ status: 'active' });
 

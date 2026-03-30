@@ -2,8 +2,8 @@
 // Fleet Commander -- GitHub Issue Provider
 // =============================================================================
 // Implements the IssueProvider interface for GitHub issues using `gh api graphql`
-// via child_process. Handles GraphQL query execution, full/basic fallback for
-// blockedBy fields, issue mapping to GenericIssue, and dependency fetching.
+// via child_process. Handles GraphQL query execution, issue mapping to
+// GenericIssue, and dependency fetching.
 //
 // This provider encapsulates all GitHub-specific GraphQL queries, response types,
 // and parsing logic that was previously in IssueFetcher.
@@ -117,9 +117,8 @@ export const MAX_CONCURRENT_RESOLVE = 5;
 // The tree is built client-side from parent references instead of nested
 // subIssues, avoiding GitHub's 500,000 node limit.
 //
-// Two variants: FULL includes blockedBy/issueDependenciesSummary fields
-// (GitHub Sub-issues / Issue Dependencies API). BASIC omits them for
-// environments where those fields are not available in the GraphQL schema.
+// Includes blockedBy/issueDependenciesSummary fields (GitHub Sub-issues /
+// Issue Dependencies API).
 // ---------------------------------------------------------------------------
 
 export const ISSUES_QUERY_FULL = `
@@ -150,36 +149,8 @@ query GetIssues($owner: String!, $repo: String!, $cursor: String) {
 }
 `;
 
-export const ISSUES_QUERY_BASIC = `
-query GetIssues($owner: String!, $repo: String!, $cursor: String) {
-  repository(owner: $owner, name: $repo) {
-    issues(first: 100, after: $cursor, states: [OPEN]) {
-      pageInfo { hasNextPage endCursor }
-      nodes {
-        number
-        title
-        state
-        url
-        labels(first: 5) { nodes { name } }
-        parent { number title }
-        subIssuesSummary { total completed percentCompleted }
-        body
-        createdAt
-        closedByPullRequestsReferences(first: 3, includeClosedPrs: true) {
-          nodes { number state }
-        }
-      }
-    }
-  }
-}
-`;
-
 // ---------------------------------------------------------------------------
 // Single-issue dependency queries (used by fetchDependenciesFromTimeline)
-// ---------------------------------------------------------------------------
-// Two variants mirror the batch query pattern: FULL includes blockedBy for
-// environments that support GitHub's native issue dependencies; BASIC omits
-// it for environments where the field is not available in the GraphQL schema.
 // ---------------------------------------------------------------------------
 
 export const SINGLE_ISSUE_DEPS_QUERY_FULL = `
@@ -198,28 +169,12 @@ query($owner: String!, $repo: String!, $issueNumber: Int!) {
 }
 `;
 
-export const SINGLE_ISSUE_DEPS_QUERY_BASIC = `
-query($owner: String!, $repo: String!, $issueNumber: Int!) {
-  repository(owner: $owner, name: $repo) {
-    issue(number: $issueNumber) {
-      body
-      trackedInIssues(first: 50) {
-        nodes { number title state repository { owner { login } name } }
-      }
-    }
-  }
-}
-`;
-
 // ---------------------------------------------------------------------------
 // Issue context queries -- single issue with full metadata for context file
 // ---------------------------------------------------------------------------
 // Fetches all fields needed for the issue context file in a single round-trip:
 // metadata, body, comments, labels, assignees, milestone, parent, sub-issues,
 // dependencies, and linked PRs.
-//
-// Two variants: WITH_DEPS includes blockedBy/blocking/subIssues fields;
-// BASIC omits them for environments where those fields are not available.
 // ---------------------------------------------------------------------------
 
 export const ISSUE_CONTEXT_QUERY_WITH_DEPS = `
@@ -253,38 +208,6 @@ query($owner: String!, $repo: String!, $issueNumber: Int!) {
       blocking(first: 20) {
         nodes { number title state repository { owner { login } name } }
       }
-      closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
-        nodes { number state url }
-      }
-    }
-  }
-}
-`;
-
-export const ISSUE_CONTEXT_QUERY_BASIC = `
-query($owner: String!, $repo: String!, $issueNumber: Int!) {
-  repository(owner: $owner, name: $repo) {
-    issue(number: $issueNumber) {
-      number
-      title
-      state
-      body
-      createdAt
-      updatedAt
-      author { login }
-      labels(first: 20) { nodes { name } }
-      assignees(first: 10) { nodes { login } }
-      milestone { title }
-      comments(last: 100) {
-        totalCount
-        nodes {
-          author { login }
-          createdAt
-          body
-          isMinimized
-        }
-      }
-      parent { number title }
       closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
         nodes { number state url }
       }
@@ -479,21 +402,6 @@ export class GitHubIssueProvider implements IssueProvider {
     linkedPRs: true,
   };
 
-  // Whether the GitHub GraphQL schema supports blockedBy/issueDependenciesSummary.
-  // Starts true; set to false on first query failure caused by unsupported fields,
-  // after which all subsequent queries use the basic query without those fields.
-  // Recovery: after `blockedByRetryCountdown` poll cycles, re-tests the full query.
-  private blockedBySupported = true;
-  // Countdown to retry the full query after blockedBySupported was set to false.
-  // When this reaches 0, the next fetchRawIssueHierarchy() call re-enables blockedBySupported.
-  private blockedByRetryCountdown = 0;
-
-  /**
-   * Optional callback invoked when `blockedBySupported` changes value.
-   * Set by the provider registry to persist state changes to the database.
-   */
-  onBlockedBySupportedChanged?: (supported: boolean) => void;
-
   // -------------------------------------------------------------------------
   // IssueProvider interface methods
   // -------------------------------------------------------------------------
@@ -608,36 +516,15 @@ export class GitHubIssueProvider implements IssueProvider {
   }
 
   /**
-   * Execute the single-issue dependency GraphQL query with full/basic fallback.
-   * Mirrors the executeGraphQL() pattern: tries the full query first (with
-   * blockedBy), downgrades to basic if the field is unsupported.
+   * Execute the single-issue dependency GraphQL query.
+   * Always uses the full query with blockedBy fields.
    */
   async fetchSingleIssueDeps(
     owner: string,
     repo: string,
     issueNumber: number,
   ): Promise<SingleIssueDepsResult | null> {
-    const query = this.blockedBySupported
-      ? SINGLE_ISSUE_DEPS_QUERY_FULL
-      : SINGLE_ISSUE_DEPS_QUERY_BASIC;
-
-    const result = await this.runSingleIssueDepsQuery(query, owner, repo, issueNumber);
-    if (result !== null) {
-      return result;
-    }
-
-    // If the full query failed and blockedBy was enabled, retry with basic
-    // query locally but do NOT persist the flag change -- only batch queries
-    // should toggle blockedBySupported to avoid cascading downgrades.
-    if (this.blockedBySupported) {
-      console.warn(
-        '[GitHubIssueProvider] Single-issue deps query failed with full query; ' +
-        'retrying with basic query (blockedBySupported flag NOT changed)'
-      );
-      return this.runSingleIssueDepsQuery(SINGLE_ISSUE_DEPS_QUERY_BASIC, owner, repo, issueNumber);
-    }
-
-    return null;
+    return this.runSingleIssueDepsQuery(SINGLE_ISSUE_DEPS_QUERY_FULL, owner, repo, issueNumber);
   }
 
   /**
@@ -658,28 +545,9 @@ export class GitHubIssueProvider implements IssueProvider {
     repo: string,
     issueNumber: number,
   ): Promise<IssueContextData | null> {
-    const query = this.blockedBySupported
-      ? ISSUE_CONTEXT_QUERY_WITH_DEPS
-      : ISSUE_CONTEXT_QUERY_BASIC;
-
-    let result = await this.runIssueContextQuery(query, owner, repo, issueNumber);
-
-    // If the full query failed and blockedBy was enabled, retry with basic
-    // query locally but do NOT persist the flag change -- only batch queries
-    // should toggle blockedBySupported to avoid cascading downgrades.
-    if (result === null && this.blockedBySupported) {
-      console.warn(
-        '[GitHubIssueProvider] Issue context query failed with full query; ' +
-        'retrying with basic query (blockedBySupported flag NOT changed)'
-      );
-      result = await this.runIssueContextQuery(
-        ISSUE_CONTEXT_QUERY_BASIC,
-        owner,
-        repo,
-        issueNumber,
-      );
-    }
-
+    const result = await this.runIssueContextQuery(
+      ISSUE_CONTEXT_QUERY_WITH_DEPS, owner, repo, issueNumber,
+    );
     if (!result) return null;
 
     return this.mapContextNodeToData(result, owner, repo);
@@ -817,48 +685,6 @@ export class GitHubIssueProvider implements IssueProvider {
     }
   }
 
-  /**
-   * Whether the blockedBy GraphQL field is supported.
-   * Exposed for IssueFetcher to read.
-   */
-  get isBlockedBySupported(): boolean {
-    return this.blockedBySupported;
-  }
-
-  /**
-   * Reset the blockedBy support flag (e.g. on factory reset).
-   */
-  resetBlockedBySupport(): void {
-    this.blockedBySupported = true;
-    this.blockedByRetryCountdown = 0;
-  }
-
-  /**
-   * Set the blockedBySupported flag directly (e.g. to inject persisted state
-   * on startup). Resets the retry countdown to 0.
-   */
-  setBlockedBySupported(value: boolean): void {
-    this.blockedBySupported = value;
-    this.blockedByRetryCountdown = 0;
-  }
-
-  /**
-   * Decrement the retry countdown and re-enable blockedBy if it reaches 0.
-   * Called by IssueFetcher at the start of each poll cycle.
-   */
-  tickRetryCountdown(): void {
-    if (!this.blockedBySupported && this.blockedByRetryCountdown > 0) {
-      this.blockedByRetryCountdown--;
-      if (this.blockedByRetryCountdown === 0) {
-        this.blockedBySupported = true;
-        this.onBlockedBySupportedChanged?.(true);
-        console.info(
-          '[GitHubIssueProvider] blockedBySupported changed: false -> true (retry countdown reached 0)'
-        );
-      }
-    }
-  }
-
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
@@ -866,37 +692,14 @@ export class GitHubIssueProvider implements IssueProvider {
   /**
    * Execute a GraphQL query via `gh api graphql`.
    * Returns parsed JSON or null on error.
-   *
-   * Selects between the full query (with blockedBy/issueDependenciesSummary)
-   * and the basic query based on `this.blockedBySupported`. If the full query
-   * fails due to unsupported fields, automatically downgrades to the basic
-   * query and retries.
+   * Always uses the full query with blockedBy/issueDependenciesSummary fields.
    */
   private async executeGraphQL(
     owner: string,
     repo: string,
     cursor: string | null,
   ): Promise<GraphQLResponse | null> {
-    const query = this.blockedBySupported ? ISSUES_QUERY_FULL : ISSUES_QUERY_BASIC;
-    const result = await this.runGraphQLQuery(query, owner, repo, cursor);
-
-    if (result !== null) {
-      return result;
-    }
-
-    // If the full query failed and blockedBy was enabled, downgrade and retry
-    if (this.blockedBySupported) {
-      this.blockedBySupported = false;
-      this.blockedByRetryCountdown = 5;
-      this.onBlockedBySupportedChanged?.(false);
-      console.warn(
-        '[GitHubIssueProvider] blockedBySupported changed: true -> false ' +
-        '(batch query field error; will retry after 5 poll cycles)'
-      );
-      return this.runGraphQLQuery(ISSUES_QUERY_BASIC, owner, repo, cursor);
-    }
-
-    return null;
+    return this.runGraphQLQuery(ISSUES_QUERY_FULL, owner, repo, cursor);
   }
 
   /**

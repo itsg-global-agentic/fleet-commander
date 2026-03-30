@@ -6,7 +6,7 @@
 //   - Filtering bot comments (login ending with [bot] or github-actions)
 //   - Filtering minimized comments
 //   - Selecting 10 most recent comments
-//   - Handling query failures and fallback to basic query
+//   - Handling query failures (no fallback — always uses full query)
 //   - Handling null/missing fields
 // =============================================================================
 
@@ -313,37 +313,20 @@ describe('GitHubIssueProvider.fetchFullIssueContext', () => {
     expect(result).toBeNull();
   });
 
-  it('should fall back to basic query when full query fails with field error', async () => {
-    // First call fails with field error, second (basic) succeeds
-    const node = makeGraphQLNode({
-      subIssues: undefined,
-      blockedBy: undefined,
-      blocking: undefined,
-    });
+  it('should return null when full query fails with field error (no fallback)', async () => {
+    // Field error returns null — no basic query fallback
+    runGHGraphQLSpy.mockResolvedValue(JSON.stringify({
+      errors: [{ message: "Field 'blockedBy' doesn't exist on type 'Issue'" }],
+      data: null,
+    }));
 
-    let callCount = 0;
-    runGHGraphQLSpy.mockImplementation(async () => {
-      callCount++;
-      if (callCount === 1) {
-        // Simulate field-not-found error
-        return JSON.stringify({
-          errors: [{ message: "Field 'blockedBy' doesn't exist on type 'Issue'" }],
-          data: null,
-        });
-      }
-      return makeGraphQLResponse(node);
-    });
-
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const result = await provider.fetchFullIssueContext('acme', 'widget', 42);
-    warnSpy.mockRestore();
     errorSpy.mockRestore();
 
-    expect(result).not.toBeNull();
-    expect(result!.number).toBe(42);
-    // Should have called runGHGraphQL twice (full + basic)
-    expect(callCount).toBe(2);
+    expect(result).toBeNull();
+    // Should have called runGHGraphQL only once (no retry with basic query)
+    expect(runGHGraphQLSpy).toHaveBeenCalledTimes(1);
   });
 
   it('should handle only bot/minimized comments (empty comments section)', async () => {

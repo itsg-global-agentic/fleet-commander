@@ -1,16 +1,13 @@
 // =============================================================================
-// Fleet Commander -- blockedBy Recovery & Null Repository Tests
+// Fleet Commander -- GraphQL Error Handling & Null Repository Tests
 // =============================================================================
 // Tests for:
 //   - runSingleIssueDepsQuery: non-field GraphQL errors do not discard data
-//   - runSingleIssueDepsQuery: field-not-found errors correctly trigger fallback
+//   - runSingleIssueDepsQuery: field-not-found errors correctly return null
 //   - runGraphQLQuery: non-field errors do not discard batch query data
-//   - blockedBySupported recovery after retry countdown expires
 //   - mapGraphQLNodeToIssueNode: null repository in blockedBy nodes is safely skipped
 //
-// These methods now live in GitHubIssueProvider (moved from IssueFetcher in #577).
-// The recovery mechanism is triggered via provider.tickRetryCountdown() called
-// from IssueFetcher.fetchAllProjects().
+// These methods live in GitHubIssueProvider (moved from IssueFetcher in #577).
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -308,93 +305,6 @@ describe('runGraphQLQuery batch error handling', () => {
     expect(result).not.toBeNull();
 
     ghSpy.mockRestore();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Tests: blockedBySupported recovery mechanism (now on GitHubIssueProvider)
-// ---------------------------------------------------------------------------
-
-describe('blockedBySupported recovery mechanism', () => {
-  let provider: GitHubIssueProvider;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    provider = new GitHubIssueProvider();
-  });
-
-  it('should set blockedByRetryCountdown to 5 when blockedBySupported is disabled', async () => {
-    const ghSpy = vi.spyOn(provider as any, 'runGHGraphQL')
-      .mockResolvedValue(JSON.stringify({
-        data: null,
-        errors: [{ message: "Field 'blockedBy' doesn't exist on type 'Issue'" }],
-      }));
-
-    // Call executeGraphQL to trigger the downgrade
-    await (provider as any).executeGraphQL('owner', 'repo', null);
-
-    expect((provider as any).blockedBySupported).toBe(false);
-    expect((provider as any).blockedByRetryCountdown).toBe(5);
-
-    ghSpy.mockRestore();
-  });
-
-  it('should recover blockedBySupported after retry countdown expires', () => {
-    (provider as any).blockedBySupported = false;
-    (provider as any).blockedByRetryCountdown = 1;
-
-    provider.tickRetryCountdown();
-
-    expect((provider as any).blockedBySupported).toBe(true);
-  });
-
-  it('should not recover blockedBySupported before countdown expires', () => {
-    (provider as any).blockedBySupported = false;
-    (provider as any).blockedByRetryCountdown = 3;
-
-    provider.tickRetryCountdown();
-
-    expect((provider as any).blockedBySupported).toBe(false);
-    expect((provider as any).blockedByRetryCountdown).toBe(2);
-  });
-
-  it('should count down across multiple tickRetryCountdown calls', () => {
-    (provider as any).blockedBySupported = false;
-    (provider as any).blockedByRetryCountdown = 3;
-
-    // Call 1: 3 -> 2
-    provider.tickRetryCountdown();
-    expect((provider as any).blockedBySupported).toBe(false);
-    expect((provider as any).blockedByRetryCountdown).toBe(2);
-
-    // Call 2: 2 -> 1
-    provider.tickRetryCountdown();
-    expect((provider as any).blockedBySupported).toBe(false);
-    expect((provider as any).blockedByRetryCountdown).toBe(1);
-
-    // Call 3: 1 -> 0, recovery
-    provider.tickRetryCountdown();
-    expect((provider as any).blockedBySupported).toBe(true);
-  });
-
-  it('should reset blockedByRetryCountdown on resetBlockedBySupport()', () => {
-    (provider as any).blockedBySupported = false;
-    (provider as any).blockedByRetryCountdown = 3;
-
-    provider.resetBlockedBySupport();
-
-    expect((provider as any).blockedBySupported).toBe(true);
-    expect((provider as any).blockedByRetryCountdown).toBe(0);
-  });
-
-  it('should not attempt recovery when blockedBySupported is already true', () => {
-    (provider as any).blockedBySupported = true;
-    (provider as any).blockedByRetryCountdown = 0;
-
-    provider.tickRetryCountdown();
-
-    expect((provider as any).blockedBySupported).toBe(true);
-    expect((provider as any).blockedByRetryCountdown).toBe(0);
   });
 });
 

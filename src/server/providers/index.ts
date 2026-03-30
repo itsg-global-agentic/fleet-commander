@@ -8,7 +8,6 @@
 
 import type { IssueProvider, NormalizedStatus } from '../../shared/issue-provider.js';
 import type { Project } from '../../shared/types.js';
-import { getDatabase } from '../db.js';
 import { GitHubIssueProvider } from './github-issue-provider.js';
 import { JiraIssueProvider, type JiraConfig } from './jira-issue-provider.js';
 
@@ -43,29 +42,7 @@ export function getIssueProvider(project: Project): IssueProvider {
 
   switch (providerName) {
     case 'github': {
-      const ghProvider = new GitHubIssueProvider();
-
-      // Restore persisted blockedBySupported state from the database
-      try {
-        const db = getDatabase();
-        const persisted = db.getProviderState('github:blockedBySupported');
-        if (persisted === 'false') {
-          ghProvider.setBlockedBySupported(false);
-        }
-      } catch {
-        // DB may not be ready during tests — ignore
-      }
-
-      // Persist blockedBySupported changes to the database
-      ghProvider.onBlockedBySupportedChanged = (supported) => {
-        try {
-          getDatabase().setProviderState('github:blockedBySupported', String(supported));
-        } catch {
-          // DB may not be ready during tests — ignore
-        }
-      };
-
-      provider = ghProvider;
+      provider = new GitHubIssueProvider();
       break;
     }
     case 'jira': {
