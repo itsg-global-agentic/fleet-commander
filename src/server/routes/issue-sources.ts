@@ -281,10 +281,12 @@ async function issueSourcesRoutes(server: FastifyInstance): Promise<void> {
   );
 
   /**
-   * POST /api/projects/:projectId/issue-sources/test-connection — Test Jira connection
+   * POST /api/projects/:projectId/issue-sources/test-connection — Test provider connection
    *
-   * Accepts Jira credential fields and validates them against the Jira REST API.
-   * Always returns 200 with { ok, projectName?, error? }.
+   * Provider-aware: accepts a `provider` field to dispatch to the correct handler.
+   * - `provider === 'github'`: validates gh CLI auth or PAT against GitHub API.
+   * - `provider === 'jira'` (or omitted): validates Jira REST API credentials.
+   * Always returns 200 with { ok, projectName?/repoName?, error? }.
    */
   server.post<{ Params: { projectId: string } }>(
     '/api/projects/:projectId/issue-sources/test-connection',
@@ -303,6 +305,107 @@ async function issueSourcesRoutes(server: FastifyInstance): Promise<void> {
           throw validationError('Request body is required');
         }
 
+        const provider = typeof body.provider === 'string' ? body.provider : 'jira';
+
+        // --- GitHub provider ---
+        if (provider === 'github') {
+          const owner = body.owner;
+          const repo = body.repo;
+          const authMode = typeof body.authMode === 'string' ? body.authMode : 'gh-cli';
+
+          if (!owner || typeof owner !== 'string') {
+            throw validationError('owner is required and must be a string');
+          }
+          if (!repo || typeof repo !== 'string') {
+            throw validationError('repo is required and must be a string');
+          }
+
+          if (authMode === 'gh-cli') {
+            // Validate gh CLI is authenticated
+            const { execFileSync } = await import('child_process');
+            try {
+              execFileSync('gh', ['auth', 'status'], { timeout: 10000, stdio: 'pipe' });
+            } catch (ghErr: unknown) {
+              const errMsg = ghErr instanceof Error && 'code' in ghErr && (ghErr as NodeJS.ErrnoException).code === 'ENOENT'
+                ? 'gh CLI is not installed or not in PATH'
+                : 'gh CLI is not authenticated. Run "gh auth login" first.';
+              return reply.code(200).send({ ok: false, error: errMsg });
+            }
+
+            // Validate repo exists
+            try {
+              const result = execFileSync('gh', ['api', `repos/${owner}/${repo}`, '--jq', '.full_name'], {
+                timeout: 10000,
+                stdio: 'pipe',
+                encoding: 'utf-8',
+              });
+              return reply.code(200).send({ ok: true, repoName: result.trim() });
+            } catch {
+              return reply.code(200).send({
+                ok: false,
+                error: `Repository "${owner}/${repo}" not found or not accessible via gh CLI`,
+              });
+            }
+          }
+
+          // authMode === 'pat'
+          const pat = body.pat;
+          if (!pat || typeof pat !== 'string') {
+            throw validationError('pat is required for PAT auth mode');
+          }
+
+          try {
+            const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
+              method: 'GET',
+              headers: {
+                'Authorization': `token ${pat}`,
+                'Accept': 'application/vnd.github+json',
+                'User-Agent': 'Fleet-Commander',
+              },
+              signal: AbortSignal.timeout(10000),
+            });
+
+            if (response.ok) {
+              const data = await response.json() as Record<string, unknown>;
+              return reply.code(200).send({
+                ok: true,
+                repoName: typeof data.full_name === 'string' ? data.full_name : `${owner}/${repo}`,
+              });
+            }
+
+            if (response.status === 401) {
+              return reply.code(200).send({
+                ok: false,
+                error: 'Authentication failed: invalid Personal Access Token',
+              });
+            }
+
+            if (response.status === 404) {
+              return reply.code(200).send({
+                ok: false,
+                error: `Repository "${owner}/${repo}" not found or not accessible`,
+              });
+            }
+
+            return reply.code(200).send({
+              ok: false,
+              error: `GitHub API returned ${response.status}: ${response.statusText}`,
+            });
+          } catch (fetchErr: unknown) {
+            if (fetchErr instanceof Error && fetchErr.name === 'TimeoutError') {
+              return reply.code(200).send({
+                ok: false,
+                error: 'Connection timed out after 10 seconds',
+              });
+            }
+            return reply.code(200).send({
+              ok: false,
+              error: `Connection failed: ${fetchErr instanceof Error ? fetchErr.message : String(fetchErr)}`,
+            });
+          }
+        }
+
+        // --- Jira provider (default) ---
         const jiraUrl = body.jiraUrl;
         const projectKey = body.projectKey;
         const email = body.email;
@@ -386,7 +489,7 @@ async function issueSourcesRoutes(server: FastifyInstance): Promise<void> {
         if (err instanceof ServiceError) {
           return reply.code(err.statusCode).send({ error: err.code, message: err.message });
         }
-        request.log.error(err, 'Failed to test Jira connection');
+        request.log.error(err, 'Failed to test connection');
         return reply.code(500).send({
           error: 'Internal Server Error',
           message: err instanceof Error ? err.message : String(err),

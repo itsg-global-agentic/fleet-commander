@@ -98,6 +98,21 @@ export interface JiraSourceCredentials {
   apiToken: string;
 }
 
+/** GitHub auth mode: gh CLI (default, no credentials needed) or PAT */
+export type GitHubAuthMode = 'gh-cli' | 'pat';
+
+/** GitHub source configuration stored in configJson */
+export interface GitHubSourceConfig {
+  owner: string;
+  repo: string;
+  authMode: GitHubAuthMode;
+}
+
+/** GitHub source credentials stored in credentialsJson (encrypted at rest) */
+export interface GitHubSourceCredentials {
+  pat: string;
+}
+
 /** Detailed file-level info for a single install artifact */
 export interface InstallFileStatus {
   name: string;

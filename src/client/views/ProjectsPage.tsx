@@ -5,8 +5,9 @@ import { useExpandState } from '../hooks/useExpandState';
 import { AddProjectDialog } from '../components/AddProjectDialog';
 import { CleanupModal } from '../components/CleanupModal';
 import { JiraSourceDialog } from '../components/JiraSourceDialog';
+import { GitHubSourceDialog } from '../components/GitHubSourceDialog';
 import { OverflowMenu } from '../components/OverflowMenu';
-import { ChevronRightIcon, PencilIcon } from '../components/Icons';
+import { ChevronRightIcon, PencilIcon, ProviderIcon } from '../components/Icons';
 import type { ProjectSummary, ProjectStatus, ProjectGroup, ProjectIssueSourceResponse, RepoSettings } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -362,14 +363,32 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
 // IssueSourcesSection — lists configured issue sources with status badges
 // ---------------------------------------------------------------------------
 
+/** Parse GitHub auth mode from configJson, defaulting to 'gh-cli' for backward compat */
+function getGitHubAuthMode(configJson: string): string {
+  try {
+    const config = JSON.parse(configJson) as Record<string, unknown>;
+    return typeof config.authMode === 'string' ? config.authMode : 'gh-cli';
+  } catch {
+    return 'gh-cli';
+  }
+}
+
 /** Status badge color: green=enabled+credentials, red=enabled+no credentials, gray=disabled */
 function sourceStatusColor(source: ProjectIssueSourceResponse): string {
   if (!source.enabled) return '#8B949E';
+  // GitHub sources in gh-cli mode are always green when enabled (no credentials needed)
+  if (source.provider === 'github' && getGitHubAuthMode(source.configJson) === 'gh-cli') {
+    return '#3FB950';
+  }
   return source.hasCredentials ? '#3FB950' : '#F85149';
 }
 
 function sourceStatusLabel(source: ProjectIssueSourceResponse): string {
   if (!source.enabled) return 'Disabled';
+  // GitHub sources in gh-cli mode show "Ready (gh CLI)" when enabled
+  if (source.provider === 'github' && getGitHubAuthMode(source.configJson) === 'gh-cli') {
+    return 'Ready (gh CLI)';
+  }
   return source.hasCredentials ? 'Connected' : 'No credentials';
 }
 
@@ -381,7 +400,7 @@ function IssueSourcesSection({
   const api = useApi();
   const [sources, setSources] = useState<ProjectIssueSourceResponse[]>([]);
   const [loading, setLoading] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [dialogState, setDialogState] = useState<'closed' | 'pick-provider' | 'github' | 'jira'>('closed');
   const [editingSource, setEditingSource] = useState<ProjectIssueSourceResponse | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<number | null>(null);
 
@@ -412,7 +431,7 @@ function IssueSourcesSection({
     } else {
       await api.post(`projects/${projectId}/issue-sources`, data);
     }
-    setDialogOpen(false);
+    setDialogState('closed');
     setEditingSource(null);
     await fetchSources();
   }, [api, projectId, editingSource, fetchSources]);
@@ -448,10 +467,10 @@ function IssueSourcesSection({
           Issue Sources
         </div>
         <button
-          onClick={() => { setEditingSource(null); setDialogOpen(true); }}
+          onClick={() => { setEditingSource(null); setDialogState('pick-provider'); }}
           className="text-[10px] text-dark-accent/70 hover:text-dark-accent transition-colors"
         >
-          + Add Jira Source
+          + Add Issue Source
         </button>
       </div>
 
@@ -473,6 +492,8 @@ function IssueSourcesSection({
               const config = JSON.parse(source.configJson) as Record<string, unknown>;
               if (config.projectKey) {
                 sourceLabel = source.label || `${source.provider} — ${config.projectKey}`;
+              } else if (config.owner && config.repo) {
+                sourceLabel = source.label || `${config.owner}/${config.repo}`;
               }
             } catch {
               // Use default label
@@ -489,6 +510,9 @@ function IssueSourcesSection({
                   style={{ backgroundColor: statusColor }}
                   title={statusText}
                 />
+
+                {/* Provider icon */}
+                <ProviderIcon provider={source.provider} size={12} className="shrink-0 text-dark-muted" />
 
                 {/* Label */}
                 <span className="text-dark-text/80 truncate flex-1" title={sourceLabel}>
@@ -517,7 +541,7 @@ function IssueSourcesSection({
 
                 {/* Edit button */}
                 <button
-                  onClick={() => { setEditingSource(source); setDialogOpen(true); }}
+                  onClick={() => { setEditingSource(source); setDialogState(source.provider === 'github' ? 'github' : 'jira'); }}
                   className="text-dark-muted/50 hover:text-dark-text transition-colors shrink-0"
                   title="Edit"
                 >
@@ -561,11 +585,62 @@ function IssueSourcesSection({
         </div>
       )}
 
-      <JiraSourceDialog
-        open={dialogOpen}
+      {/* Provider picker modal */}
+      {dialogState === 'pick-provider' && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={(e) => { if (e.target === e.currentTarget) setDialogState('closed'); }}
+        >
+          <div className="w-[320px] max-w-[95vw] bg-dark-surface border border-dark-border rounded-lg shadow-2xl" role="dialog" aria-modal="true">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-dark-border">
+              <h2 className="text-base font-semibold text-dark-text">Choose Provider</h2>
+              <button
+                onClick={() => setDialogState('closed')}
+                className="text-dark-muted hover:text-dark-text transition-colors p-1 rounded hover:bg-dark-border/30"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path
+                    fillRule="evenodd"
+                    d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                    clipRule="evenodd"
+                  />
+                </svg>
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-2">
+              <button
+                onClick={() => setDialogState('github')}
+                className="w-full flex items-center gap-3 px-4 py-3 text-sm text-dark-text rounded border border-dark-border hover:border-dark-accent/50 hover:bg-dark-accent/5 transition-colors"
+              >
+                <ProviderIcon provider="github" size={18} />
+                GitHub
+              </button>
+              <button
+                onClick={() => setDialogState('jira')}
+                className="w-full flex items-center gap-3 px-4 py-3 text-sm text-dark-text rounded border border-dark-border hover:border-dark-accent/50 hover:bg-dark-accent/5 transition-colors"
+              >
+                <ProviderIcon provider="jira" size={18} />
+                Jira
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Provider-specific dialogs */}
+      <GitHubSourceDialog
+        open={dialogState === 'github'}
         projectId={projectId}
         source={editingSource}
-        onClose={() => { setDialogOpen(false); setEditingSource(null); }}
+        onClose={() => { setDialogState('closed'); setEditingSource(null); }}
+        onSave={handleSave}
+      />
+
+      <JiraSourceDialog
+        open={dialogState === 'jira'}
+        projectId={projectId}
+        source={editingSource}
+        onClose={() => { setDialogState('closed'); setEditingSource(null); }}
         onSave={handleSave}
       />
     </div>

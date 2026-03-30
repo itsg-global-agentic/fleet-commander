@@ -415,4 +415,23 @@ describe('ProjectsPage', () => {
     // Project should be expanded (from localStorage) — check for detail content
     expect(await screen.findByText('Repository')).toBeInTheDocument();
   });
+
+  // -----------------------------------------------------------------------
+  // Issue Sources — provider-aware status badges (#631)
+  // -----------------------------------------------------------------------
+
+  it('shows "+ Add Issue Source" button text (not "+ Add Jira Source")', async () => {
+    setupDefaultMocks();
+    render(<ProjectsPage />);
+    // Expand a project card first
+    const projectName = await screen.findByText('test-project');
+    const row = projectName.closest('[class*="cursor-pointer"]');
+    expect(row).not.toBeNull();
+    fireEvent.click(row!);
+
+    await waitFor(() => {
+      expect(screen.getByText('+ Add Issue Source')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('+ Add Jira Source')).not.toBeInTheDocument();
+  });
 });
