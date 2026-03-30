@@ -5,7 +5,8 @@ import { usePrioritization, sortTreeByPriority } from '../hooks/usePrioritizatio
 import { useCollapseState } from '../hooks/useCollapseState';
 import { useFlattenedTree } from '../hooks/useVirtualizedTree';
 import { VirtualizedTreeList } from '../components/VirtualizedTreeList';
-import { ProviderIcon } from '../components/Icons';
+import { ProviderIcon, DependencyGraphIcon } from '../components/Icons';
+import { DependencyGraphModal } from '../components/DependencyGraphModal';
 import type { IssueNode } from '../components/TreeNode';
 import type { ProjectSummary } from '../../shared/types';
 
@@ -757,6 +758,7 @@ export function IssueTreeView() {
           <SingleProjectTree
             tree={filteredTree}
             projectId={launchProjectId}
+            projectName={activeProjects.length === 1 ? activeProjects[0].name : undefined}
             onLaunch={handleLaunch}
             launchingIssues={launchingIssues}
             launchErrors={launchErrors}
@@ -1228,6 +1230,7 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
   const expanded = !collapsedNodes.has(projectNodeId);
   const prioritization = usePrioritization();
   const [showRunAllDialog, setShowRunAllDialog] = useState(false);
+  const [showDepGraph, setShowDepGraph] = useState(false);
 
   // Detect distinct providers in this group's tree
   const distinctProviders = useMemo(() => {
@@ -1323,6 +1326,14 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
           </span>
         </button>
 
+        <button
+          onClick={() => setShowDepGraph(true)}
+          className="inline-flex items-center justify-center w-7 h-7 rounded border border-dark-border text-dark-muted hover:text-dark-accent hover:border-dark-accent/50 transition-colors"
+          title="View dependency graph"
+        >
+          <DependencyGraphIcon size={14} />
+        </button>
+
         <PrioritizeButtons
           prioritization={prioritization}
           tree={group.tree}
@@ -1416,6 +1427,15 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
           api={api}
           fetchTree={fetchTree}
           onClose={() => setShowRunAllDialog(false)}
+        />
+      )}
+
+      {/* Dependency graph modal */}
+      {showDepGraph && (
+        <DependencyGraphModal
+          issues={group.tree}
+          projectName={group.projectName}
+          onClose={() => setShowDepGraph(false)}
         />
       )}
     </div>
@@ -1527,6 +1547,7 @@ function ProviderSubGroup({ provider, issues, projectId, nodeKey, onLaunch, laun
 interface SingleProjectTreeProps {
   tree: IssueNode[];
   projectId: number | null;
+  projectName?: string;
   onLaunch: (issueNumber: number, title: string, projectId?: number, issueKey?: string, issueProvider?: string) => Promise<void>;
   launchingIssues: Set<number>;
   launchErrors: Map<number, string>;
@@ -1536,10 +1557,11 @@ interface SingleProjectTreeProps {
   onToggleCollapse: (nodeId: string) => void;
 }
 
-function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: SingleProjectTreeProps) {
+function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse }: SingleProjectTreeProps) {
   const api = useApi();
   const prioritization = usePrioritization();
   const [showRunAllDialog, setShowRunAllDialog] = useState(false);
+  const [showDepGraph, setShowDepGraph] = useState(false);
 
   const displayTree = useMemo(() => {
     if (!prioritization.hasPriority) return tree;
@@ -1554,6 +1576,14 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
     <div className="flex flex-col h-full">
       {/* Prioritize controls */}
       <div className="flex items-center gap-2 px-2 pb-2 shrink-0">
+        <button
+          onClick={() => setShowDepGraph(true)}
+          className="inline-flex items-center justify-center w-7 h-7 rounded border border-dark-border text-dark-muted hover:text-dark-accent hover:border-dark-accent/50 transition-colors"
+          title="View dependency graph"
+        >
+          <DependencyGraphIcon size={14} />
+        </button>
+
         <PrioritizeButtons
           prioritization={prioritization}
           tree={tree}
@@ -1616,6 +1646,15 @@ function SingleProjectTree({ tree, projectId, onLaunch, launchingIssues, launchE
           api={api}
           fetchTree={fetchTree}
           onClose={() => setShowRunAllDialog(false)}
+        />
+      )}
+
+      {/* Dependency graph modal */}
+      {showDepGraph && (
+        <DependencyGraphModal
+          issues={tree}
+          projectName={projectName ?? 'Project'}
+          onClose={() => setShowDepGraph(false)}
         />
       )}
     </div>

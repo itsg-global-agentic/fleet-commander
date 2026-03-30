@@ -266,6 +266,19 @@ export function LinearIcon({ size = 14, className }: IconProps) {
   );
 }
 
+export function DependencyGraphIcon({ size = 20, className }: IconProps) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="6" cy="6" r="3"/>
+      <circle cx="18" cy="6" r="3"/>
+      <circle cx="12" cy="18" r="3"/>
+      <line x1="8.7" y1="7.5" x2="9.3" y2="16.5"/>
+      <line x1="15.3" y1="7.5" x2="14.7" y2="16.5"/>
+      <line x1="9" y1="6" x2="15" y2="6"/>
+    </svg>
+  );
+}
+
 /**
  * Maps a provider name to its icon component.
  * Falls back to a generic circle icon for unknown providers.
