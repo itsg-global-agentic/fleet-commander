@@ -157,13 +157,14 @@ export function IssueTreeView() {
   // SSE: auto-refresh when a dependency is resolved
   // -------------------------------------------------------------------------
 
-  const handleSSEEvent = useCallback((type: string, data?: Record<string, unknown>) => {
+  const handleSSEEvent = useCallback((type: string, data: unknown) => {
     if (type === 'dependency_resolved') {
       fetchTree();
     }
-    if (type === 'relations_updated' && data) {
-      const issueKey = data.issue_key as string | undefined;
-      const relations = data.relations as IssueRelations | undefined;
+    const rec = data as Record<string, unknown> | undefined;
+    if (type === 'relations_updated' && rec) {
+      const issueKey = rec.issue_key as string | undefined;
+      const relations = rec.relations as IssueRelations | undefined;
       if (issueKey && relations) {
         setRelationsMap((prev) => {
           const next = new Map(prev);
