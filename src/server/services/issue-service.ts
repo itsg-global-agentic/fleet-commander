@@ -9,6 +9,7 @@ import { getIssueFetcher } from './issue-fetcher.js';
 import type { IssueNode } from './issue-fetcher.js';
 import { getDatabase } from '../db.js';
 import { validationError, notFoundError } from './service-error.js';
+import { computeWaves, type WaveIssue, type ExecutionPlan } from '../../shared/wave-computation.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -396,6 +397,99 @@ export class IssueService {
       refreshedAt: fetcher.getCachedAt(),
       issueCount: countIssues(enriched),
       tree: enriched,
+    };
+  }
+
+  /**
+   * Compute the dependency-resolved execution plan for a project.
+   * Shows issues grouped into waves based on dependency order and
+   * maxActiveTeams slot limits.
+   *
+   * @param projectId - The project ID
+   * @returns ExecutionPlan with wave assignments and circular dep warnings
+   * @throws ServiceError with code VALIDATION if projectId is invalid
+   * @throws ServiceError with code NOT_FOUND if project doesn't exist
+   */
+  async getExecutionPlan(projectId: number): Promise<ExecutionPlan> {
+    if (isNaN(projectId) || projectId < 1) {
+      throw validationError('projectId must be a positive integer');
+    }
+
+    const db = getDatabase();
+    const project = db.getProject(projectId);
+    if (!project) {
+      throw notFoundError(`Project ${projectId} not found`);
+    }
+
+    const fetcher = getIssueFetcher();
+    const issues = await fetcher.getIssues(projectId);
+    const enriched = fetcher.enrichWithTeamInfo(issues, projectId);
+
+    // Flatten the tree to get all issues
+    const allIssues = flattenIssueTree(
+      enriched as Array<{ number: number; children: Array<unknown> }>,
+    ) as IssueNode[];
+
+    // Get active and queued teams from DB
+    const activeTeams = db.getActiveTeamsByProject(projectId);
+    const activeTeamMap = new Map(
+      activeTeams.map((t) => [t.issueNumber, t]),
+    );
+
+    // Count non-queued active teams for slot calculation
+    const activeCount = db.getActiveTeamCountByProject(projectId);
+
+    // Build WaveIssue array from open issues that have a team or are potential work items
+    const waveIssues: WaveIssue[] = [];
+
+    for (const issue of allIssues) {
+      // Only include open issues (closed issues are resolved)
+      if (issue.state !== 'open') continue;
+
+      // Skip parent issues (those with open children) — only leaf issues get teams
+      const hasOpenChildren = issue.children.some((c) => c.state === 'open');
+      if (hasOpenChildren) continue;
+
+      const team = activeTeamMap.get(issue.number);
+
+      // Compute open blockers: only include blockers that are still open
+      const openBlockers: number[] = [];
+      if (issue.dependencies) {
+        for (const dep of issue.dependencies.blockedBy) {
+          if (dep.state === 'open') {
+            openBlockers.push(dep.number);
+          }
+        }
+      }
+
+      waveIssues.push({
+        issueNumber: issue.number,
+        issueKey: issue.issueKey,
+        title: issue.title,
+        state: issue.state,
+        teamId: team?.id,
+        teamStatus: team?.status,
+        blockedBy: openBlockers,
+        url: issue.url,
+      });
+    }
+
+    // Compute waves
+    const { waves, circularDeps } = computeWaves(
+      waveIssues,
+      project.maxActiveTeams,
+      activeCount,
+    );
+
+    const totalQueued = waveIssues.filter((i) => !i.teamStatus || i.teamStatus === 'queued').length;
+
+    return {
+      waves,
+      totalQueued,
+      maxActiveTeams: project.maxActiveTeams,
+      circularDeps,
+      projectId,
+      projectName: project.name,
     };
   }
 }

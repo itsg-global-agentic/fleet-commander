@@ -196,6 +196,30 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
   );
 
   /**
+   * GET /api/projects/:projectId/execution-plan — Dependency-resolved execution plan
+   * Returns issues grouped into execution waves based on dependency DAG and maxActiveTeams.
+   */
+  server.get<{ Params: { projectId: string } }>(
+    '/api/projects/:projectId/execution-plan',
+    async (request: FastifyRequest<{ Params: { projectId: string } }>, reply: FastifyReply) => {
+      try {
+        const projectId = parseIdParam(request.params.projectId, 'projectId');
+        const service = getIssueService();
+        return await service.getExecutionPlan(projectId);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        request.log.error(err, 'Failed to get execution plan');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  );
+
+  /**
    * POST /api/issues/refresh — Force re-fetch from GitHub
    * Clears the cache and re-fetches the full hierarchy for all projects.
    */

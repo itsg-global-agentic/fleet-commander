@@ -30,10 +30,10 @@ describe('SideNav', () => {
     expect(container.querySelector('nav')).toBeInTheDocument();
   });
 
-  it('renders all 6 navigation links', () => {
+  it('renders all 7 navigation links', () => {
     renderNav();
     const links = screen.getAllByRole('link');
-    expect(links).toHaveLength(6);
+    expect(links).toHaveLength(7);
   });
 
   it('renders links with correct titles', () => {
@@ -42,6 +42,7 @@ describe('SideNav', () => {
     expect(screen.getByTitle('Issue Tree')).toBeInTheDocument();
     expect(screen.getByTitle('Usage View')).toBeInTheDocument();
     expect(screen.getByTitle('Projects')).toBeInTheDocument();
+    expect(screen.getByTitle('Execution Plan')).toBeInTheDocument();
     expect(screen.getByTitle('Lifecycle')).toBeInTheDocument();
     expect(screen.getByTitle('Settings')).toBeInTheDocument();
   });
@@ -52,6 +53,7 @@ describe('SideNav', () => {
     expect(screen.getByTitle('Issue Tree')).toHaveAttribute('href', '/issues');
     expect(screen.getByTitle('Usage View')).toHaveAttribute('href', '/usage');
     expect(screen.getByTitle('Projects')).toHaveAttribute('href', '/projects');
+    expect(screen.getByTitle('Execution Plan')).toHaveAttribute('href', '/execution-plan');
     expect(screen.getByTitle('Lifecycle')).toHaveAttribute('href', '/lifecycle');
     expect(screen.getByTitle('Settings')).toHaveAttribute('href', '/settings');
   });
@@ -59,7 +61,7 @@ describe('SideNav', () => {
   it('renders SVG icons inside each link', () => {
     const { container } = renderNav();
     const svgs = container.querySelectorAll('svg');
-    expect(svgs).toHaveLength(6);
+    expect(svgs).toHaveLength(7);
   });
 
   it('highlights the active link when on the root route', () => {

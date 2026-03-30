@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutGridIcon, GitBranchIcon, BarChart3Icon, FolderGit2Icon, ActivityIcon, SettingsIcon } from './Icons';
+import { LayoutGridIcon, GitBranchIcon, BarChart3Icon, FolderGit2Icon, ActivityIcon, SettingsIcon, LayersIcon } from './Icons';
 
 interface NavItem {
   to: string;
@@ -12,6 +12,7 @@ const items: NavItem[] = [
   { to: '/issues', label: 'Issue Tree', icon: <GitBranchIcon /> },
   { to: '/usage', label: 'Usage View', icon: <BarChart3Icon /> },
   { to: '/projects', label: 'Projects', icon: <FolderGit2Icon /> },
+  { to: '/execution-plan', label: 'Execution Plan', icon: <LayersIcon size={20} /> },
   { to: '/lifecycle', label: 'Lifecycle', icon: <ActivityIcon size={20} /> },
   { to: '/settings', label: 'Settings', icon: <SettingsIcon size={20} /> },
 ];
