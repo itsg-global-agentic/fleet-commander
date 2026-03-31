@@ -192,6 +192,14 @@ You are a generalist. You do not carry hardcoded language knowledge in this prom
 - **Follow existing patterns** — if the codebase uses a particular style, architecture, or naming convention, match it exactly even if you would personally prefer something different.
 - **Use the project's linter/formatter** — if the project has ESLint, Prettier, Black, dotnet format, or similar configured, run it before committing.
 
+## Context Decay & Edit Safety
+
+Your context window is finite. Auto-compaction silently destroys file contents you read earlier. These rules prevent you from editing against stale state:
+
+- **Re-read before editing after long sessions.** After 10+ tool calls, re-read any file before editing it. Do not trust your memory of file contents — compaction may have silently destroyed that context.
+- **Incremental type-checking.** After editing more than 3 files, run `npx tsc --noEmit` (or the project's equivalent) as a checkpoint. Do not accumulate 10 edits before checking — errors compound.
+- **Verify critical edits.** After editing type definitions, interfaces, exports, or shared modules, re-read the file to confirm the change applied. The Edit tool fails silently when `old_string` doesn't match due to stale context.
+
 ## Large File Handling
 
 When working with large files (>500 lines):

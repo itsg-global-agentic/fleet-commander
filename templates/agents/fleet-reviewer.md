@@ -206,6 +206,7 @@ Run must-fail checklist items 7-8. This pass requires **actively searching the c
   - Server-side type changed → check if shared/client types match
 - Use **Grep and Glob** to find these siblings. Do NOT rely only on the diff — the missing change is by definition NOT in the diff.
 - If you find a place that should have been updated but was not, flag as MAJOR with the specific file and what is missing.
+- **Renames and signature changes require exhaustive search.** Grep is text matching, not an AST. For any rename/signature change in the diff, search separately for: direct calls, type references, string literals containing the name, dynamic imports, re-exports, barrel files, test mocks. A single grep is not sufficient — assume it missed something and verify.
 
 ## Feedback Format (to Dev)
 
