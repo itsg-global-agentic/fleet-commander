@@ -74,6 +74,7 @@ function areTeamRowPropsEqual(prev: TeamRowProps, next: TeamRowProps): boolean {
     a.totalCostUsd === b.totalCostUsd &&
     a.durationMin === b.durationMin &&
     a.model === b.model &&
+    a.modelInherited === b.modelInherited &&
     a.issueTitle === b.issueTitle &&
     a.projectName === b.projectName &&
     a.issueNumber === b.issueNumber &&
@@ -210,8 +211,11 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
 
       {/* Model */}
       <td className="px-4 whitespace-nowrap">
-        <span className="text-sm text-dark-muted">
-          {team.model ?? '\u2014'}
+        <span
+          className={`text-sm ${team.modelInherited ? 'text-dark-muted/50' : 'text-dark-muted'}`}
+          title={team.modelInherited ? 'FC default' : undefined}
+        >
+          {team.model}
         </span>
       </td>
 

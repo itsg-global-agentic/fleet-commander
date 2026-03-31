@@ -31,6 +31,7 @@ import type {
   TeamTask,
 } from '../shared/types.js';
 import { encrypt, decrypt, isEncrypted, decryptWithKey } from './utils/crypto.js';
+import config from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -2888,7 +2889,8 @@ export class FleetDatabase {
       issueProvider: (row.issue_provider as string | null) ?? (row.project_issue_provider as string | null) ?? null,
       projectId: (row.project_id as number | null) ?? null,
       projectName: (row.project_name as string | null) ?? null,
-      model: (row.model as string | null) ?? null,
+      model: (row.model as string | null) ?? config.defaultModel,
+      modelInherited: (row.model as string | null) === null,
       status: row.status as TeamStatus,
       phase: row.phase as TeamPhase,
       worktreeName: row.worktree_name as string,
