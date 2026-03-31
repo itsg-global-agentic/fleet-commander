@@ -240,6 +240,7 @@ The SSE broker emits 17 event types:
 | `FLEET_EARLY_CRASH_THRESHOLD_SEC` | `120` | Seconds before a SubagentStop is considered an early crash |
 | `FLEET_EARLY_CRASH_MIN_TOOLS` | `5` | Minimum tool-use events for a subagent to be considered healthy |
 | `FLEET_MERGE_SHUTDOWN_GRACE_MS` | `120000` | Grace period (ms) after PR merge before stopping the team |
+| `FLEET_DEFAULT_MODEL` | `opus` | Default model name shown when neither the team nor the project specifies a model |
 | `FLEET_CC_QUERY_MODEL` | `sonnet` | Claude model for CC query operations (e.g. `sonnet`, `opus`) |
 | `FLEET_CC_QUERY_TIMEOUT_MS` | `30000` | Timeout (ms) for individual CC query calls |
 | `FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS` | `300000` | Timeout (ms) for AI issue prioritization |

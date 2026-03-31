@@ -320,7 +320,12 @@ export function TeamDetail() {
                       {detail.branchName && (
                         <span className="ml-3">Branch: {detail.branchName}</span>
                       )}
-                      <span className="ml-3">Model: {detail.model ?? '\u2014'}</span>
+                      <span className="ml-3">
+                        Model: <span
+                          className={detail.modelInherited ? 'text-dark-muted/50' : undefined}
+                          title={detail.modelInherited ? 'FC default' : undefined}
+                        >{detail.model ?? '\u2014'}</span>
+                      </span>
                     </div>
 
                     {/* Token breakdown */}

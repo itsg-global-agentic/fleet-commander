@@ -57,6 +57,7 @@ function fullTeam(overrides: Partial<TeamDashboardRow> = {}): TeamDashboardRow {
     projectId: 1,
     projectName: 'test-project',
     model: 'claude-sonnet',
+    modelInherited: false,
     branchName: 'feat/test-100',
     totalInputTokens: 0,
     totalOutputTokens: 0,
@@ -95,8 +96,25 @@ describe('TeamRow', () => {
   });
 
   it('renders model name', () => {
-    renderRow(fullTeam({ model: 'claude-opus' }));
+    renderRow(fullTeam({ model: 'claude-opus', modelInherited: false }));
     expect(screen.getByText('claude-opus')).toBeInTheDocument();
+  });
+
+  it('renders inherited model with dimmed styling', () => {
+    renderRow(fullTeam({ model: 'opus', modelInherited: true }));
+    const modelEl = screen.getByText('opus');
+    expect(modelEl).toBeInTheDocument();
+    expect(modelEl.className).toContain('text-dark-muted/50');
+    expect(modelEl).toHaveAttribute('title', 'FC default');
+  });
+
+  it('renders explicit model without dimmed styling', () => {
+    renderRow(fullTeam({ model: 'sonnet', modelInherited: false }));
+    const modelEl = screen.getByText('sonnet');
+    expect(modelEl).toBeInTheDocument();
+    expect(modelEl.className).toContain('text-dark-muted');
+    expect(modelEl.className).not.toContain('text-dark-muted/50');
+    expect(modelEl).not.toHaveAttribute('title');
   });
 
   it('renders duration in minutes', () => {

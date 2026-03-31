@@ -499,6 +499,7 @@ export interface TeamDashboardRow {
   projectId: number | null;
   projectName: string | null;
   model: string | null;
+  modelInherited: boolean;
   status: TeamStatus;
   phase: TeamPhase;
   worktreeName: string;
@@ -541,6 +542,7 @@ export interface TeamDetail {
   issueKey: string | null;
   issueProvider: string | null;
   model?: string | null;
+  modelInherited?: boolean;
   status: TeamStatus;
   phase: TeamPhase;
   pid: number | null;

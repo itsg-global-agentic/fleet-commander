@@ -55,6 +55,7 @@ export function makeTeam(overrides: Partial<TeamDashboardRow> = {}): TeamDashboa
     retryCount: 0,
     blockedByJson: null,
     maxActiveTeams: 5,
+    modelInherited: false,
     prState: null,
     ciStatus: null,
     mergeStatus: null,

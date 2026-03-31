@@ -256,6 +256,7 @@ const systemRoutes: FastifyPluginCallback = (
           sseHeartbeatMs: config.sseHeartbeatMs,
           outputBufferLines: config.outputBufferLines,
           claudeCmd: config.claudeCmd,
+          defaultModel: config.defaultModel,
           resolvedClaudeCmd: resolveClaudePath(),
           enableAgentTeams: config.enableAgentTeams,
           fleetCommanderRoot: config.fleetCommanderRoot,
