@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { useTeams, useSelection } from '../context/FleetContext';
 import { FleetGrid } from '../components/FleetGrid';
 import { TeamTimeline } from '../components/TeamTimeline';
+import { GridFilterBar } from '../components/GridFilterBar';
+import { useGridFilters, applyGridFilters } from '../hooks/useGridFilters';
 import type { TeamDashboardRow, TeamStatus } from '../../shared/types';
 
 type ViewMode = 'grid' | 'timeline';
@@ -38,11 +40,27 @@ export function FleetGridView() {
   const { teams } = useTeams();
   const { selectedTeamId, setSelectedTeamId } = useSelection();
   const [viewMode, setViewMode] = useState<ViewMode>('grid');
+  const { selectedProject, selectedStatuses, setProject, setStatuses } = useGridFilters();
 
-  const sortedTeams = useMemo(() => sortTeams(teams), [teams]);
+  // Unique project names sorted alphabetically (derived from unfiltered teams)
+  const projectNames = useMemo(() => {
+    const names = new Set<string>();
+    for (const team of teams) {
+      if (team.projectName) names.add(team.projectName);
+    }
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [teams]);
 
-  // Empty state
-  if (sortedTeams.length === 0) {
+  // Apply filters, then sort
+  const filteredTeams = useMemo(
+    () => sortTeams(applyGridFilters(teams, selectedProject, selectedStatuses)),
+    [teams, selectedProject, selectedStatuses],
+  );
+
+  const hasActiveFilters = selectedProject !== null || selectedStatuses.size > 0;
+
+  // Empty state (no teams at all, unfiltered)
+  if (teams.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3">
         <svg className="w-12 h-12 text-dark-muted/40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
@@ -59,7 +77,9 @@ export function FleetGridView() {
       {/* Header with view toggle */}
       <div className="flex items-center justify-between mb-3 px-4">
         <div className="text-xs text-dark-muted">
-          {sortedTeams.length} team{sortedTeams.length !== 1 ? 's' : ''}
+          {hasActiveFilters
+            ? `${filteredTeams.length} of ${teams.length} team${teams.length !== 1 ? 's' : ''}`
+            : `${teams.length} team${teams.length !== 1 ? 's' : ''}`}
         </div>
         <div className="inline-flex rounded border border-dark-border text-xs overflow-hidden">
           <button
@@ -85,15 +105,24 @@ export function FleetGridView() {
         </div>
       </div>
 
+      {/* Filter bar */}
+      <GridFilterBar
+        projectNames={projectNames}
+        selectedProject={selectedProject}
+        onProjectChange={setProject}
+        selectedStatuses={selectedStatuses}
+        onStatusesChange={setStatuses}
+      />
+
       {/* View content */}
       {viewMode === 'grid' ? (
         <FleetGrid
-          teams={sortedTeams}
+          teams={filteredTeams}
           selectedTeamId={selectedTeamId}
           onSelectTeam={setSelectedTeamId}
         />
       ) : (
-        <TeamTimeline teams={sortedTeams} />
+        <TeamTimeline teams={filteredTeams} />
       )}
     </div>
   );
