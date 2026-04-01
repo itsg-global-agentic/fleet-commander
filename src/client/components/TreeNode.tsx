@@ -206,6 +206,8 @@ interface TreeNodeProps {
   checkedIssues?: Set<number>;
   /** Callback when checkbox state changes */
   onCheckChange?: (issueNumber: number, checked: boolean) => void;
+  /** Callback when checkbox is toggled for a parent node (cascades to children) */
+  onCheckWithChildren?: (node: IssueNode, checked: boolean) => void;
   /** Callback to prioritize a subtree (parent nodes only) */
   onPrioritizeSubtree?: (subtreeChildren: IssueNode[]) => Promise<void>;
   /** Whether a prioritization request is in progress */
@@ -224,7 +226,7 @@ interface TreeNodeProps {
   onRelationChanged?: (issueKey: string) => void;
 }
 
-export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, projectId, priorityMap, checkedIssues, onCheckChange, onPrioritizeSubtree, prioritizing, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: TreeNodeProps) {
+export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, launchingIssues, launchErrors, projectId, priorityMap, checkedIssues, onCheckChange, onCheckWithChildren, onPrioritizeSubtree, prioritizing, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: TreeNodeProps) {
   const nodeId = node.number.toString();
   const nodeKey = node.issueKey ?? String(node.number);
   const isExpanded = collapsedNodes ? !collapsedNodes.has(nodeId) : true;
@@ -274,13 +276,17 @@ export const TreeNode = React.memo(function TreeNode({ node, depth, onLaunch, la
         </button>
 
         {/* Checkbox for batch launch selection */}
-        {onCheckChange && priorityMap && (
+        {onCheckChange && (
           <input
             type="checkbox"
             checked={checkedIssues?.has(node.number) ?? false}
             onChange={(e) => {
               e.stopPropagation();
-              onCheckChange(node.number, e.target.checked);
+              if (node.children.length > 0 && onCheckWithChildren) {
+                onCheckWithChildren(node, e.target.checked);
+              } else {
+                onCheckChange(node.number, e.target.checked);
+              }
             }}
             className="w-3.5 h-3.5 shrink-0 accent-dark-accent cursor-pointer"
             aria-label={`Select issue ${formatIssueKey(node.issueKey ?? String(node.number), node.issueProvider ?? null)}`}

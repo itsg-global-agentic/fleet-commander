@@ -3,6 +3,7 @@ import { useApi } from '../hooks/useApi';
 import { useFleetSSE } from '../hooks/useFleetSSE';
 import type { IssueRelations } from '../../shared/issue-provider';
 import { usePrioritization, sortTreeByPriority } from '../hooks/usePrioritization';
+import { useIssueSelection } from '../hooks/useIssueSelection';
 import { useCollapseState } from '../hooks/useCollapseState';
 import { useFlattenedTree } from '../hooks/useVirtualizedTree';
 import { VirtualizedTreeList } from '../components/VirtualizedTreeList';
@@ -1132,12 +1133,19 @@ function RunAllConfirmDialog({ issues, skippedActive, blockedIssues, projectId, 
 // PrioritizeButtons — shared Prioritize + Reset button pair
 // ---------------------------------------------------------------------------
 
-function PrioritizeButtons({ prioritization, tree, className, onRunAll, runAllDisabled }: {
+function PrioritizeButtons({ prioritization, tree, className, onRunAll, runAllDisabled, onRunSelected, runSelectedCount, runSelectedDisabled, onSelectAll, onDeselectAll, isAllSelected, showSelectionControls }: {
   prioritization: ReturnType<typeof usePrioritization>;
   tree: IssueNode[];
   className?: string;
   onRunAll?: () => void;
   runAllDisabled?: boolean;
+  onRunSelected?: () => void;
+  runSelectedCount?: number;
+  runSelectedDisabled?: boolean;
+  onSelectAll?: () => void;
+  onDeselectAll?: () => void;
+  isAllSelected?: boolean;
+  showSelectionControls?: boolean;
 }) {
   return (
     <div className={`flex items-center gap-2 ${className ?? ''}`}>
@@ -1184,6 +1192,39 @@ function PrioritizeButtons({ prioritization, tree, className, onRunAll, runAllDi
             <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
           </svg>
           Reset
+        </button>
+      )}
+
+      {/* Run Selected button — shown when issues are selected */}
+      {onRunSelected && (runSelectedCount ?? 0) > 0 && (
+        <button
+          onClick={onRunSelected}
+          disabled={runSelectedDisabled}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-[#58A6FF]/50 text-[#58A6FF] hover:bg-[#58A6FF]/10 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          title="Launch teams for selected issues"
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .428l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z" />
+          </svg>
+          Run Selected ({runSelectedCount})
+        </button>
+      )}
+
+      {/* Select All / Deselect All toggle */}
+      {showSelectionControls && onSelectAll && onDeselectAll && (
+        <button
+          onClick={isAllSelected ? onDeselectAll : onSelectAll}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-accent/50 transition-colors"
+          title={isAllSelected ? 'Deselect all issues' : 'Select all issues'}
+        >
+          <svg className="w-3.5 h-3.5" viewBox="0 0 16 16" fill="currentColor">
+            {isAllSelected ? (
+              <path d="M2.75 1h10.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 13.25 15H2.75A1.75 1.75 0 0 1 1 13.25V2.75C1 1.784 1.784 1 2.75 1Zm0 1.5a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25Z" />
+            ) : (
+              <path d="M2.75 1h10.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 13.25 15H2.75A1.75 1.75 0 0 1 1 13.25V2.75C1 1.784 1.784 1 2.75 1ZM2.5 2.75v10.5c0 .138.112.25.25.25h10.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25H2.75a.25.25 0 0 0-.25.25Zm9.28 3.53-4.5 4.5a.75.75 0 0 1-1.06 0l-2-2a.75.75 0 0 1 1.06-1.06l1.47 1.47 3.97-3.97a.75.75 0 0 1 1.06 1.06Z" />
+            )}
+          </svg>
+          {isAllSelected ? 'Deselect All' : 'Select All'}
         </button>
       )}
     </div>
@@ -1376,7 +1417,9 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
   const projectNodeId = `project-${group.projectId}`;
   const expanded = !collapsedNodes.has(projectNodeId);
   const prioritization = usePrioritization();
+  const selection = useIssueSelection();
   const [showRunAllDialog, setShowRunAllDialog] = useState(false);
+  const [showRunSelectedDialog, setShowRunSelectedDialog] = useState(false);
   const [showDepGraph, setShowDepGraph] = useState(false);
 
   // Detect distinct providers in this group's tree
@@ -1432,6 +1475,10 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
   }, [group.tree, prioritization.hasPriority, prioritization.priorityMap]);
 
   const launchableInfo = useMemo(() => collectLaunchableIssues(group.tree), [group.tree]);
+  const selectedLaunchableInfo = useMemo(
+    () => collectLaunchableFromSelection(group.tree, selection.selectedIssues),
+    [group.tree, selection.selectedIssues],
+  );
 
   const flatRows = useFlattenedTree(displayTree, collapsedNodes, forceExpand);
 
@@ -1486,6 +1533,13 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
           tree={group.tree}
           onRunAll={() => setShowRunAllDialog(true)}
           runAllDisabled={launchableInfo.launchable.length === 0 && launchableInfo.blocked.length === 0}
+          onRunSelected={() => setShowRunSelectedDialog(true)}
+          runSelectedCount={selectedLaunchableInfo.launchable.length + selectedLaunchableInfo.blocked.length}
+          runSelectedDisabled={selectedLaunchableInfo.launchable.length === 0 && selectedLaunchableInfo.blocked.length === 0}
+          onSelectAll={() => selection.selectAll(group.tree)}
+          onDeselectAll={selection.deselectAll}
+          isAllSelected={selection.isAllSelected(group.tree)}
+          showSelectionControls={!prioritization.hasPriority}
         />
       </div>
 
@@ -1556,8 +1610,9 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
               launchErrors={launchErrors}
               projectId={group.projectId}
               priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
-              checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
-              onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
+              checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : selection.selectedIssues}
+              onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : selection.toggleCheck}
+              onCheckWithChildren={prioritization.hasPriority ? undefined : selection.toggleWithChildren}
               onPrioritizeSubtree={prioritization.prioritizeSubtree}
               prioritizing={prioritization.loading}
               collapsedNodes={collapsedNodes}
@@ -1582,6 +1637,22 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
           api={api}
           fetchTree={fetchTree}
           onClose={() => setShowRunAllDialog(false)}
+        />
+      )}
+
+      {/* Run Selected confirmation dialog */}
+      {showRunSelectedDialog && (
+        <RunAllConfirmDialog
+          issues={selectedLaunchableInfo.launchable}
+          skippedActive={selectedLaunchableInfo.skippedActive}
+          blockedIssues={selectedLaunchableInfo.blocked}
+          projectId={group.projectId}
+          api={api}
+          fetchTree={fetchTree}
+          onClose={() => {
+            setShowRunSelectedDialog(false);
+            selection.deselectAll();
+          }}
         />
       )}
 
@@ -1622,10 +1693,16 @@ interface ProviderSubGroupProps {
 
 function ProviderSubGroup({ provider, issues, projectId, nodeKey, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, api, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: ProviderSubGroupProps) {
   const expanded = !collapsedNodes.has(nodeKey);
+  const selection = useIssueSelection();
   const [showRunAllDialog, setShowRunAllDialog] = useState(false);
+  const [showRunSelectedDialog, setShowRunSelectedDialog] = useState(false);
 
   const flatRows = useFlattenedTree(issues, collapsedNodes, forceExpand);
   const launchableInfo = useMemo(() => collectLaunchableIssues(issues), [issues]);
+  const selectedLaunchableInfo = useMemo(
+    () => collectLaunchableFromSelection(issues, selection.selectedIssues),
+    [issues, selection.selectedIssues],
+  );
   const issueCount = countNodes(issues);
   const providerLabel = provider.charAt(0).toUpperCase() + provider.slice(1);
 
@@ -1665,6 +1742,29 @@ function ProviderSubGroup({ provider, issues, projectId, nodeKey, onLaunch, laun
           </svg>
           Run All
         </button>
+
+        {/* Provider-scoped Run Selected */}
+        {(selectedLaunchableInfo.launchable.length + selectedLaunchableInfo.blocked.length) > 0 && (
+          <button
+            onClick={() => setShowRunSelectedDialog(true)}
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border border-[#58A6FF]/50 text-[#58A6FF] hover:bg-[#58A6FF]/10 transition-colors"
+            title="Launch teams for selected issues"
+          >
+            <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Zm4.879-2.773 4.264 2.559a.25.25 0 0 1 0 .428l-4.264 2.559A.25.25 0 0 1 6 10.559V5.442a.25.25 0 0 1 .379-.215Z" />
+            </svg>
+            Run Selected ({selectedLaunchableInfo.launchable.length + selectedLaunchableInfo.blocked.length})
+          </button>
+        )}
+
+        {/* Provider-scoped Select All / Deselect All */}
+        <button
+          onClick={selection.isAllSelected(issues) ? selection.deselectAll : () => selection.selectAll(issues)}
+          className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-accent/50 transition-colors"
+          title={selection.isAllSelected(issues) ? 'Deselect all issues' : 'Select all issues'}
+        >
+          {selection.isAllSelected(issues) ? 'Deselect All' : 'Select All'}
+        </button>
       </div>
 
       {/* Provider sub-group issue tree */}
@@ -1676,6 +1776,9 @@ function ProviderSubGroup({ provider, issues, projectId, nodeKey, onLaunch, laun
             launchingIssues={launchingIssues}
             launchErrors={launchErrors}
             projectId={projectId}
+            checkedIssues={selection.selectedIssues}
+            onCheckChange={selection.toggleCheck}
+            onCheckWithChildren={selection.toggleWithChildren}
             collapsedNodes={collapsedNodes}
             onToggleCollapse={onToggleCollapse}
             relationsOpenKeys={relationsOpenKeys}
@@ -1697,6 +1800,22 @@ function ProviderSubGroup({ provider, issues, projectId, nodeKey, onLaunch, laun
           api={api}
           fetchTree={fetchTree}
           onClose={() => setShowRunAllDialog(false)}
+        />
+      )}
+
+      {/* Provider-scoped Run Selected dialog */}
+      {showRunSelectedDialog && (
+        <RunAllConfirmDialog
+          issues={selectedLaunchableInfo.launchable}
+          skippedActive={selectedLaunchableInfo.skippedActive}
+          blockedIssues={selectedLaunchableInfo.blocked}
+          projectId={projectId}
+          api={api}
+          fetchTree={fetchTree}
+          onClose={() => {
+            setShowRunSelectedDialog(false);
+            selection.deselectAll();
+          }}
         />
       )}
     </div>
@@ -1727,7 +1846,9 @@ interface SingleProjectTreeProps {
 function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: SingleProjectTreeProps) {
   const api = useApi();
   const prioritization = usePrioritization();
+  const selection = useIssueSelection();
   const [showRunAllDialog, setShowRunAllDialog] = useState(false);
+  const [showRunSelectedDialog, setShowRunSelectedDialog] = useState(false);
   const [showDepGraph, setShowDepGraph] = useState(false);
 
   const displayTree = useMemo(() => {
@@ -1736,6 +1857,10 @@ function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIs
   }, [tree, prioritization.hasPriority, prioritization.priorityMap]);
 
   const launchableInfo = useMemo(() => collectLaunchableIssues(tree), [tree]);
+  const selectedLaunchableInfo = useMemo(
+    () => collectLaunchableFromSelection(tree, selection.selectedIssues),
+    [tree, selection.selectedIssues],
+  );
 
   const flatRows = useFlattenedTree(displayTree, collapsedNodes, forceExpand);
 
@@ -1756,6 +1881,13 @@ function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIs
           tree={tree}
           onRunAll={projectId ? () => setShowRunAllDialog(true) : undefined}
           runAllDisabled={launchableInfo.launchable.length === 0 && launchableInfo.blocked.length === 0}
+          onRunSelected={projectId ? () => setShowRunSelectedDialog(true) : undefined}
+          runSelectedCount={selectedLaunchableInfo.launchable.length + selectedLaunchableInfo.blocked.length}
+          runSelectedDisabled={selectedLaunchableInfo.launchable.length === 0 && selectedLaunchableInfo.blocked.length === 0}
+          onSelectAll={() => selection.selectAll(tree)}
+          onDeselectAll={selection.deselectAll}
+          isAllSelected={selection.isAllSelected(tree)}
+          showSelectionControls={!prioritization.hasPriority}
         />
       </div>
 
@@ -1794,8 +1926,9 @@ function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIs
         launchErrors={launchErrors}
         projectId={projectId ?? undefined}
         priorityMap={prioritization.hasPriority ? prioritization.priorityMap : undefined}
-        checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : undefined}
-        onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : undefined}
+        checkedIssues={prioritization.hasPriority ? prioritization.checkedIssues : selection.selectedIssues}
+        onCheckChange={prioritization.hasPriority ? prioritization.toggleCheck : selection.toggleCheck}
+        onCheckWithChildren={prioritization.hasPriority ? undefined : selection.toggleWithChildren}
         onPrioritizeSubtree={prioritization.prioritizeSubtree}
         prioritizing={prioritization.loading}
         collapsedNodes={collapsedNodes}
@@ -1817,6 +1950,22 @@ function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIs
           api={api}
           fetchTree={fetchTree}
           onClose={() => setShowRunAllDialog(false)}
+        />
+      )}
+
+      {/* Run Selected confirmation dialog */}
+      {showRunSelectedDialog && projectId && (
+        <RunAllConfirmDialog
+          issues={selectedLaunchableInfo.launchable}
+          skippedActive={selectedLaunchableInfo.skippedActive}
+          blockedIssues={selectedLaunchableInfo.blocked}
+          projectId={projectId}
+          api={api}
+          fetchTree={fetchTree}
+          onClose={() => {
+            setShowRunSelectedDialog(false);
+            selection.deselectAll();
+          }}
         />
       )}
 
@@ -1933,6 +2082,19 @@ function collectLaunchableIssues(nodes: IssueNode[]): {
 
   walk(nodes);
   return { launchable, skippedActive, blocked };
+}
+
+/** Collect launchable issues from a tree, filtered to only those in the selected set */
+function collectLaunchableFromSelection(
+  nodes: IssueNode[],
+  selected: Set<number>,
+): { launchable: IssueNode[]; skippedActive: number; blocked: IssueNode[] } {
+  const all = collectLaunchableIssues(nodes);
+  return {
+    launchable: all.launchable.filter((n) => selected.has(n.number)),
+    skippedActive: all.skippedActive, // We keep the full count for informational purposes
+    blocked: all.blocked.filter((n) => selected.has(n.number)),
+  };
 }
 
 /**

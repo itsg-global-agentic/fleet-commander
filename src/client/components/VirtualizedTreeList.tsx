@@ -18,6 +18,7 @@ interface VirtualizedTreeListProps {
   priorityMap?: Map<number, PrioritizedIssue>;
   checkedIssues?: Set<number>;
   onCheckChange?: (issueNumber: number, checked: boolean) => void;
+  onCheckWithChildren?: (node: IssueNode, checked: boolean) => void;
   onPrioritizeSubtree?: (subtreeChildren: IssueNode[]) => Promise<void>;
   prioritizing?: boolean;
   collapsedNodes: Set<string>;
@@ -50,6 +51,7 @@ export const VirtualizedTreeList = React.memo(function VirtualizedTreeList({
   priorityMap,
   checkedIssues,
   onCheckChange,
+  onCheckWithChildren,
   onPrioritizeSubtree,
   prioritizing,
   collapsedNodes,
@@ -119,6 +121,7 @@ export const VirtualizedTreeList = React.memo(function VirtualizedTreeList({
                 priorityMap={priorityMap}
                 checkedIssues={checkedIssues}
                 onCheckChange={onCheckChange}
+                onCheckWithChildren={onCheckWithChildren}
                 onPrioritizeSubtree={onPrioritizeSubtree}
                 prioritizing={prioritizing}
                 collapsedNodes={collapsedNodes}

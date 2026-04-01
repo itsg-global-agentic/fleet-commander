@@ -332,4 +332,102 @@ describe('TreeNode', () => {
     );
     expect(screen.getByText('#42')).toBeInTheDocument();
   });
+
+  // -------------------------------------------------------------------------
+  // Checkbox visibility without priorityMap (Issue #662)
+  // -------------------------------------------------------------------------
+
+  it('renders checkbox when onCheckChange is provided without priorityMap', () => {
+    const onCheckChange = vi.fn();
+    render(
+      <TreeNode
+        node={makeNode({ number: 10, title: 'Select me' })}
+        {...defaultProps}
+        checkedIssues={new Set<number>()}
+        onCheckChange={onCheckChange}
+      />,
+    );
+    const checkbox = screen.getByLabelText('Select issue #10');
+    expect(checkbox).toBeInTheDocument();
+    expect(checkbox).not.toBeChecked();
+  });
+
+  it('renders checked checkbox when issue is in checkedIssues set', () => {
+    const onCheckChange = vi.fn();
+    render(
+      <TreeNode
+        node={makeNode({ number: 10, title: 'Selected issue' })}
+        {...defaultProps}
+        checkedIssues={new Set<number>([10])}
+        onCheckChange={onCheckChange}
+      />,
+    );
+    const checkbox = screen.getByLabelText('Select issue #10');
+    expect(checkbox).toBeChecked();
+  });
+
+  it('does not render checkbox when onCheckChange is not provided', () => {
+    render(
+      <TreeNode
+        node={makeNode({ number: 10, title: 'No checkbox' })}
+        {...defaultProps}
+      />,
+    );
+    expect(screen.queryByLabelText(/Select issue/)).not.toBeInTheDocument();
+  });
+
+  it('calls onCheckChange for leaf node checkbox toggle', () => {
+    const onCheckChange = vi.fn();
+    render(
+      <TreeNode
+        node={makeNode({ number: 10, title: 'Leaf' })}
+        {...defaultProps}
+        checkedIssues={new Set<number>()}
+        onCheckChange={onCheckChange}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Select issue #10'));
+    expect(onCheckChange).toHaveBeenCalledWith(10, true);
+  });
+
+  it('calls onCheckWithChildren for parent node checkbox toggle', () => {
+    const onCheckChange = vi.fn();
+    const onCheckWithChildren = vi.fn();
+    const parent = makeNode({
+      number: 1,
+      title: 'Parent',
+      children: [makeNode({ number: 2, title: 'Child' })],
+    });
+    render(
+      <TreeNode
+        node={parent}
+        {...defaultProps}
+        checkedIssues={new Set<number>()}
+        onCheckChange={onCheckChange}
+        onCheckWithChildren={onCheckWithChildren}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Select issue #1'));
+    expect(onCheckWithChildren).toHaveBeenCalledWith(parent, true);
+    expect(onCheckChange).not.toHaveBeenCalled();
+  });
+
+  it('calls onCheckChange for parent when onCheckWithChildren is not provided', () => {
+    const onCheckChange = vi.fn();
+    const parent = makeNode({
+      number: 1,
+      title: 'Parent',
+      children: [makeNode({ number: 2, title: 'Child' })],
+    });
+    render(
+      <TreeNode
+        node={parent}
+        {...defaultProps}
+        checkedIssues={new Set<number>()}
+        onCheckChange={onCheckChange}
+      />,
+    );
+    fireEvent.click(screen.getByLabelText('Select issue #1'));
+    expect(onCheckChange).toHaveBeenCalledWith(1, true);
+  });
 });
