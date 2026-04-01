@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.17
+# fleet-commander v0.0.18
 # Fleet Commander hook: SubagentStop
 # Tracks internal team agent departure.
 # stdin JSON example: {"session_id":"abc123","teammate_name":"csharp-dev","agent_type":"kea-csharp-dev"}

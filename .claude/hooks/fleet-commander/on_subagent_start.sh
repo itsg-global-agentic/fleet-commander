@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.17
+# fleet-commander v0.0.18
 # Fleet Commander hook: SubagentStart
 # Tracks internal team agent spawn (e.g., kea-csharp-dev joining the team).
 # stdin JSON example: {"session_id":"abc123","teammate_name":"csharp-dev","agent_type":"kea-csharp-dev"}

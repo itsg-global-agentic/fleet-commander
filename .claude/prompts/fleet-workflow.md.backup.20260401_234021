@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.18 -->
+<!-- fleet-commander v0.0.17 -->
 <!-- Fleet Commander workflow template. Installed by Fleet Commander into your project. -->
 <!-- Placeholders fleet-commander, fleet-commander, main, {{ISSUE_NUMBER}} are replaced during installation. -->
 
@@ -33,41 +33,15 @@ User: claude --worktree fleet-commander-{N}
 **Role of TL (main agent = You):**
 1. Read this workflow and understand the team structure
 2. **Phase 0: Spawn `fleet-planner` only** — planner analyzes the issue and produces a plan
-3. **TodoWrite "Phase 0: Spawn planner"** — status: `in_progress` (see Progress Tracking section)
-4. **Read the planner's plan** — after planner completes, read `plan.md` from the worktree root
-5. **TodoWrite "Phase 0: Spawn planner"** — status: `completed`, then **TodoWrite "Phase 1: Spawn dev with plan"** — status: `in_progress`
-6. **Phase 1: Spawn `fleet-dev` with the plan context** — dev starts implementing immediately
-7. **Wait for dev to report "ready for review"** — dev sends a message when implementation is complete
-8. **TodoWrite "Phase 1: Spawn dev with plan"** — status: `completed`, then **TodoWrite "Phase 2: Spawn reviewer"** — status: `in_progress`
-9. **Phase 2: Spawn `fleet-reviewer`** — reviewer starts reviewing immediately
-10. Let dev and reviewer communicate peer-to-peer — DO NOT relay messages between them
-11. Only intervene if: escalation after 3 review rounds, agent stuck (10min idle), or final PR creation
-12. When review passes: **TodoWrite "Phase 2: Spawn reviewer"** — status: `completed`, then **TodoWrite "Phase 3: Create PR and merge"** — status: `in_progress`. Rebase, create PR, set auto-merge
-13. Respond to FC messages (ci_green, ci_red, pr_merged, nudge_idle, nudge_stuck)
-14. On pr_merged: **TodoWrite "Phase 3: Create PR and merge"** — status: `completed`. Close issue, shut down agents, finish
-
-## Progress Tracking via TodoWrite
-
-**The TL MUST use TodoWrite to track phase progress.** This gives FC visibility into your workflow state via the Tasks tab in the dashboard. The `on_task_created` hook fires automatically when you call TodoWrite, sending task data to FC.
-
-Update tasks at each phase transition using this pattern:
-
-| When | TodoWrite call |
-|------|---------------|
-| After session start (before spawning planner) | `TodoWrite: "Phase 0: Spawn planner"` — status: `in_progress` |
-| After planner ping received and plan.md read | `TodoWrite: "Phase 0: Spawn planner"` — status: `completed` |
-| | `TodoWrite: "Phase 1: Spawn dev with plan"` — status: `in_progress` |
-| After dev ping received ("ready for review") | `TodoWrite: "Phase 1: Spawn dev with plan"` — status: `completed` |
-| | `TodoWrite: "Phase 2: Spawn reviewer"` — status: `in_progress` |
-| After reviewer ping received and review.md shows APPROVE | `TodoWrite: "Phase 2: Spawn reviewer"` — status: `completed` |
-| | `TodoWrite: "Phase 3: Create PR and merge"` — status: `in_progress` |
-| After PR merged (pr_merged received) | `TodoWrite: "Phase 3: Create PR and merge"` — status: `completed` |
-
-**Rules:**
-- Use the exact subjects shown above — FC deduplicates tasks by subject.
-- Always mark the previous phase `completed` BEFORE marking the next phase `in_progress`.
-- If a phase fails and must be retried, set it back to `in_progress` (do not create a new task).
-- TodoWrite calls are lightweight — they do not count toward spawn budget or affect respawn limits.
+3. **Read the planner's plan** — after planner completes, read `plan.md` from the worktree root
+4. **Phase 2: Spawn `fleet-dev` with the plan context** — dev starts implementing immediately
+5. **Wait for dev to report "ready for review"** — dev sends a message when implementation is complete
+6. **Phase 3: Spawn `fleet-reviewer`** — reviewer starts reviewing immediately
+7. Let dev and reviewer communicate peer-to-peer — DO NOT relay messages between them
+8. Only intervene if: escalation after 3 review rounds, agent stuck (10min idle), or final PR creation
+9. When review passes: rebase, create PR, set auto-merge
+10. Respond to FC messages (ci_green, ci_red, pr_merged, nudge_idle, nudge_stuck)
+11. On pr_merged: close issue, shut down agents, finish
 
 ## Team Composition — Diamond (3 Agents)
 
@@ -157,11 +131,10 @@ Note: These phases represent the workflow's internal progression, not FC's team 
 
 1. **TL reads `.fleet-issue-context.md`** from the worktree root (if it exists). This file contains the full issue body, comments, labels, acceptance criteria, and dependencies — pre-fetched by Fleet Commander at launch time.
 2. **TL spawns `fleet-planner`** with the full issue context included in the spawn prompt (see Planner Task Format below). The planner receives everything it needs — it should NOT need to call `gh issue view`. If `.fleet-issue-context.md` did not exist, tell the planner to fetch the issue itself via `gh issue view`.
-3. **TodoWrite "Phase 0: Spawn planner"** with status `in_progress` (progress tracking).
-4. **Wait for the planner's ping.** The planner will send a SendMessage when done: `"Done. Plan written to plan.md."` Do NOT proceed until you receive this ping. Do NOT poll for plan.md. Do NOT assume the planner is done because it went quiet. Just wait — the ping will arrive.
-5. When the ping arrives, read `plan.md` and proceed to Phase 1. Do NOT wait for the planner to exit — it stays alive for p2p questions.
-6. Planner analyzes the issue context (provided in its spawn prompt), explores the codebase, discovers guidebooks, and produces a structured plan.
-7. Planner writes the plan to `plan.md` in the worktree root. Planner stays alive for p2p questions from dev and reviewer.
+3. **Wait for the planner's ping.** The planner will send a SendMessage when done: `"Done. Plan written to plan.md."` Do NOT proceed until you receive this ping. Do NOT poll for plan.md. Do NOT assume the planner is done because it went quiet. Just wait — the ping will arrive.
+4. When the ping arrives, read `plan.md` and proceed to Phase 1. Do NOT wait for the planner to exit — it stays alive for p2p questions.
+5. Planner analyzes the issue context (provided in its spawn prompt), explores the codebase, discovers guidebooks, and produces a structured plan.
+6. Planner writes the plan to `plan.md` in the worktree root. Planner stays alive for p2p questions from dev and reviewer.
 
 ---
 
@@ -193,7 +166,6 @@ If an agent exits (SubagentStop) before sending its ping:
   1. Take over the agent's role yourself (TL fallback).
   2. If the role is too complex to take over (e.g., full implementation), report BLOCKED to FC.
 - This budget prevents respawn storms that waste time and resources without making progress.
-- Note: TodoWrite calls for progress tracking do NOT count as spawns. Only TaskCreate (subagent spawning) counts toward the 5-spawn budget.
 
 ---
 
@@ -202,9 +174,8 @@ If an agent exits (SubagentStop) before sending its ping:
 1. Planner (spawned in Phase 0) reads the issue, explores the codebase, discovers guidebooks, and produces a structured plan
 2. **Planner writes the plan to `plan.md` in the worktree root** using the Write tool, then pings TL via SendMessage
 3. TL reads `plan.md` from the worktree root using the Read tool. Do NOT delete it — it stays in `.gitignore`. If `plan.md` does not exist after the planner's ping (or after 60 seconds), treat this as a planner failure and restart the planner (counts toward 5-spawn budget).
-4. **TodoWrite "Phase 0: Spawn planner"** — status: `completed`, then **TodoWrite "Phase 1: Spawn dev with plan"** — status: `in_progress`.
-5. TL validates the plan has all required fields (see format below)
-6. TL evaluates the plan:
+4. TL validates the plan has all required fields (see format below)
+5. TL evaluates the plan:
    - `BLOCKED=yes` → state Blocked, comment on issue, STOP
    - `BLOCKED=no` → proceed to Phase 2 (spawn dev with the plan)
    - Missing required fields → ask Planner to redo with specific gaps identified
@@ -262,7 +233,6 @@ If the Planner is unresponsive for >5 minutes or produces an unusable plan:
 4. **Dev writes `changes.md`** to the worktree root using the Write tool (see Changes Report Format below) — summarizing what changed, decisions made, test results, and `git diff --stat` output
 5. **Dev pings TL** via SendMessage: `"Ready for review. Branch: {branch}. Changes in changes.md."` — the message is just a ping, report content is in the file
 6. TL reads `changes.md` (do NOT delete it) and transitions to Phase 3 — spawns reviewer with the changes report included in the spawn prompt
-7. **TodoWrite "Phase 1: Spawn dev with plan"** — status: `completed`, then **TodoWrite "Phase 2: Spawn reviewer"** — status: `in_progress`.
 
 ### Planner Task Format (sent via TaskCreate at spawn)
 
@@ -423,7 +393,7 @@ If the ping arrived but `review.md` does not exist, ask the reviewer via SendMes
 
 1. **Read** `review.md` using the Read tool (do NOT delete it)
 2. **Act on the verdict**:
-   - `Status: APPROVE` → **TodoWrite "Phase 2: Spawn reviewer"** — status: `completed`, then **TodoWrite "Phase 3: Create PR and merge"** — status: `in_progress`. Proceed to Phase 4 (PR creation).
+   - `Status: APPROVE` → proceed to Phase 4 (PR creation)
    - `Status: CHANGES_NEEDED` → relay the issues to the dev via SendMessage, dev fixes, and TL re-spawns the reviewer (or arbitrates if rounds are exhausted)
 
 ### TL Non-Intervention Rules
@@ -474,7 +444,6 @@ After TL reads `review.md` with `Status: APPROVE`:
 
 ## Phase 5 — Done
 
-0. **TodoWrite "Phase 3: Create PR and merge"** — status: `completed`.
 1. Close issue: `gh issue close {N} --comment "Closed. PR #{PR} merged."`
 2. **Explicit shutdown sequence** (MANDATORY):
    a. Run `TaskList` to identify all active subagents.
@@ -654,15 +623,14 @@ Atomic commits — each commit should be a logical unit.
 ## Decision Summary
 
 ```
-Phase 0: TL → spawn planner only → TodoWrite "Phase 0" in_progress
-Phase 1: Planner analyzes → writes plan.md → pings TL → TL reads plan.md → TodoWrite "Phase 0" completed, "Phase 1" in_progress
+Phase 0: TL → spawn planner only
+Phase 1: Planner analyzes → writes plan.md → pings TL → TL reads plan.md → planner stays alive for p2p questions
          TL validates plan → spawns dev WITH the plan context
 Phase 2: Dev implements immediately (has plan) → writes changes.md → pings TL ("Ready for review")
-         TL reads changes.md → TodoWrite "Phase 1" completed, "Phase 2" in_progress → spawns reviewer WITH branch context + changes report
+         TL reads changes.md → spawns reviewer WITH branch context + changes report
 Phase 3: Reviewer reviews immediately (has branch + changes report) → dev + reviewer iterate p2p → reviewer writes review.md → pings TL → TL reads review.md
-         APPROVE → TodoWrite "Phase 2" completed, "Phase 3" in_progress
 Phase 4: TL → rebase → create PR → set auto-merge → FC monitors CI
-Phase 5: TL → TodoWrite "Phase 3" completed → close issue → shutdown agents → finish
+Phase 5: TL → close issue → shutdown agents → finish
 ```
 
 Edge cases:

@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.17 -->
+<!-- fleet-commander v0.0.18 -->
 # DevOps / Infrastructure Conventions
 
 > Applies to: `.github/workflows/*.yml`, `Dockerfile`, `docker-compose.yml`, `*.sh`, `*.ps1`, `Makefile`

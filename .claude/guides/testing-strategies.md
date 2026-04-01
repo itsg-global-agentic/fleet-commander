@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.17 -->
+<!-- fleet-commander v0.0.18 -->
 # Testing Strategies
 
 > Applies to: all test files regardless of language or framework
