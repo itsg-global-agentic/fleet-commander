@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-commander v0.0.16
+# fleet-commander v0.0.17
 # Fleet Commander: Universal event sender for Claude Code hooks.
 # POSTs a JSON event to the Fleet Commander dashboard server.
 #
@@ -86,31 +86,14 @@ TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%
 # ── JSON string encoder ────────────────────────────────────────
 # Reads raw text from stdin, outputs a valid JSON string WITH
 # surrounding double quotes. Handles all RFC 8259 control chars.
-# Uses jq when available; falls back to awk for portability.
+# Uses jq when available; falls back to Node.js (always present in FC).
 json_encode_string() {
     if command -v jq >/dev/null 2>&1; then
         jq -Rs .
     else
-        # Pure-shell fallback using awk for reliable multi-line processing.
-        # tr replaces \r with \x01 sentinel because gawk on Windows strips
-        # \r during record splitting before gsub can see it.
-        local raw
-        raw="$(cat; printf .)"   # printf . preserves trailing newlines
-        raw="${raw%.}"            # strip sentinel
-        printf '%s' "$raw" | tr '\015' '\001' | awk '
-        BEGIN { ORS=""; printf "\"" }
-        {
-            gsub(/\\/, "\\\\")       # backslashes first
-            gsub(/"/, "\\\"")        # double quotes
-            gsub(/\t/, "\\t")        # tabs
-            gsub(/\001/, "\\r")      # carriage returns (from sentinel)
-            gsub(/\x08/, "\\b")      # backspace
-            gsub(/\x0c/, "\\f")      # form feed
-            if (NR > 1) printf "\\n" # newlines between lines
-            printf "%s", $0
-        }
-        END { printf "\"" }
-        '
+        # Node.js fallback — always available in FC context (FC is a Node app).
+        # awk/sed break on Windows Git Bash with backslash regex.
+        node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(d)))"
     fi
 }
 
@@ -138,6 +121,7 @@ PAYLOAD="${PAYLOAD}}"
 # curl with 2-second timeout. Errors are silenced completely.
 # The hook MUST NOT block Claude Code or cause visible failures.
 _LOG="${FLEET_HOOK_LOG:-/tmp/fleet-hooks.log}"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HOOK  | $EVENT_TYPE | $TEAM_NAME | send_event payload=${#PAYLOAD}b" >> "$_LOG" 2>/dev/null || true
 if command -v curl >/dev/null 2>&1; then
     curl -s -S --max-time 2 --connect-timeout 1 \
         -X POST \

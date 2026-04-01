@@ -1,24 +1,33 @@
 #!/bin/bash
-# fleet-commander v0.0.16
-# Fleet Commander: Sends a handoff_file event when an agent writes
-# plan.md, changes.md, or review.md.
+# fleet-commander v0.0.17
+# Fleet Commander: Sends a handoff file (plan.md, changes.md, review.md)
+# to the Fleet Commander server via multipart form upload.
 #
-# Usage: send_handoff.sh <file_type> <file_path> <cc_stdin_json>
+# Usage: send_handoff.sh <file_type> <file_path> [<cc_stdin_json>]
 #
-# Called from on_post_tool_use.sh in background (fire-and-forget).
-# Reads the file content (capped at 50KB) and POSTs a handoff_file
-# event to the Fleet Commander server.
+# Called from on_post_tool_use.sh and on_subagent_stop.sh in background
+# (fire-and-forget). Reads the file content (capped at 50KB) and POSTs
+# it as a multipart form to /api/handoff.
 #
 # Design principles:
-#   - NEVER block Claude Code. Timeout is 2 seconds, errors are swallowed.
+#   - NEVER block Claude Code. Timeout is 10 seconds, errors are swallowed.
 #   - Content capped at 50KB (head -c 51200) to prevent DB bloat.
 #   - Always exits 0 — failures must not propagate.
+#   - Uses multipart form upload — zero JSON encoding in bash.
 
 # ── Configuration ──────────────────────────────────────────────────
-FLEET_URL="${FLEET_SERVER_URL:-http://localhost:4680/api/events}"
+FLEET_URL="${FLEET_SERVER_URL:-http://localhost:4680}/api/handoff"
+# Strip any trailing /api/events suffix from FLEET_SERVER_URL (callers
+# may have the old events URL configured) and replace with /api/handoff.
+FLEET_URL=$(printf '%s' "$FLEET_URL" | sed 's|/api/events$||; s|/api/handoff$||')
+FLEET_URL="${FLEET_URL}/api/handoff"
+
 FILE_TYPE="${1:-}"
 FILE_PATH="${2:-}"
-CC_STDIN="${3:-}"
+# $3 (cc_stdin_json) is accepted for backward compat but no longer used.
+
+# Logging
+_LOG="${FLEET_HOOK_LOG:-/tmp/fleet-hooks.log}"
 
 # Kill switch
 if [ "${FLEET_COMMANDER_OFF:-0}" = "1" ]; then
@@ -27,18 +36,40 @@ fi
 
 # Validate inputs
 if [ -z "$FILE_TYPE" ] || [ -z "$FILE_PATH" ]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | ERROR | handoff_file | ${FLEET_TEAM_ID:-?} | missing file_type or file_path" >> "$_LOG" 2>/dev/null || true
     exit 0
 fi
 
-# ── Read file content (capped at 50KB) ───────────────────────────
+# ── Read file content (validate exists, not empty, cap at 50KB) ──
+FILE_SIZE=0
+if [ -f "$FILE_PATH" ]; then
+    FILE_SIZE=$(wc -c < "$FILE_PATH" 2>/dev/null || echo 0)
+fi
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | ENTER | handoff_file | ${FLEET_TEAM_ID:-?} | type=$FILE_TYPE path=$FILE_PATH size=${FILE_SIZE}b" >> "$_LOG" 2>/dev/null || true
+
 if [ ! -f "$FILE_PATH" ]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | ERROR | handoff_file | ${FLEET_TEAM_ID:-?} | file not found: $FILE_PATH" >> "$_LOG" 2>/dev/null || true
     exit 0
 fi
 
-CONTENT=$(head -c 51200 "$FILE_PATH" 2>/dev/null || true)
-if [ -z "$CONTENT" ]; then
+# Verify file has content
+CONTENT_CHECK=$(head -c 1 "$FILE_PATH" 2>/dev/null || true)
+if [ -z "$CONTENT_CHECK" ]; then
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | ERROR | handoff_file | ${FLEET_TEAM_ID:-?} | file empty: $FILE_PATH" >> "$_LOG" 2>/dev/null || true
     exit 0
 fi
+
+# Cap file at 50KB using a temp file (curl -F reads from disk)
+TMPFILE=""
+if [ "$FILE_SIZE" -gt 51200 ] 2>/dev/null; then
+    TMPFILE=$(mktemp 2>/dev/null || echo "/tmp/fleet-handoff-$$")
+    head -c 51200 "$FILE_PATH" > "$TMPFILE" 2>/dev/null
+    UPLOAD_PATH="$TMPFILE"
+else
+    UPLOAD_PATH="$FILE_PATH"
+fi
+
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HOOK  | handoff_file | ${FLEET_TEAM_ID:-?} | read ${FILE_SIZE}b from $FILE_PATH (upload=$(wc -c < "$UPLOAD_PATH" 2>/dev/null || echo '?')b)" >> "$_LOG" 2>/dev/null || true
 
 # ── Identify worktree / team ─────────────────────────────────────
 TEAM_NAME=""
@@ -70,55 +101,15 @@ if [ -z "$TEAM_NAME" ]; then
     esac
 fi
 
-# ── Build timestamp ───────────────────────────────────────────────
-TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || echo "unknown")
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HOOK  | handoff_file | ${FLEET_TEAM_ID:-$TEAM_NAME} | team=$TEAM_NAME url=$FLEET_URL" >> "$_LOG" 2>/dev/null || true
 
-# ── JSON string encoder ──────────────────────────────────────────
-json_encode_string() {
-    if command -v jq >/dev/null 2>&1; then
-        jq -Rs .
-    else
-        local raw
-        raw="$(cat; printf .)"
-        raw="${raw%.}"
-        printf '%s' "$raw" | tr '\015' '\001' | awk '
-        BEGIN { ORS=""; printf "\"" }
-        {
-            gsub(/\\/, "\\\\")
-            gsub(/"/, "\\\"")
-            gsub(/\t/, "\\t")
-            gsub(/\001/, "\\r")
-            gsub(/\x08/, "\\b")
-            gsub(/\x0c/, "\\f")
-            if (NR > 1) printf "\\n"
-            printf "%s", $0
-        }
-        END { printf "\"" }
-        '
-    fi
-}
-
-# ── Compose JSON payload ─────────────────────────────────────────
-# Build a cc_stdin-style payload with file_type and content fields
-# so the server can extract them via JSON.parse().
-ENCODED_CONTENT=$(printf '%s' "$CONTENT" | json_encode_string)
-ENCODED_FILE_TYPE=$(printf '%s' "$FILE_TYPE" | json_encode_string)
-ENCODED_TEAM=$(printf '%s' "$TEAM_NAME" | json_encode_string)
-ENCODED_TIMESTAMP=$(printf '%s' "$TIMESTAMP" | json_encode_string)
-
-# Build inner cc_stdin object with file_type and content
-CC_STDIN_OBJ="{\"file_type\":${ENCODED_FILE_TYPE},\"content\":${ENCODED_CONTENT}}"
-ENCODED_CC_STDIN=$(printf '%s' "$CC_STDIN_OBJ" | json_encode_string)
-
-PAYLOAD="{\"event\":\"handoff_file\",\"team\":${ENCODED_TEAM},\"timestamp\":${ENCODED_TIMESTAMP},\"cc_stdin\":${ENCODED_CC_STDIN}}"
-
-# ── Fire and forget ───────────────────────────────────────────────
-_LOG="${FLEET_HOOK_LOG:-/tmp/fleet-hooks.log}"
+# ── Fire and forget (multipart form upload) ──────────────────────
 if command -v curl >/dev/null 2>&1; then
-    curl -s -S --max-time 2 --connect-timeout 1 \
+    curl -s -S --max-time 10 --connect-timeout 2 \
         -X POST \
-        -H "Content-Type: application/json" \
-        -d "$PAYLOAD" \
+        -F "team=${TEAM_NAME}" \
+        -F "fileType=${FILE_TYPE}" \
+        -F "file=@${UPLOAD_PATH}" \
         "$FLEET_URL" >/dev/null 2>&1
     CURL_RESULT=$?
     if [ "$CURL_RESULT" -eq 0 ]; then
@@ -128,6 +119,11 @@ if command -v curl >/dev/null 2>&1; then
     fi
 else
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | SEND  | handoff_file | $TEAM_NAME | type=$FILE_TYPE curl=missing" >> "$_LOG" 2>/dev/null || true
+fi
+
+# Clean up temp file if created
+if [ -n "$TMPFILE" ] && [ -f "$TMPFILE" ]; then
+    rm -f "$TMPFILE" 2>/dev/null || true
 fi
 
 # Always exit 0 — hooks must never fail
