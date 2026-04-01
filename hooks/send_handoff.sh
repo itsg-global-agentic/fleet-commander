@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-commander v0.0.16
+# fleet-commander v0.0.17
 # Fleet Commander: Sends a handoff_file event when an agent writes
 # plan.md, changes.md, or review.md.
 #

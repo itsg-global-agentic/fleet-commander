@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-commander v0.0.16
+# fleet-commander v0.0.17
 # Universal hook wrapper — logs ENTER layer before executing the real hook.
 # Usage: run-hook.sh <event_type> <script_name>
 # Called from settings.json hook commands.

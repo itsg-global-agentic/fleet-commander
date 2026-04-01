@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.16
+# fleet-commander v0.0.17
 # Fleet Commander hook: PostToolUse
 # THE primary heartbeat signal. Every tool use proves the team is alive.
 # Dashboard uses this to compute "last_seen" for stuck detection.
