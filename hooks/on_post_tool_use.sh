@@ -18,10 +18,13 @@ echo "$input" | "$HOOK_DIR/send_event.sh" "tool_use"
 TOOL_NAME=""
 FILE_PATH=""
 
-# Try jq first for reliable extraction
+# Try jq first for reliable extraction, fallback to grep/sed for Windows Git Bash
 if command -v jq >/dev/null 2>&1; then
     TOOL_NAME=$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null || true)
     FILE_PATH=$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.path // empty' 2>/dev/null || true)
+else
+    TOOL_NAME=$(printf '%s' "$input" | grep -o '"tool_name":"[^"]*"' | sed 's/"tool_name":"//;s/"$//' || true)
+    FILE_PATH=$(printf '%s' "$input" | grep -o '"file_path":"[^"]*"' | sed 's/"file_path":"//;s/"$//' || true)
 fi
 
 # Check if this is a Write or Edit of a handoff file

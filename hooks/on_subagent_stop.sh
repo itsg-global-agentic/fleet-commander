@@ -17,7 +17,13 @@ echo "$input" | "$HOOK_DIR/send_event.sh" "subagent_stop"
 WORKTREE_ROOT="$(pwd)"
 AGENT_NAME=""
 if command -v jq >/dev/null 2>&1; then
-    AGENT_NAME=$(printf '%s' "$input" | jq -r '.teammate_name // .agent_type // empty' 2>/dev/null || true)
+    AGENT_NAME=$(printf '%s' "$input" | jq -r '.agent_type // .teammate_name // empty' 2>/dev/null || true)
+else
+    # Fallback: extract agent_type with grep/sed (no jq on Windows Git Bash)
+    AGENT_NAME=$(printf '%s' "$input" | grep -o '"agent_type":"[^"]*"' | sed 's/"agent_type":"//;s/"$//' || true)
+    if [ -z "$AGENT_NAME" ]; then
+        AGENT_NAME=$(printf '%s' "$input" | grep -o '"teammate_name":"[^"]*"' | sed 's/"teammate_name":"//;s/"$//' || true)
+    fi
 fi
 
 case "$AGENT_NAME" in
