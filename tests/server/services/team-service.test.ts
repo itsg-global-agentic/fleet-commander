@@ -283,6 +283,69 @@ describe('TeamService.launchTeam', () => {
     // fetchDependenciesForIssue should NOT have been called (force skips dep check)
     expect(mockFetchDependenciesForIssue).not.toHaveBeenCalled();
   });
+
+  it('should throw BLOCKED_BY_CHILDREN when issue has open sub-issues', async () => {
+    const project = seedProject();
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 42,
+      blockedBy: [],
+      resolved: false,
+      openCount: 0,
+      pendingChildren: { numbers: [43, 44], total: 3, completed: 1 },
+    });
+
+    try {
+      await service.launchTeam({ projectId: project.id, issueNumber: 42 });
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('BLOCKED_BY_CHILDREN');
+      expect((err as ServiceError).statusCode).toBe(409);
+      expect((err as ServiceError).message).toContain('2 open sub-issue');
+    }
+  });
+
+  it('should queue parent with open children when queue=true', async () => {
+    const project = seedProject();
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 42,
+      blockedBy: [],
+      resolved: false,
+      openCount: 0,
+      pendingChildren: { numbers: [43], total: 2, completed: 1 },
+    });
+    mockQueueTeamWithBlockers.mockResolvedValue({ id: 1, status: 'queued' });
+
+    const result = await service.launchTeam({
+      projectId: project.id,
+      issueNumber: 42,
+      queue: true,
+    });
+
+    expect(result).toEqual({ id: 1, status: 'queued' });
+    expect(mockQueueTeamWithBlockers).toHaveBeenCalled();
+    expect(githubPoller.trackBlockedIssue).toHaveBeenCalledWith(project.id, 42, [43]);
+  });
+
+  it('should bypass children-pending check when force=true', async () => {
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 42,
+      blockedBy: [],
+      resolved: false,
+      openCount: 0,
+      pendingChildren: { numbers: [43], total: 2, completed: 1 },
+    });
+
+    const result = await service.launchTeam({
+      projectId: 1,
+      issueNumber: 42,
+      force: true,
+    });
+
+    expect(result).toEqual({ id: 99, status: 'launching' });
+    expect(mockLaunch).toHaveBeenCalled();
+    expect(mockFetchDependenciesForIssue).not.toHaveBeenCalled();
+  });
 });
 
 // =============================================================================
@@ -657,6 +720,37 @@ describe('TeamService.launchBatch', () => {
     expect(result.queued).toBeDefined();
     expect(result.queued).toHaveLength(1);
     expect(result.queued![0].blockedBy).toEqual([]);
+  });
+
+  it('should classify parents with open children as queueable', async () => {
+    mockFetchDependenciesForIssue.mockImplementation(async (_pid: number, issueNumber: number) => {
+      if (issueNumber === 10) {
+        return { issueNumber: 10, blockedBy: [], resolved: true, openCount: 0 };
+      }
+      if (issueNumber === 20) {
+        return {
+          issueNumber: 20,
+          blockedBy: [],
+          resolved: false,
+          openCount: 0,
+          pendingChildren: { numbers: [21, 22], total: 3, completed: 1 },
+        };
+      }
+      return { issueNumber, blockedBy: [], resolved: true, openCount: 0 };
+    });
+    mockLaunchBatch.mockResolvedValue([{ id: 10, status: 'launching' }]);
+    mockQueueTeamWithBlockers.mockResolvedValue({ id: 20, status: 'queued' });
+
+    const result = await service.launchBatch({
+      projectId: 1,
+      issues: [{ number: 10 }, { number: 20 }],
+    });
+
+    // Issue #10 should be launched, issue #20 should be queued (parent with open children)
+    expect(result.launched).toHaveLength(1);
+    expect(result.queued).toBeDefined();
+    expect(result.queued).toHaveLength(1);
+    expect(result.queued![0].issueNumber).toBe(20);
   });
 });
 

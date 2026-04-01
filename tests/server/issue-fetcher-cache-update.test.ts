@@ -355,7 +355,7 @@ describe('getDependenciesFromCache', () => {
     (fetcher as unknown as { cacheByProject: Map<number, unknown> }).cacheByProject.set(1, cache);
 
     const result = fetcher.getDependenciesFromCache(1, 10);
-    expect(result).toBe(expectedDeps);
+    expect(result).toEqual(expectedDeps);
   });
 
   it('returns empty dependency info when issue exists but has no dependencies', () => {
@@ -436,6 +436,6 @@ describe('getDependenciesFromCache', () => {
     (fetcher as unknown as { cacheByProject: Map<number, unknown> }).cacheByProject.set(1, cache);
 
     const result = fetcher.getDependenciesFromCache(1, 20);
-    expect(result).toBe(expectedDeps);
+    expect(result).toEqual(expectedDeps);
   });
 });

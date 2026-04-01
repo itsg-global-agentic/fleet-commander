@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS teams (
   custom_prompt   TEXT,                            -- custom prompt override (persisted for queued teams)
   headless        INTEGER NOT NULL DEFAULT 1,     -- 0=interactive terminal, 1=headless stream-json
   blocked_by_json TEXT,                            -- JSON array of blocking issue numbers e.g. [368, 370]
+  pending_children_json TEXT,                     -- JSON array of open child issue numbers e.g. [371, 372]
   retry_count     INTEGER NOT NULL DEFAULT 0,     -- auto-retry count (0 = never retried)
   total_input_tokens INTEGER DEFAULT 0,
   total_output_tokens INTEGER DEFAULT 0,
@@ -188,6 +189,7 @@ SELECT
   t.total_cost_usd,
   t.retry_count,
   t.blocked_by_json,
+  t.pending_children_json,
   pr.state AS pr_state,
   pr.ci_status,
   pr.merge_status,

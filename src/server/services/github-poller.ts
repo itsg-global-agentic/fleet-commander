@@ -644,7 +644,7 @@ class GitHubPoller {
         }
       }
 
-      // Check DB-persisted blocked teams
+      // Check DB-persisted blocked teams (both blocked_by_json and pending_children_json)
       for (const team of dbBlockedTeams) {
         if (!team.projectId) continue;
 
@@ -654,21 +654,47 @@ class GitHubPoller {
           if (deps === null) {
             deps = await fetcher.fetchDependenciesForIssue(team.projectId, team.issueNumber);
           }
-          if (deps && deps.resolved) {
-            // All blockers resolved — clear blocked_by_json and broadcast
-            db.updateTeamSilent(team.id, { blockedByJson: null });
+
+          if (!deps) continue;
+
+          // Check if blockedBy dependencies are resolved
+          const blockersResolved = !team.blockedByJson || deps.openCount === 0;
+
+          // Check if pending children are resolved
+          const childrenResolved = !team.pendingChildrenJson || !deps.pendingChildren;
+
+          if (blockersResolved && childrenResolved) {
+            // All constraints resolved — clear both columns and broadcast
+            const updateFields: { blockedByJson?: string | null; pendingChildrenJson?: string | null } = {};
+            if (team.blockedByJson) updateFields.blockedByJson = null;
+            if (team.pendingChildrenJson) updateFields.pendingChildrenJson = null;
+            db.updateTeamSilent(team.id, updateFields);
+
+            const previouslyBlockedBy = team.blockedByJson
+              ? JSON.parse(team.blockedByJson) as number[]
+              : [];
 
             sseBroker.broadcast('dependency_resolved', {
               issue_number: team.issueNumber,
               project_id: team.projectId,
-              previously_blocked_by: JSON.parse(team.blockedByJson!),
+              previously_blocked_by: previouslyBlockedBy,
             });
 
-            console.log(
-              `[GitHubPoller] DB-persisted blockers resolved for team ${team.id} (issue #${team.issueNumber})`
-            );
+            const reason = team.pendingChildrenJson
+              ? `DB-persisted children resolved for team ${team.id} (issue #${team.issueNumber})`
+              : `DB-persisted blockers resolved for team ${team.id} (issue #${team.issueNumber})`;
+            console.log(`[GitHubPoller] ${reason}`);
 
             resolvedProjectIds.add(team.projectId);
+          } else if (team.pendingChildrenJson && deps.pendingChildren) {
+            // Children still pending — update the stored numbers to reflect current state
+            const currentNumbers = deps.pendingChildren.numbers;
+            const storedNumbers = JSON.parse(team.pendingChildrenJson) as number[];
+            if (JSON.stringify(currentNumbers.sort()) !== JSON.stringify(storedNumbers.sort())) {
+              db.updateTeamSilent(team.id, {
+                pendingChildrenJson: JSON.stringify(currentNumbers),
+              });
+            }
           }
         } catch (err) {
           console.error(
@@ -736,11 +762,27 @@ class GitHubPoller {
       let seeded = 0;
 
       for (const team of queuedTeams) {
-        if (team.blockedByJson && team.projectId) {
+        if (!team.projectId) continue;
+
+        // Seed from blockedByJson
+        if (team.blockedByJson) {
           try {
             const blockerNumbers = JSON.parse(team.blockedByJson) as number[];
             if (Array.isArray(blockerNumbers) && blockerNumbers.length > 0) {
               this.trackBlockedIssue(team.projectId, team.issueNumber, blockerNumbers);
+              seeded++;
+            }
+          } catch {
+            // Malformed JSON — skip this team
+          }
+        }
+
+        // Seed from pendingChildrenJson
+        if (team.pendingChildrenJson) {
+          try {
+            const childNumbers = JSON.parse(team.pendingChildrenJson) as number[];
+            if (Array.isArray(childNumbers) && childNumbers.length > 0) {
+              this.trackBlockedIssue(team.projectId, team.issueNumber, childNumbers);
               seeded++;
             }
           } catch {

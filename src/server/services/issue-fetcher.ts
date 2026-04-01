@@ -916,22 +916,44 @@ export class IssueFetcher {
     // Walk the entire tree and update any blockedBy references to this issue
     const allNodes = this.flattenTree(cache.issues);
     for (const n of allNodes) {
-      if (!n.dependencies || !n.dependencies.blockedBy) continue;
-
-      let updated = false;
-      for (const dep of n.dependencies.blockedBy) {
-        if (dep.number === issueNumber && dep.state === 'open') {
-          // Only update same-repo deps, or deps without owner/repo (body-parsed same-repo)
-          if (!dep.owner || !dep.repo || this.isSameProjectRepo(projectId, dep.owner, dep.repo)) {
-            dep.state = 'closed';
-            updated = true;
+      // Update blockedBy references
+      if (n.dependencies && n.dependencies.blockedBy) {
+        let updated = false;
+        for (const dep of n.dependencies.blockedBy) {
+          if (dep.number === issueNumber && dep.state === 'open') {
+            // Only update same-repo deps, or deps without owner/repo (body-parsed same-repo)
+            if (!dep.owner || !dep.repo || this.isSameProjectRepo(projectId, dep.owner, dep.repo)) {
+              dep.state = 'closed';
+              updated = true;
+            }
           }
+        }
+
+        if (updated) {
+          n.dependencies.openCount = n.dependencies.blockedBy.filter((d) => d.state === 'open').length;
+          n.dependencies.resolved = n.dependencies.openCount === 0;
         }
       }
 
-      if (updated) {
-        n.dependencies.openCount = n.dependencies.blockedBy.filter((d) => d.state === 'open').length;
-        n.dependencies.resolved = n.dependencies.openCount === 0;
+      // Update parent subIssueSummary when a child closes
+      if (n.subIssueSummary && n.children.some((c) => c.number === issueNumber)) {
+        n.subIssueSummary.completed = Math.min(n.subIssueSummary.completed + 1, n.subIssueSummary.total);
+        n.subIssueSummary.percentCompleted = n.subIssueSummary.total > 0
+          ? Math.round((n.subIssueSummary.completed / n.subIssueSummary.total) * 100)
+          : 0;
+
+        // If all children are now complete, also update any pendingChildren on the dependency info
+        if (n.dependencies && n.dependencies.pendingChildren) {
+          n.dependencies.pendingChildren.completed = n.subIssueSummary.completed;
+          n.dependencies.pendingChildren.numbers = n.dependencies.pendingChildren.numbers.filter(
+            (num) => num !== issueNumber,
+          );
+          // Re-evaluate resolved status considering both blockers and children
+          if (n.subIssueSummary.completed >= n.subIssueSummary.total) {
+            n.dependencies.pendingChildren = undefined;
+            n.dependencies.resolved = n.dependencies.openCount === 0;
+          }
+        }
       }
     }
   }
@@ -953,12 +975,26 @@ export class IssueFetcher {
     const node = this.findInTree(cache.issues, issueNumber);
     if (!node) return null;
 
-    if (node.dependencies) {
-      return node.dependencies;
+    // Start with existing dependency info or build empty
+    const deps: IssueDependencyInfo = node.dependencies
+      ? { ...node.dependencies }
+      : this.buildEmptyDependencyInfo(issueNumber);
+
+    // Check for pending children from cached subIssueSummary
+    if (node.subIssueSummary && node.subIssueSummary.total > 0 && node.subIssueSummary.completed < node.subIssueSummary.total) {
+      // Derive open child numbers from the node's children array
+      const openChildNumbers = node.children
+        .filter((c) => c.state === 'open')
+        .map((c) => c.number);
+      deps.pendingChildren = {
+        numbers: openChildNumbers,
+        total: node.subIssueSummary.total,
+        completed: node.subIssueSummary.completed,
+      };
+      deps.resolved = false;
     }
 
-    // Issue exists in cache but has no dependencies — return empty/resolved info
-    return this.buildEmptyDependencyInfo(issueNumber);
+    return deps;
   }
 
   /**
@@ -1237,11 +1273,27 @@ export class IssueFetcher {
 
       const openCount = blockedBy.filter((d) => d.state === 'open').length;
 
+      // Check for pending children (sub-issues that must close before parent launches)
+      let pendingChildren: IssueDependencyInfo['pendingChildren'];
+      if (issue.subIssuesSummary && issue.subIssuesSummary.total > 0 && issue.subIssuesSummary.completed < issue.subIssuesSummary.total) {
+        const openChildNumbers = (issue.subIssues?.nodes ?? [])
+          .filter((n) => n.state.toLowerCase() === 'open')
+          .map((n) => n.number);
+        pendingChildren = {
+          numbers: openChildNumbers,
+          total: issue.subIssuesSummary.total,
+          completed: issue.subIssuesSummary.completed,
+        };
+      }
+
+      const resolved = openCount === 0 && !pendingChildren;
+
       return {
         issueNumber,
         blockedBy,
-        resolved: openCount === 0,
+        resolved,
         openCount,
+        pendingChildren,
       };
     } catch (err) {
       console.error(

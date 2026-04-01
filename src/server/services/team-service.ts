@@ -117,6 +117,34 @@ export class TeamService {
         );
       }
 
+      // Check for pending children (parent issue waiting for sub-issues to close)
+      if (depInfo.pendingChildren && depInfo.pendingChildren.numbers.length > 0) {
+        const { numbers, total, completed } = depInfo.pendingChildren;
+        const displayKey = issueKey ?? `#${issueNumber}`;
+
+        if (queue) {
+          githubPoller.trackBlockedIssue(projectId, issueNumber, numbers);
+          const manager = getTeamManager();
+          const team = await manager.queueTeamWithBlockers(
+            projectId, issueNumber, [], issueTitle, headless, prompt, issueKey,
+          );
+          // Also store the pending children metadata
+          const db = getDatabase();
+          db.updateTeamSilent((team as { id: number }).id, {
+            pendingChildrenJson: JSON.stringify(numbers),
+          });
+          return team;
+        }
+
+        githubPoller.trackBlockedIssue(projectId, issueNumber, numbers);
+
+        throw new ServiceError(
+          `Issue ${displayKey} is waiting for ${total - completed} open sub-issue${total - completed !== 1 ? 's' : ''} to complete`,
+          'BLOCKED_BY_CHILDREN',
+          409,
+        );
+      }
+
       if (!depInfo.resolved) {
         const blockerNumbers = depInfo.blockedBy
           .filter((b) => b.state === 'open')
@@ -201,12 +229,19 @@ export class TeamService {
     const launchable: Array<{ number: number; title?: string; issueKey?: string; issueProvider?: string }> = [];
     const queueable: Array<{ issue: { number: number; title?: string; issueKey?: string; issueProvider?: string }; blockerNumbers: number[] }> = [];
 
+    // Track which issues are blocked by children (need pendingChildrenJson after queuing)
+    const childrenBlockedIssues = new Map<number, number[]>();
+
     for (const issue of (issues ?? [])) {
       const depInfo = await checkDependencies(projectId, issue.number);
 
       // null means dependency status is unknown -- queue conservatively
       if (depInfo === null) {
         queueable.push({ issue, blockerNumbers: [] });
+      } else if (depInfo.pendingChildren && depInfo.pendingChildren.numbers.length > 0) {
+        // Parent issue with open children — queue with empty blockers and track children
+        queueable.push({ issue, blockerNumbers: [] });
+        childrenBlockedIssues.set(issue.number, depInfo.pendingChildren.numbers);
       } else if (!depInfo.resolved) {
         const openBlockerNumbers = depInfo.blockedBy
           .filter((b) => b.state === 'open')
@@ -246,12 +281,23 @@ export class TeamService {
 
     if (queueable.length > 0) {
       queued = [];
+      const db = getDatabase();
       for (const { issue, blockerNumbers } of queueable) {
         try {
-          githubPoller.trackBlockedIssue(projectId, issue.number, blockerNumbers);
+          const childNumbers = childrenBlockedIssues.get(issue.number);
+          const trackNumbers = childNumbers ?? blockerNumbers;
+          if (trackNumbers.length > 0) {
+            githubPoller.trackBlockedIssue(projectId, issue.number, trackNumbers);
+          }
           const team = await manager.queueTeamWithBlockers(
             projectId, issue.number, blockerNumbers, issue.title, headless, prompt, issue.issueKey,
           );
+          // Also store pending children metadata if applicable
+          if (childNumbers && childNumbers.length > 0) {
+            db.updateTeamSilent((team as { id: number }).id, {
+              pendingChildrenJson: JSON.stringify(childNumbers),
+            });
+          }
           queued.push({ issueNumber: issue.number, team, blockedBy: blockerNumbers });
         } catch (err: unknown) {
           // Log and continue — don't stop the batch for individual queue failures

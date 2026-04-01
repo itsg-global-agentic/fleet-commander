@@ -64,6 +64,7 @@ function isNumericKey(key: string): boolean {
 
 /**
  * Displays the block reason for a queued team:
+ * - "Waiting for children: #X, #Y (N/M done)" (blue) when sub-issues are open
  * - "Blocked by FAILED #49" (red) when a dependency team has failed
  * - "Blocked by #49, #50" (orange) when dependencies are pending
  * - "Waiting for slot" (gray) when all project slots are occupied
@@ -74,7 +75,16 @@ export function QueueBlockReason({ team }: QueueBlockReasonProps) {
 
   const result = useMemo(() => {
     // -----------------------------------------------------------------------
-    // 1. Check for dependency blockers
+    // 1. Check for pending children (parent issue waiting for sub-issues)
+    // -----------------------------------------------------------------------
+    const childKeys = parseBlockers(team.pendingChildrenJson);
+
+    if (childKeys.length > 0) {
+      return { type: 'children' as const, childKeys };
+    }
+
+    // -----------------------------------------------------------------------
+    // 2. Check for dependency blockers
     // -----------------------------------------------------------------------
     const blockerKeys = parseBlockers(team.blockedByJson);
 
@@ -101,7 +111,7 @@ export function QueueBlockReason({ team }: QueueBlockReasonProps) {
     }
 
     // -----------------------------------------------------------------------
-    // 2. Check for slot blocking
+    // 3. Check for slot blocking
     // -----------------------------------------------------------------------
     if (team.maxActiveTeams != null) {
       const activeCount = allTeams.filter(
@@ -114,10 +124,10 @@ export function QueueBlockReason({ team }: QueueBlockReasonProps) {
     }
 
     // -----------------------------------------------------------------------
-    // 3. Generic fallback — no specific reason
+    // 4. Generic fallback — no specific reason
     // -----------------------------------------------------------------------
     return null;
-  }, [team.blockedByJson, team.projectId, team.maxActiveTeams, allTeams]);
+  }, [team.pendingChildrenJson, team.blockedByJson, team.projectId, team.maxActiveTeams, allTeams]);
 
   // -------------------------------------------------------------------------
   // Render
@@ -129,6 +139,40 @@ export function QueueBlockReason({ team }: QueueBlockReasonProps) {
     return (
       <span className="block text-xs text-dark-muted mt-0.5">
         Waiting for slot
+      </span>
+    );
+  }
+
+  if (result.type === 'children') {
+    const { childKeys } = result;
+    return (
+      <span className="block text-xs text-[#58A6FF] mt-0.5">
+        {'Waiting for children: '}
+        {childKeys.map((key, i) => {
+          const label = isNumericKey(key) ? `#${key}` : key;
+          const link =
+            team.githubRepo && isNumericKey(key) ? (
+              <a
+                key={key}
+                href={issueUrl(team.githubRepo, key)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline hover:text-dark-text"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {label}
+              </a>
+            ) : (
+              <span key={key}>{label}</span>
+            );
+
+          return (
+            <span key={key}>
+              {i > 0 && ', '}
+              {link}
+            </span>
+          );
+        })}
       </span>
     );
   }

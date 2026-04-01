@@ -643,3 +643,150 @@ describe('TeamManager.processQueue dependency filtering', () => {
     expect(launchQueuedSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 101 }));
   });
 });
+
+// ---------------------------------------------------------------------------
+// Children-pending blocking in processQueue
+// ---------------------------------------------------------------------------
+
+describe('TeamManager.processQueue children-pending filtering', () => {
+  let tm: TeamManager;
+  let launchQueuedSpy: Mock;
+
+  beforeEach(async () => {
+    // Neutralize shared mocks so leftover re-drain callbacks from prior test
+    // suites short-circuit harmlessly (getProject returns null -> early exit).
+    mockDb.getProject.mockReturnValue(null);
+    mockDb.getQueuedTeamsByProject.mockReturnValue([]);
+    mockDb.getActiveTeamCountByProject.mockReturnValue(99);
+
+    // Flush leftover re-drain macrotasks from prior describe blocks
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    vi.clearAllMocks();
+    vi.useRealTimers();
+    tm = new TeamManager();
+
+    launchQueuedSpy = vi.fn().mockResolvedValue(undefined);
+    (tm as any).launchQueued = launchQueuedSpy;
+    (tm as any).broadcastSnapshot = vi.fn();
+
+    // Ensure cache returns null so filterUnblockedTeams falls through to fetchDependenciesForIssue
+    mockGetDependenciesFromCache.mockReturnValue(null);
+  });
+
+  afterEach(async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  it('skips queued team whose issue has open children', async () => {
+    const project = makeProject({ id: 1, maxActiveTeams: 3 });
+    const parentTeam = makeTeam({ id: 101, issueNumber: 10, worktreeName: 'proj-10', status: 'queued' });
+
+    // Use stable mockReturnValue (not Once) to survive re-drain consumption
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getActiveTeamCountByProject.mockReturnValue(0);
+    mockDb.getQueuedTeamsByProject.mockReturnValue([parentTeam]);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
+    mockDb.insertTransition.mockReturnValue(undefined);
+
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 10,
+      blockedBy: [],
+      resolved: false,
+      openCount: 0,
+      pendingChildren: { numbers: [11], total: 2, completed: 1 },
+    });
+
+    await tm.processQueue(1);
+    // Flush all re-drains (launchedCount=0, so no re-drain, but flush anyway)
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+
+    // Parent should NOT have been launched by this tm instance
+    expect(launchQueuedSpy).not.toHaveBeenCalled();
+  });
+
+  it('launches team when all children are completed', async () => {
+    const project = makeProject({ id: 1, maxActiveTeams: 2 });
+    const parentTeam = makeTeam({ id: 101, issueNumber: 10, worktreeName: 'proj-10', status: 'queued' });
+
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getActiveTeamCountByProject.mockReturnValue(0);
+    // First call returns team, subsequent calls return empty (stops re-drain)
+    let queueCallCount = 0;
+    mockDb.getQueuedTeamsByProject.mockImplementation(() => {
+      queueCallCount++;
+      return queueCallCount === 1 ? [parentTeam] : [];
+    });
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
+    mockDb.insertTransition.mockReturnValue(undefined);
+
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 10,
+      blockedBy: [],
+      resolved: true,
+      openCount: 0,
+    });
+
+    await tm.processQueue(1);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+
+    expect(launchQueuedSpy).toHaveBeenCalled();
+    expect(launchQueuedSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 101 }));
+  });
+
+  it('launches team with 0 children (not a parent)', async () => {
+    const project = makeProject({ id: 1, maxActiveTeams: 2 });
+    const team = makeTeam({ id: 101, issueNumber: 10, worktreeName: 'proj-10', status: 'queued' });
+
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getActiveTeamCountByProject.mockReturnValue(0);
+    let queueCallCount2 = 0;
+    mockDb.getQueuedTeamsByProject.mockImplementation(() => {
+      queueCallCount2++;
+      return queueCallCount2 === 1 ? [team] : [];
+    });
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
+    mockDb.insertTransition.mockReturnValue(undefined);
+
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 10,
+      blockedBy: [],
+      resolved: true,
+      openCount: 0,
+    });
+
+    await tm.processQueue(1);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+
+    expect(launchQueuedSpy).toHaveBeenCalled();
+  });
+
+  it('keeps team blocked when BOTH children and blockedBy are unresolved', async () => {
+    const project = makeProject({ id: 1, maxActiveTeams: 3 });
+    const team = makeTeam({ id: 101, issueNumber: 10, worktreeName: 'proj-10', status: 'queued' });
+
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getActiveTeamCountByProject.mockReturnValue(0);
+    mockDb.getQueuedTeamsByProject.mockReturnValue([team]);
+    mockDb.updateTeamSilent.mockReturnValue(undefined);
+    mockDb.insertTransition.mockReturnValue(undefined);
+
+    mockFetchDependenciesForIssue.mockResolvedValue({
+      issueNumber: 10,
+      blockedBy: [{ number: 5, owner: 'o', repo: 'r', state: 'open', title: 'Blocker' }],
+      resolved: false,
+      openCount: 1,
+      pendingChildren: { numbers: [11, 12], total: 3, completed: 1 },
+    });
+
+    await tm.processQueue(1);
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+
+    // Parent should NOT have been launched (blocked by both children and deps)
+    expect(launchQueuedSpy).not.toHaveBeenCalled();
+  });
+});

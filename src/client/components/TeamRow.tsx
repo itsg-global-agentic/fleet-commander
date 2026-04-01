@@ -83,6 +83,7 @@ function areTeamRowPropsEqual(prev: TeamRowProps, next: TeamRowProps): boolean {
     a.githubRepo === b.githubRepo &&
     a.retryCount === b.retryCount &&
     a.blockedByJson === b.blockedByJson &&
+    a.pendingChildrenJson === b.pendingChildrenJson &&
     a.maxActiveTeams === b.maxActiveTeams
   );
 }

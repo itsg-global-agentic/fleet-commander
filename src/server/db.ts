@@ -120,6 +120,7 @@ export interface TeamInsert {
   customPrompt?: string | null;
   headless?: boolean;
   blockedByJson?: string | null;
+  pendingChildrenJson?: string | null;
   launchedAt?: string | null;
 }
 
@@ -134,6 +135,7 @@ export interface TeamUpdate {
   customPrompt?: string | null;
   headless?: boolean;
   blockedByJson?: string | null;
+  pendingChildrenJson?: string | null;
   totalInputTokens?: number;
   totalOutputTokens?: number;
   totalCacheCreationTokens?: number;
@@ -400,6 +402,9 @@ export class FleetDatabase {
 
     // Add retry_count column to teams if missing (v14 migration — auto-retry)
     this.addRetryCountColumn();
+
+    // Add pending_children_json column to teams if missing (v15 migration — parent waits for children)
+    this.addPendingChildrenJsonColumn();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1059,6 +1064,24 @@ export class FleetDatabase {
   }
 
   /**
+   * v15 migration: Add pending_children_json column to teams table.
+   * Stores a JSON array of open child issue numbers for queued parent issues.
+   * Parent issues stay queued until all sub-issues are closed.
+   */
+  private addPendingChildrenJsonColumn(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(teams)').all() as Array<{ name: string }>;
+      if (cols.some((c) => c.name === 'pending_children_json')) return; // Already exists
+
+      this.db.exec('ALTER TABLE teams ADD COLUMN pending_children_json TEXT');
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (15)');
+      console.log('[DB] Migrated to v15: added pending_children_json column to teams');
+    } catch {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+    }
+  }
+
+  /**
    * Migrate any projects with status 'paused' to 'active'.
    * The paused status was removed in issue #228.
    */
@@ -1377,8 +1400,8 @@ export class FleetDatabase {
   insertTeam(data: TeamInsert): Team {
     const now = new Date().toISOString();
     const stmt = this.stmt(`
-      INSERT INTO teams (issue_number, issue_title, issue_key, issue_provider, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, headless, blocked_by_json, launched_at, created_at, updated_at)
-      VALUES (@issueNumber, @issueTitle, @issueKey, @issueProvider, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @headless, @blockedByJson, @launchedAt, @createdAt, @updatedAt)
+      INSERT INTO teams (issue_number, issue_title, issue_key, issue_provider, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, headless, blocked_by_json, pending_children_json, launched_at, created_at, updated_at)
+      VALUES (@issueNumber, @issueTitle, @issueKey, @issueProvider, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @headless, @blockedByJson, @pendingChildrenJson, @launchedAt, @createdAt, @updatedAt)
     `);
 
     try {
@@ -1398,6 +1421,7 @@ export class FleetDatabase {
         customPrompt: data.customPrompt ?? null,
         headless: data.headless === false ? 0 : 1,
         blockedByJson: data.blockedByJson ?? null,
+        pendingChildrenJson: data.pendingChildrenJson ?? null,
         launchedAt: data.launchedAt ?? null,
         createdAt: now,
         updatedAt: now,
@@ -1539,12 +1563,12 @@ export class FleetDatabase {
   }
 
   /**
-   * Get queued teams that have non-null blocked_by_json.
+   * Get queued teams that have non-null blocked_by_json or pending_children_json.
    * Used by the GitHub poller to check DB-persisted blockers for resolution.
    */
   getQueuedBlockedTeams(): Team[] {
     const stmt = this.stmt(
-      "SELECT * FROM teams WHERE status = 'queued' AND blocked_by_json IS NOT NULL ORDER BY created_at ASC"
+      "SELECT * FROM teams WHERE status = 'queued' AND (blocked_by_json IS NOT NULL OR pending_children_json IS NOT NULL) ORDER BY created_at ASC"
     );
     const rows = stmt.all() as Record<string, unknown>[];
     return rows.map((r) => this.mapTeamRow(r));
@@ -1610,6 +1634,10 @@ export class FleetDatabase {
     if (fields.blockedByJson !== undefined) {
       setClauses.push('blocked_by_json = @blockedByJson');
       params.blockedByJson = fields.blockedByJson;
+    }
+    if (fields.pendingChildrenJson !== undefined) {
+      setClauses.push('pending_children_json = @pendingChildrenJson');
+      params.pendingChildrenJson = fields.pendingChildrenJson;
     }
     if (fields.totalInputTokens !== undefined) {
       setClauses.push('total_input_tokens = @totalInputTokens');
@@ -2813,6 +2841,7 @@ export class FleetDatabase {
       totalCacheReadTokens: (row.total_cache_read_tokens as number | undefined) ?? 0,
       totalCostUsd: (row.total_cost_usd as number | undefined) ?? 0,
       blockedByJson: (row.blocked_by_json as string | null) ?? null,
+      pendingChildrenJson: (row.pending_children_json as string | null) ?? null,
       retryCount: (row.retry_count as number | undefined) ?? 0,
       launchedAt: utcify(row.launched_at as string | null),
       stoppedAt: utcify(row.stopped_at as string | null),
@@ -2907,6 +2936,7 @@ export class FleetDatabase {
       totalCostUsd: (row.total_cost_usd as number | undefined) ?? 0,
       retryCount: (row.retry_count as number | undefined) ?? 0,
       blockedByJson: (row.blocked_by_json as string | null) ?? null,
+      pendingChildrenJson: (row.pending_children_json as string | null) ?? null,
       githubRepo: (row.github_repo as string | null) ?? null,
       maxActiveTeams: (row.max_active_teams as number | null) ?? null,
       prState: (row.pr_state as PRState | null) ?? null,

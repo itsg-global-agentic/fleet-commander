@@ -1141,7 +1141,38 @@ export class TeamManager {
         }
 
         // Permissive fallback: if fetch returns null, treat as unblocked
-        if (!deps || deps.resolved) {
+        if (!deps) {
+          unblocked.push(team);
+          continue;
+        }
+
+        // Check for pending children (parent issue waiting for sub-issues to close)
+        if (deps.pendingChildren && deps.pendingChildren.numbers.length > 0) {
+          const { numbers, total, completed } = deps.pendingChildren;
+          console.log(
+            `[TeamManager] Skipping team ${team.id} (issue #${team.issueNumber}) — ` +
+            `waiting for ${numbers.length} children to complete (${completed}/${total} done)`
+          );
+
+          // Track child issues for resolution detection
+          if (githubPollerModule) {
+            githubPollerModule.githubPoller.trackBlockedIssue(
+              projectId,
+              team.issueNumber,
+              numbers,
+            );
+          }
+
+          // Persist pending children in DB for display and restart recovery
+          const db = getDatabase();
+          db.updateTeamSilent(team.id, {
+            pendingChildrenJson: JSON.stringify(numbers),
+          });
+
+          continue;
+        }
+
+        if (deps.resolved) {
           unblocked.push(team);
           continue;
         }
@@ -1254,7 +1285,7 @@ export class TeamManager {
     console.log(`[TeamManager] Worktree created for dequeued team: ${team.worktreeName}`);
 
     // Clear blocker metadata now that the team is being launched
-    db.updateTeamSilent(team.id, { status: 'launching', blockedByJson: null });
+    db.updateTeamSilent(team.id, { status: 'launching', blockedByJson: null, pendingChildrenJson: null });
     this.broadcastSnapshot();
 
     // ── Step 2: Copy hooks and settings ──

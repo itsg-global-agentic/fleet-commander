@@ -235,6 +235,7 @@ export interface Team {
   stoppedAt: string | null;
   lastEventAt: string | null;
   blockedByJson: string | null;
+  pendingChildrenJson: string | null;
   retryCount: number;
   createdAt: string;
   updatedAt: string;
@@ -483,6 +484,8 @@ export interface IssueDependencyInfo {
   resolved: boolean;
   /** Number of open (unresolved) blockers */
   openCount: number;
+  /** Pending children info — parent issue is blocked until all children close */
+  pendingChildren?: { numbers: number[]; total: number; completed: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -516,6 +519,7 @@ export interface TeamDashboardRow {
   totalCostUsd: number;
   retryCount: number;
   blockedByJson: string | null;
+  pendingChildrenJson: string | null;
   githubRepo: string | null;
   maxActiveTeams: number | null;
   prState: PRState | null;

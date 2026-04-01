@@ -94,6 +94,17 @@ export interface SingleIssueDepsResult {
       repository: { owner: { login: string }; name: string };
     }>;
   };
+  subIssuesSummary?: {
+    total: number;
+    completed: number;
+    percentCompleted: number;
+  };
+  subIssues?: {
+    nodes?: Array<{
+      number: number;
+      state: string;
+    }>;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +176,10 @@ query($owner: String!, $repo: String!, $issueNumber: Int!) {
       }
       blockedBy(first: 20) {
         nodes { number title state repository { owner { login } name } }
+      }
+      subIssuesSummary { total completed percentCompleted }
+      subIssues(first: 50) {
+        nodes { number state }
       }
     }
   }

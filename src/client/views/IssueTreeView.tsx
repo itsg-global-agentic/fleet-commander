@@ -1063,26 +1063,58 @@ function RunAllConfirmDialog({ issues, skippedActive, blockedIssues, projectId, 
             </ul>
           )}
 
-          {/* Blocked issues — queued, waiting for dependencies */}
-          {blockedIssues.length > 0 && (
-            <div className={issues.length > 0 ? 'border-t border-dark-border/40 pt-2 mb-3' : 'mb-3'}>
-              <p className="text-xs text-[#D29922] mb-1">
-                {blockedIssues.length} issue{blockedIssues.length !== 1 ? 's' : ''} queued (waiting for dependencies to resolve)
-              </p>
-              <ul className="space-y-1">
-                {blockedIssues.map((n) => (
-                  <li key={n.issueKey ?? n.number} className="text-xs text-dark-text flex items-center gap-2">
-                    <svg className="w-3 h-3 text-[#D29922] shrink-0" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
-                      <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
-                    </svg>
-                    <span className="text-dark-muted">{n.issueKey ?? `#${n.number}`}</span>
-                    <span className="truncate">{n.title}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {/* Blocked issues — queued, waiting for dependencies or children */}
+          {blockedIssues.length > 0 && (() => {
+            const depBlocked = blockedIssues.filter((n) =>
+              n.dependencies && !n.dependencies.resolved &&
+              !(n.subIssueSummary && n.subIssueSummary.total > 0 && n.subIssueSummary.completed < n.subIssueSummary.total)
+            );
+            const childBlocked = blockedIssues.filter((n) =>
+              n.subIssueSummary && n.subIssueSummary.total > 0 && n.subIssueSummary.completed < n.subIssueSummary.total
+            );
+            return (
+              <div className={issues.length > 0 ? 'border-t border-dark-border/40 pt-2 mb-3' : 'mb-3'}>
+                {depBlocked.length > 0 && (
+                  <>
+                    <p className="text-xs text-[#D29922] mb-1">
+                      {depBlocked.length} issue{depBlocked.length !== 1 ? 's' : ''} queued (waiting for dependencies to resolve)
+                    </p>
+                    <ul className="space-y-1 mb-2">
+                      {depBlocked.map((n) => (
+                        <li key={n.issueKey ?? n.number} className="text-xs text-dark-text flex items-center gap-2">
+                          <svg className="w-3 h-3 text-[#D29922] shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                            <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
+                          </svg>
+                          <span className="text-dark-muted">{n.issueKey ?? `#${n.number}`}</span>
+                          <span className="truncate">{n.title}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+                {childBlocked.length > 0 && (
+                  <>
+                    <p className="text-xs text-[#58A6FF] mb-1">
+                      {childBlocked.length} issue{childBlocked.length !== 1 ? 's' : ''} queued (waiting for children to complete)
+                    </p>
+                    <ul className="space-y-1">
+                      {childBlocked.map((n) => (
+                        <li key={n.issueKey ?? n.number} className="text-xs text-dark-text flex items-center gap-2">
+                          <svg className="w-3 h-3 text-[#58A6FF] shrink-0" viewBox="0 0 16 16" fill="currentColor">
+                            <path d="M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" />
+                            <path d="M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z" />
+                          </svg>
+                          <span className="text-dark-muted">{n.issueKey ?? `#${n.number}`}</span>
+                          <span className="truncate">{n.title} ({n.subIssueSummary!.completed}/{n.subIssueSummary!.total} done)</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Skipped counts */}
           {skippedActive > 0 && (
@@ -2055,7 +2087,7 @@ function countNodes(nodes: IssueNode[]): number {
   return count;
 }
 
-/** Collect launchable issues from a tree — open, no active team, no unresolved deps */
+/** Collect launchable issues from a tree — open, no active team, no unresolved deps, no open children */
 function collectLaunchableIssues(nodes: IssueNode[]): {
   launchable: IssueNode[];
   skippedActive: number;
@@ -2071,6 +2103,13 @@ function collectLaunchableIssues(nodes: IssueNode[]): {
         if (node.activeTeam) {
           skippedActive++;
         } else if (node.dependencies && !node.dependencies.resolved) {
+          blocked.push(node);
+        } else if (
+          node.subIssueSummary &&
+          node.subIssueSummary.total > 0 &&
+          node.subIssueSummary.completed < node.subIssueSummary.total
+        ) {
+          // Parent issue with open children — blocked until all sub-issues close
           blocked.push(node);
         } else {
           launchable.push(node);
