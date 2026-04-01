@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.14
+# fleet-commander v0.0.15
 # Fleet Commander hook: SessionStart
 # Detects team startup. Captures session_id, worktree, model info.
 # stdin JSON example: {"session_id":"abc123","agent_type":"main"}
