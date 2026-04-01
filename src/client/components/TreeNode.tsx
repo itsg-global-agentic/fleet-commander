@@ -82,13 +82,30 @@ function IssueStateBadge({ state }: { state: 'open' | 'closed' }) {
 // Blocked badge (dependency blocker indicator)
 // ---------------------------------------------------------------------------
 
-function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
-  if (!dependencies.blockedBy || dependencies.blockedBy.length === 0) return null;
-
-  // Only show the badge when there are open (unresolved) blockers
-  if (dependencies.resolved || dependencies.openCount === 0) return null;
+function PendingChildrenBadge({ pendingChildren }: { pendingChildren: IssueDependencyInfo['pendingChildren'] }) {
+  if (!pendingChildren || pendingChildren.total === 0) return null;
+  if (pendingChildren.completed >= pendingChildren.total) return null;
 
   return (
+    <span className="inline-flex items-center gap-1 text-xs text-[#58A6FF] cursor-default">
+      <span className="shrink-0">&#x1F476;</span>
+      <span>
+        waiting for children ({pendingChildren.completed}/{pendingChildren.total} done)
+      </span>
+    </span>
+  );
+}
+
+function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
+  const hasOpenBlockers = dependencies.blockedBy?.length > 0 && !dependencies.resolved && dependencies.openCount > 0;
+  const hasPendingChildren = dependencies.pendingChildren && dependencies.pendingChildren.total > 0 && dependencies.pendingChildren.completed < dependencies.pendingChildren.total;
+
+  if (!hasOpenBlockers && !hasPendingChildren) return null;
+
+  return (
+    <span className="inline-flex items-center gap-2 flex-wrap">
+      {hasPendingChildren && <PendingChildrenBadge pendingChildren={dependencies.pendingChildren} />}
+      {!hasOpenBlockers ? null : (
     <span className="inline-flex items-center gap-1 text-xs text-dark-muted cursor-default flex-wrap">
       <LockIcon size={12} className="text-[#F85149] shrink-0" />
       <span>blocked by</span>
@@ -133,6 +150,8 @@ function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
           </span>
         );
       })}
+    </span>
+      )}
     </span>
   );
 }
