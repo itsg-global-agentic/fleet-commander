@@ -2,8 +2,10 @@
   "mcpServers": {
     "fleet-commander": {
       "command": "node",
-      "args": ["bin/fleet-commander-mcp.js"],
-      "cwd": "C:/Git/fleet-commander"
+      "args": ["C:/Git/fleet-commander/bin/fleet-commander-mcp.js"],
+      "env": {
+        "FLEET_COMMANDER_ROOT": "C:/Git/fleet-commander"
+      }
     }
   }
 }
