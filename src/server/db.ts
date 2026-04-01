@@ -3060,16 +3060,53 @@ export class FleetDatabase {
   // -------------------------------------------------------------------------
 
   /**
+   * Dedup window in seconds: skip insert when the same team_id + file_type +
+   * content was inserted within this window (prevents duplicate captures from
+   * PostToolUse and SubagentStop firing within ~1 second of each other).
+   */
+  private static readonly HANDOFF_DEDUP_WINDOW_SEC = 5;
+
+  /**
    * Insert a captured handoff file. Content is capped at 50KB server-side.
-   * Each call creates a new row (multiple versions are tracked).
+   * Deduplicates when the same team_id + file_type + content was inserted
+   * within the last HANDOFF_DEDUP_WINDOW_SEC seconds.
+   *
+   * Returns `{ file, deduplicated }` so callers can skip SSE broadcasts on dedup.
    */
   insertHandoffFile(data: {
     teamId: number;
     fileType: HandoffFileType;
     content: string;
     agentName?: string | null;
-  }): HandoffFile {
+  }): { file: HandoffFile; deduplicated: boolean } {
     const cappedContent = data.content.slice(0, 51200); // 50KB cap
+
+    // ── Dedup check: look for a recent row with the same team_id + file_type ──
+    const recent = this.stmt(`
+      SELECT * FROM handoff_files
+       WHERE team_id = @teamId
+         AND file_type = @fileType
+         AND captured_at >= datetime('now', '-' || @windowSec || ' seconds')
+       ORDER BY id DESC
+       LIMIT 1
+    `).get({
+      teamId: data.teamId,
+      fileType: data.fileType,
+      windowSec: FleetDatabase.HANDOFF_DEDUP_WINDOW_SEC,
+    }) as Record<string, unknown> | undefined;
+
+    if (recent) {
+      const existingContent = recent.content as string;
+      // Fast-path: compare length first, then full string
+      if (
+        existingContent.length === cappedContent.length &&
+        existingContent === cappedContent
+      ) {
+        return { file: this.mapHandoffFileRow(recent), deduplicated: true };
+      }
+    }
+
+    // ── Normal insert ─────────────────────────────────────────────────
     const stmt = this.stmt(`
       INSERT INTO handoff_files (team_id, file_type, content, agent_name)
       VALUES (@teamId, @fileType, @content, @agentName)
@@ -3086,7 +3123,7 @@ export class FleetDatabase {
       'SELECT * FROM handoff_files WHERE id = ?'
     ).get(result.lastInsertRowid) as Record<string, unknown>;
 
-    return this.mapHandoffFileRow(row);
+    return { file: this.mapHandoffFileRow(row), deduplicated: false };
   }
 
   /**

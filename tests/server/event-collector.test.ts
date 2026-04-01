@@ -2997,12 +2997,15 @@ describe('TaskCreated event processing', () => {
 describe('handoff file capture', () => {
   it('should insert handoff file when handoff_file event has valid cc_stdin', () => {
     const insertHandoffFile = vi.fn().mockReturnValue({
-      id: 1,
-      teamId: 1,
-      fileType: 'plan.md',
-      content: '# Plan\nSome content',
-      agentName: 'planner',
-      capturedAt: '2024-01-01T00:00:00.000Z',
+      file: {
+        id: 1,
+        teamId: 1,
+        fileType: 'plan.md',
+        content: '# Plan\nSome content',
+        agentName: 'planner',
+        capturedAt: '2024-01-01T00:00:00.000Z',
+      },
+      deduplicated: false,
     });
     const db = createMockDb({ insertHandoffFile });
     const sse = createMockSse();
@@ -3027,12 +3030,15 @@ describe('handoff file capture', () => {
 
   it('should broadcast team_handoff_file SSE event on capture', () => {
     const insertHandoffFile = vi.fn().mockReturnValue({
-      id: 1,
-      teamId: 1,
-      fileType: 'changes.md',
-      content: '# Changes',
-      agentName: 'dev',
-      capturedAt: '2024-01-01T00:00:00.000Z',
+      file: {
+        id: 1,
+        teamId: 1,
+        fileType: 'changes.md',
+        content: '# Changes',
+        agentName: 'dev',
+        capturedAt: '2024-01-01T00:00:00.000Z',
+      },
+      deduplicated: false,
     });
     const db = createMockDb({ insertHandoffFile });
     const sse = createMockSse();
@@ -3052,6 +3058,37 @@ describe('handoff file capture', () => {
         agent_name: 'dev',
       }),
       1,
+    );
+  });
+
+  it('should skip SSE broadcast when handoff file is deduplicated', () => {
+    const insertHandoffFile = vi.fn().mockReturnValue({
+      file: {
+        id: 1,
+        teamId: 1,
+        fileType: 'plan.md',
+        content: '# Plan',
+        agentName: 'planner',
+        capturedAt: '2024-01-01T00:00:00.000Z',
+      },
+      deduplicated: true,
+    });
+    const db = createMockDb({ insertHandoffFile });
+    const sse = createMockSse();
+
+    const payload = makePayload({
+      event: 'handoff_file',
+      cc_stdin: JSON.stringify({ file_type: 'plan.md', content: '# Plan' }),
+      agent_type: 'planner',
+    });
+    processEvent(payload, db, sse);
+
+    // insertHandoffFile was called, but SSE broadcast should be skipped
+    expect(insertHandoffFile).toHaveBeenCalledOnce();
+    expect(sse.broadcast).not.toHaveBeenCalledWith(
+      'team_handoff_file',
+      expect.anything(),
+      expect.anything(),
     );
   });
 
@@ -3109,12 +3146,15 @@ describe('handoff file capture', () => {
 
   it('should set agentName to null for team-lead agent', () => {
     const insertHandoffFile = vi.fn().mockReturnValue({
-      id: 1,
-      teamId: 1,
-      fileType: 'review.md',
-      content: '# Review',
-      agentName: null,
-      capturedAt: '2024-01-01T00:00:00.000Z',
+      file: {
+        id: 1,
+        teamId: 1,
+        fileType: 'review.md',
+        content: '# Review',
+        agentName: null,
+        capturedAt: '2024-01-01T00:00:00.000Z',
+      },
+      deduplicated: false,
     });
     const db = createMockDb({ insertHandoffFile });
     const sse = createMockSse();
@@ -3136,12 +3176,15 @@ describe('handoff file capture', () => {
 
   it('should cap content at 50KB', () => {
     const insertHandoffFile = vi.fn().mockReturnValue({
-      id: 1,
-      teamId: 1,
-      fileType: 'plan.md',
-      content: 'x'.repeat(51200),
-      agentName: null,
-      capturedAt: '2024-01-01T00:00:00.000Z',
+      file: {
+        id: 1,
+        teamId: 1,
+        fileType: 'plan.md',
+        content: 'x'.repeat(51200),
+        agentName: null,
+        capturedAt: '2024-01-01T00:00:00.000Z',
+      },
+      deduplicated: false,
     });
     const db = createMockDb({ insertHandoffFile });
     const sse = createMockSse();
@@ -3161,12 +3204,15 @@ describe('handoff file capture', () => {
   it('should accept all three valid handoff file types', () => {
     for (const fileType of ['plan.md', 'changes.md', 'review.md']) {
       const insertHandoffFile = vi.fn().mockReturnValue({
-        id: 1,
-        teamId: 1,
-        fileType,
-        content: `# ${fileType}`,
-        agentName: null,
-        capturedAt: '2024-01-01T00:00:00.000Z',
+        file: {
+          id: 1,
+          teamId: 1,
+          fileType,
+          content: `# ${fileType}`,
+          agentName: null,
+          capturedAt: '2024-01-01T00:00:00.000Z',
+        },
+        deduplicated: false,
       });
       const db = createMockDb({ insertHandoffFile });
       const sse = createMockSse();

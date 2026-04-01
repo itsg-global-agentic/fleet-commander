@@ -108,7 +108,7 @@ export interface EventCollectorDb {
     fileType: HandoffFileType;
     content: string;
     agentName?: string | null;
-  }): HandoffFile;
+  }): { file: HandoffFile; deduplicated: boolean };
 }
 
 /** SSE broker interface for broadcasting events */
@@ -603,19 +603,22 @@ export function processEvent(
       // Validate: require both file_type and content
       const validTypes = new Set(['plan.md', 'changes.md', 'review.md']);
       if (fileType && validTypes.has(fileType) && content && content.length > 0) {
-        const handoffFile = db.insertHandoffFile({
+        const { file: handoffFile, deduplicated } = db.insertHandoffFile({
           teamId,
           fileType: fileType as HandoffFileType,
           content: content.slice(0, 51200), // 50KB cap
           agentName: agentName !== 'team-lead' ? agentName : null,
         });
 
-        sse.broadcast('team_handoff_file', {
-          team_id: teamId,
-          file_type: handoffFile.fileType,
-          agent_name: handoffFile.agentName,
-          captured_at: handoffFile.capturedAt,
-        }, teamId);
+        // Only broadcast SSE when this is a genuinely new capture
+        if (!deduplicated) {
+          sse.broadcast('team_handoff_file', {
+            team_id: teamId,
+            file_type: handoffFile.fileType,
+            agent_name: handoffFile.agentName,
+            captured_at: handoffFile.capturedAt,
+          }, teamId);
+        }
       }
     } catch {
       // Non-critical — handoff file capture failure should not break event processing

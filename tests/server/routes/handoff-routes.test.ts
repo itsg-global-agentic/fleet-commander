@@ -326,4 +326,169 @@ describe('POST /api/handoff', () => {
     expect(latest.content.length).toBeLessThanOrEqual(51200);
     expect(latest.content.length).toBe(50000);
   });
+
+  // ── Deduplication tests ──────────────────────────────────────────
+
+  it('should deduplicate same content uploaded twice within 5 seconds', async () => {
+    const team = seedTeam({ worktreeName: `handoff-dedup-same-${Date.now()}` });
+    const content = '# Plan\n\nIdentical content for dedup test';
+
+    // First upload
+    const mp1 = buildMultipart(
+      { team: team.worktreeName, fileType: 'plan.md' },
+      { name: 'plan.md', content },
+    );
+    const r1 = await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp1.contentType },
+      payload: mp1.body,
+    });
+    expect(r1.statusCode).toBe(200);
+
+    // Second upload — same content, same file type, immediate
+    const mp2 = buildMultipart(
+      { team: team.worktreeName, fileType: 'plan.md' },
+      { name: 'plan.md', content },
+    );
+    const r2 = await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp2.contentType },
+      payload: mp2.body,
+    });
+    expect(r2.statusCode).toBe(200);
+
+    // Only 1 entry should exist — the duplicate was deduplicated
+    const db = getDatabase();
+    const files = db.getHandoffFiles(team.id);
+    const planFiles = files.filter((f) => f.fileType === 'plan.md');
+    expect(planFiles).toHaveLength(1);
+  });
+
+  it('should preserve both entries when content differs within 5 seconds', async () => {
+    const team = seedTeam({ worktreeName: `handoff-dedup-diff-${Date.now()}` });
+
+    // First upload
+    const mp1 = buildMultipart(
+      { team: team.worktreeName, fileType: 'changes.md' },
+      { name: 'changes.md', content: '# Changes v1' },
+    );
+    await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp1.contentType },
+      payload: mp1.body,
+    });
+
+    // Second upload — different content
+    const mp2 = buildMultipart(
+      { team: team.worktreeName, fileType: 'changes.md' },
+      { name: 'changes.md', content: '# Changes v2 — updated' },
+    );
+    await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp2.contentType },
+      payload: mp2.body,
+    });
+
+    const db = getDatabase();
+    const files = db.getHandoffFiles(team.id);
+    const changesFiles = files.filter((f) => f.fileType === 'changes.md');
+    expect(changesFiles).toHaveLength(2);
+    expect(changesFiles[0].content).toBe('# Changes v1');
+    expect(changesFiles[1].content).toBe('# Changes v2 — updated');
+  });
+
+  it('should preserve both entries when same content is uploaded 30+ seconds apart', async () => {
+    const team = seedTeam({ worktreeName: `handoff-dedup-stale-${Date.now()}` });
+    const content = '# Review\n\nSame content but old timestamp';
+
+    // First upload via normal route
+    const mp1 = buildMultipart(
+      { team: team.worktreeName, fileType: 'review.md' },
+      { name: 'review.md', content },
+    );
+    await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp1.contentType },
+      payload: mp1.body,
+    });
+
+    // Backdate the first entry by 30 seconds using raw SQL
+    const db = getDatabase();
+    db.raw.exec(`
+      UPDATE handoff_files
+         SET captured_at = datetime('now', '-30 seconds')
+       WHERE team_id = ${team.id} AND file_type = 'review.md'
+    `);
+
+    // Second upload — same content, but now 30s has elapsed
+    const mp2 = buildMultipart(
+      { team: team.worktreeName, fileType: 'review.md' },
+      { name: 'review.md', content },
+    );
+    await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp2.contentType },
+      payload: mp2.body,
+    });
+
+    const files = db.getHandoffFiles(team.id);
+    const reviewFiles = files.filter((f) => f.fileType === 'review.md');
+    expect(reviewFiles).toHaveLength(2);
+  });
+
+  it('should deduplicate independently across file types', async () => {
+    const team = seedTeam({ worktreeName: `handoff-dedup-types-${Date.now()}` });
+    const content = '# Same content for different types';
+
+    // Upload plan.md
+    const mp1 = buildMultipart(
+      { team: team.worktreeName, fileType: 'plan.md' },
+      { name: 'plan.md', content },
+    );
+    await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp1.contentType },
+      payload: mp1.body,
+    });
+
+    // Upload changes.md with same content — should NOT be deduplicated
+    const mp2 = buildMultipart(
+      { team: team.worktreeName, fileType: 'changes.md' },
+      { name: 'changes.md', content },
+    );
+    await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp2.contentType },
+      payload: mp2.body,
+    });
+
+    // Upload plan.md again with same content — SHOULD be deduplicated
+    const mp3 = buildMultipart(
+      { team: team.worktreeName, fileType: 'plan.md' },
+      { name: 'plan.md', content },
+    );
+    await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp3.contentType },
+      payload: mp3.body,
+    });
+
+    const db = getDatabase();
+    const files = db.getHandoffFiles(team.id);
+    const planFiles = files.filter((f) => f.fileType === 'plan.md');
+    const changesFiles = files.filter((f) => f.fileType === 'changes.md');
+
+    // plan.md: 1 (second was deduped), changes.md: 1
+    expect(planFiles).toHaveLength(1);
+    expect(changesFiles).toHaveLength(1);
+  });
 });

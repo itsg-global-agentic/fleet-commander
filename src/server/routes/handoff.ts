@@ -93,21 +93,24 @@ const handoffRoutes: FastifyPluginCallback = (
           });
         }
 
-        // Insert handoff file
-        const handoffFile = db.insertHandoffFile({
+        // Insert handoff file (with dedup — skips if identical content
+        // was captured for the same team + file_type within 5 seconds)
+        const { file: handoffFile, deduplicated } = db.insertHandoffFile({
           teamId: teamRecord.id,
           fileType: fileType as HandoffFileType,
           content: fileContent,
           agentName: null, // multipart upload doesn't carry agent name
         });
 
-        // Broadcast SSE event
-        sseBroker.broadcast('team_handoff_file', {
-          team_id: teamRecord.id,
-          file_type: handoffFile.fileType,
-          agent_name: handoffFile.agentName,
-          captured_at: handoffFile.capturedAt,
-        }, teamRecord.id);
+        // Only broadcast SSE when this is a genuinely new capture
+        if (!deduplicated) {
+          sseBroker.broadcast('team_handoff_file', {
+            team_id: teamRecord.id,
+            file_type: handoffFile.fileType,
+            agent_name: handoffFile.agentName,
+            captured_at: handoffFile.capturedAt,
+          }, teamRecord.id);
+        }
 
         return reply.code(200).send({ ok: true });
       } catch (err: unknown) {
