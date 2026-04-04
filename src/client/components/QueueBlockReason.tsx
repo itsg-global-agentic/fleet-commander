@@ -13,6 +13,12 @@ interface QueueBlockReasonProps {
 interface BlockerInfo {
   key: string;
   failed: boolean;
+  done: boolean;
+}
+
+interface ChildInfo {
+  key: string;
+  done: boolean;
 }
 
 /** Statuses that consume an active slot */
@@ -80,7 +86,19 @@ export function QueueBlockReason({ team }: QueueBlockReasonProps) {
     const childKeys = parseBlockers(team.pendingChildrenJson);
 
     if (childKeys.length > 0) {
-      return { type: 'children' as const, childKeys };
+      const children: ChildInfo[] = childKeys.map((key) => {
+        const match = allTeams.find((t) => {
+          if (t.projectId !== team.projectId) return false;
+          if (t.issueKey && t.issueKey === key) return true;
+          if (isNumericKey(key) && t.issueNumber === Number(key)) return true;
+          return false;
+        });
+        return {
+          key,
+          done: match?.status === 'done',
+        };
+      });
+      return { type: 'children' as const, children };
     }
 
     // -----------------------------------------------------------------------
@@ -102,6 +120,7 @@ export function QueueBlockReason({ team }: QueueBlockReasonProps) {
         return {
           key,
           failed: match?.status === 'failed',
+          done: match?.status === 'done',
         };
       });
 
@@ -144,30 +163,31 @@ export function QueueBlockReason({ team }: QueueBlockReasonProps) {
   }
 
   if (result.type === 'children') {
-    const { childKeys } = result;
+    const { children } = result;
     return (
       <span className="block text-xs text-[#58A6FF] mt-0.5">
         {'Waiting for sub-issues: '}
-        {childKeys.map((key, i) => {
-          const label = isNumericKey(key) ? `#${key}` : key;
+        {children.map((child, i) => {
+          const label = isNumericKey(child.key) ? `#${child.key}` : child.key;
+          const doneClass = child.done ? 'line-through text-dark-muted/60' : '';
           const link =
-            team.githubRepo && isNumericKey(key) ? (
+            team.githubRepo && isNumericKey(child.key) ? (
               <a
-                key={key}
-                href={issueUrl(team.githubRepo, key)}
+                key={child.key}
+                href={issueUrl(team.githubRepo, child.key)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="underline hover:text-dark-text"
+                className={`underline hover:text-dark-text ${doneClass}`}
                 onClick={(e) => e.stopPropagation()}
               >
                 {label}
               </a>
             ) : (
-              <span key={key}>{label}</span>
+              <span key={child.key} className={doneClass}>{label}</span>
             );
 
           return (
-            <span key={key}>
+            <span key={child.key}>
               {i > 0 && ', '}
               {link}
             </span>
@@ -188,6 +208,8 @@ export function QueueBlockReason({ team }: QueueBlockReasonProps) {
         const prefix = b.failed ? 'FAILED ' : '';
         const label = isNumericKey(b.key) ? `${prefix}#${b.key}` : `${prefix}${b.key}`;
 
+        const doneClass = b.done ? 'line-through text-dark-muted/60' : '';
+
         const link =
           team.githubRepo && isNumericKey(b.key) ? (
             <a
@@ -195,13 +217,13 @@ export function QueueBlockReason({ team }: QueueBlockReasonProps) {
               href={issueUrl(team.githubRepo, b.key)}
               target="_blank"
               rel="noopener noreferrer"
-              className="underline hover:text-dark-text"
+              className={`underline hover:text-dark-text ${doneClass}`}
               onClick={(e) => e.stopPropagation()}
             >
               {label}
             </a>
           ) : (
-            <span key={b.key}>{label}</span>
+            <span key={b.key} className={doneClass}>{label}</span>
           );
 
         return (
