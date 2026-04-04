@@ -29,6 +29,7 @@ const mockResume = vi.fn().mockResolvedValue({ id: 1, status: 'running' });
 const mockRestart = vi.fn().mockResolvedValue({ id: 1, status: 'launching' });
 const mockLaunchBatch = vi.fn().mockResolvedValue([]);
 const mockQueueTeamWithBlockers = vi.fn().mockResolvedValue({ id: 1, status: 'queued' });
+const mockCancelQueued = vi.fn();
 
 vi.mock('../../../src/server/services/team-manager.js', () => ({
   getTeamManager: vi.fn(() => ({
@@ -39,6 +40,7 @@ vi.mock('../../../src/server/services/team-manager.js', () => ({
     stop: mockStop,
     stopAll: mockStopAll,
     forceLaunch: mockForceLaunch,
+    cancelQueued: mockCancelQueued,
     resume: mockResume,
     restart: mockRestart,
     launchBatch: mockLaunchBatch,
@@ -1132,6 +1134,37 @@ describe('TeamService.exportTeam', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(ServiceError);
       expect((err as ServiceError).code).toBe('NOT_FOUND');
+    }
+  });
+});
+
+// =============================================================================
+// Tests: cancelQueuedTeam
+// =============================================================================
+
+describe('TeamService.cancelQueuedTeam', () => {
+  it('should delegate to manager.cancelQueued', () => {
+    service.cancelQueuedTeam(42);
+    expect(mockCancelQueued).toHaveBeenCalledWith(42);
+  });
+
+  it('should throw VALIDATION for invalid team ID (0)', () => {
+    try {
+      service.cancelQueuedTeam(0);
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('VALIDATION');
+    }
+  });
+
+  it('should throw VALIDATION for NaN team ID', () => {
+    try {
+      service.cancelQueuedTeam(NaN);
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('VALIDATION');
     }
   });
 });

@@ -747,6 +747,22 @@ export class TeamService {
   }
 
   /**
+   * Cancel a queued team — removes it from DB and re-evaluates the queue.
+   *
+   * @param teamId - The team ID
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws Error if team doesn't exist or is not queued
+   */
+  cancelQueuedTeam(teamId: number): void {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const manager = getTeamManager();
+    manager.cancelQueued(teamId);
+  }
+
+  /**
    * Resume a stopped team.
    *
    * @param teamId - The team ID
