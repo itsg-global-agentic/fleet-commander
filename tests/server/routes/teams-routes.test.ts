@@ -31,6 +31,7 @@ vi.mock('../../../src/server/services/team-manager.js', () => {
   const mockRestart = vi.fn().mockResolvedValue({ id: 1, status: 'launching' });
   const mockLaunchBatch = vi.fn().mockResolvedValue([]);
   const mockQueueTeamWithBlockers = vi.fn().mockResolvedValue({ id: 1, status: 'queued' });
+  const mockCancelQueued = vi.fn();
 
   return {
     getTeamManager: vi.fn(() => ({
@@ -41,6 +42,7 @@ vi.mock('../../../src/server/services/team-manager.js', () => {
       stop: mockStop,
       stopAll: mockStopAll,
       forceLaunch: mockForceLaunch,
+      cancelQueued: mockCancelQueued,
       resume: mockResume,
       restart: mockRestart,
       launchBatch: mockLaunchBatch,
@@ -848,6 +850,65 @@ describe('GET /api/teams/:id/tasks', () => {
     });
 
     expect(res.statusCode).toBe(400);
+  });
+});
+
+// =============================================================================
+// Tests: DELETE /api/teams/:id (cancel queued team)
+// =============================================================================
+
+describe('DELETE /api/teams/:id', () => {
+  it('should return 200 on successful cancel', async () => {
+    const team = seedTeam({ status: 'queued' });
+
+    const res = await server.inject({
+      method: 'DELETE',
+      url: `/api/teams/${team.id}`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ success: true });
+  });
+
+  it('should return 404 when team does not exist', async () => {
+    const manager = getTeamManager() as ReturnType<typeof getTeamManager>;
+    (manager.cancelQueued as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      throw new Error('Team 99999 not found');
+    });
+
+    const res = await server.inject({
+      method: 'DELETE',
+      url: '/api/teams/99999',
+    });
+
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain('not found');
+  });
+
+  it('should return 409 when team is not queued', async () => {
+    const team = seedTeam({ status: 'running' });
+    const manager = getTeamManager() as ReturnType<typeof getTeamManager>;
+    (manager.cancelQueued as ReturnType<typeof vi.fn>).mockImplementationOnce(() => {
+      throw new Error(`Team ${team.id} is not queued (current status: running)`);
+    });
+
+    const res = await server.inject({
+      method: 'DELETE',
+      url: `/api/teams/${team.id}`,
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toContain('not queued');
+  });
+
+  it('should return 400 for invalid ID', async () => {
+    const res = await server.inject({
+      method: 'DELETE',
+      url: '/api/teams/abc',
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json().message).toContain('positive integer');
   });
 });
 

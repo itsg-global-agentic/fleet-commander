@@ -222,6 +222,42 @@ const teamsRoutes: FastifyPluginCallback = (
   );
 
   // -------------------------------------------------------------------------
+  // DELETE /api/teams/:id — cancel a queued team (remove from DB)
+  // -------------------------------------------------------------------------
+  fastify.delete(
+    '/api/teams/:id',
+    async (
+      request: FastifyRequest<{ Params: TeamIdParams }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const teamId = parseIdParam(request.params.id, 'id');
+        const service = getTeamService();
+        service.cancelQueuedTeam(teamId);
+        return reply.code(200).send({ success: true });
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes('not found')) {
+          return reply.code(404).send({ error: 'Not Found', message });
+        }
+        if (message.includes('not queued')) {
+          return reply.code(409).send({ error: 'Conflict', message });
+        }
+
+        request.log.error(err, 'Failed to cancel queued team');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message,
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // POST /api/teams/:id/force-launch — force-launch a queued team
   // -------------------------------------------------------------------------
   fastify.post(

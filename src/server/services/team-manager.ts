@@ -1004,6 +1004,35 @@ export class TeamManager {
   }
 
   // -------------------------------------------------------------------------
+  // cancelQueued — remove a queued team from DB and re-evaluate the queue
+  // -------------------------------------------------------------------------
+
+  cancelQueued(teamId: number): void {
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw new Error(`Team ${teamId} not found`);
+    }
+
+    if (team.status !== 'queued') {
+      throw new Error(`Team ${teamId} is not queued (current status: ${team.status})`);
+    }
+
+    const projectId = team.projectId;
+
+    db.deleteTeamAndRelated(teamId);
+
+    sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
+    this.broadcastSnapshot();
+
+    if (projectId) {
+      this.processQueue(projectId).catch((err) => {
+        console.error(`[TeamManager] processQueue failed after cancel:`, err);
+      });
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // processQueue — dequeue and launch teams when slots free up
   // -------------------------------------------------------------------------
 

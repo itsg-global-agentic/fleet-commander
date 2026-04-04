@@ -96,6 +96,7 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
   const api = useApi();
   const [stopping, setStopping] = useState(false);
   const [forceLaunching, setForceLaunching] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
@@ -122,6 +123,21 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
       // Ignore — the SSE stream will reflect actual state
     } finally {
       setForceLaunching(false);
+    }
+  };
+
+  const handleCancel = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (cancelling) return;
+    const issueLabel = team.issueKey ?? String(team.issueNumber);
+    if (!window.confirm(`Remove queued team for ${issueLabel}? This will permanently delete the team record.`)) return;
+    setCancelling(true);
+    try {
+      await api.del(`teams/${team.id}`);
+    } catch {
+      // Ignore — the SSE stream will reflect actual state
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -264,14 +280,24 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
       <td className="px-4 whitespace-nowrap">
         <span className="inline-flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
           {team.status === 'queued' && (
-            <button
-              onClick={handleForceLaunch}
-              disabled={forceLaunching}
-              className="px-2 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-[#D29922] hover:border-[#D29922]/50 transition-colors disabled:opacity-50"
-              title="Launch immediately despite usage limit"
-            >
-              {forceLaunching ? 'Launching\u2026' : 'Force Launch'}
-            </button>
+            <>
+              <button
+                onClick={handleForceLaunch}
+                disabled={forceLaunching}
+                className="px-2 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-[#D29922] hover:border-[#D29922]/50 transition-colors disabled:opacity-50"
+                title="Launch immediately despite usage limit"
+              >
+                {forceLaunching ? 'Launching\u2026' : 'Force Launch'}
+              </button>
+              <button
+                onClick={handleCancel}
+                disabled={cancelling}
+                className="px-2 py-1 text-xs rounded border border-dark-border text-dark-muted hover:text-[#F85149] hover:border-[#F85149]/50 transition-colors disabled:opacity-50"
+                title="Remove queued team"
+              >
+                {cancelling ? 'Removing\u2026' : 'Cancel'}
+              </button>
+            </>
           )}
           {isActive && (
             <button

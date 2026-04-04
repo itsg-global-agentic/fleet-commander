@@ -2600,6 +2600,8 @@ export class FleetDatabase {
       this.stmt('DELETE FROM events WHERE team_id = ?').run(id);
       this.stmt('DELETE FROM commands WHERE team_id = ?').run(id);
       this.stmt('DELETE FROM usage_snapshots WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM team_tasks WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM handoff_files WHERE team_id = ?').run(id);
       this.stmt('DELETE FROM pull_requests WHERE team_id = ?').run(id);
       this.stmt('DELETE FROM teams WHERE id = ?').run(id);
     })(teamId);
