@@ -412,16 +412,28 @@ export class IssueFetcher {
     const rootIssues = flatIssues.filter((issue) => !childNumbers.has(issue.number));
 
     // -----------------------------------------------------------------------
-    // Post-pass: fill pendingChildren.numbers from built hierarchy
+    // Post-pass: fill pendingChildren.numbers from built hierarchy and strip
+    // sub-issues from blockedBy.  GitHub natively reports sub-issues as
+    // blockedBy on the parent — those are tracked via pendingChildren, not as
+    // external blockers.
     // -----------------------------------------------------------------------
-    // The batch query only provides subIssuesSummary (totals) but not the
-    // individual child node numbers. Now that the tree is built and .children
-    // is populated, we can fill in the numbers from open children.
     for (const issue of flatIssues) {
       if (issue.dependencies?.pendingChildren && issue.children.length > 0) {
         issue.dependencies.pendingChildren.numbers = issue.children
           .filter((c) => c.state === 'open')
           .map((c) => c.number);
+      }
+      // Remove own children from blockedBy to avoid double-counting
+      if (issue.dependencies && issue.children.length > 0) {
+        const childNumbers = new Set(issue.children.map((c) => c.number));
+        issue.dependencies.blockedBy = issue.dependencies.blockedBy.filter(
+          (b) => !childNumbers.has(b.number),
+        );
+        issue.dependencies.openCount = issue.dependencies.blockedBy.filter(
+          (d) => d.state === 'open',
+        ).length;
+        issue.dependencies.resolved =
+          issue.dependencies.openCount === 0 && !issue.dependencies.pendingChildren;
       }
     }
 
@@ -1325,10 +1337,9 @@ export class IssueFetcher {
         }
       }
 
-      const openCount = blockedBy.filter((d) => d.state === 'open').length;
-
       // Check for pending children (sub-issues that must close before parent launches)
       let pendingChildren: IssueDependencyInfo['pendingChildren'];
+      const subIssueNumbers = new Set<number>();
       if (issue.subIssuesSummary && issue.subIssuesSummary.total > 0 && issue.subIssuesSummary.completed < issue.subIssuesSummary.total) {
         const openChildNumbers = (issue.subIssues?.nodes ?? [])
           .filter((n) => n.state.toLowerCase() === 'open')
@@ -1339,12 +1350,24 @@ export class IssueFetcher {
           completed: issue.subIssuesSummary.completed,
         };
       }
+      // Collect ALL sub-issue numbers (open + closed) so we can strip them from blockedBy.
+      // GitHub natively reports sub-issues as blockedBy on the parent — those are already
+      // tracked via pendingChildren and must not inflate openCount.
+      for (const n of (issue.subIssues?.nodes ?? [])) {
+        subIssueNumbers.add(n.number);
+      }
 
+      // Remove sub-issues from blockedBy — they are tracked via pendingChildren, not as
+      // external dependencies.  Without this, openCount is inflated and the parent appears
+      // blocked by its own children twice (once in blockedBy, once in pendingChildren).
+      const filteredBlockedBy = blockedBy.filter((b) => !subIssueNumbers.has(b.number));
+
+      const openCount = filteredBlockedBy.filter((d) => d.state === 'open').length;
       const resolved = openCount === 0 && !pendingChildren;
 
       const result: IssueDependencyInfo = {
         issueNumber,
-        blockedBy,
+        blockedBy: filteredBlockedBy,
         resolved,
         openCount,
         pendingChildren,
@@ -1462,11 +1485,23 @@ export class IssueFetcher {
       // Skip closed ancestors — they do not propagate blockers downward
       if (parentNode.state === 'closed') break;
 
+      // Build set of this ancestor's children (sub-issues) so we can exclude them.
+      // GitHub natively reports sub-issues as blockedBy on the parent — those are
+      // pendingChildren, not real external blockers, and must NOT propagate downward.
+      const ancestorChildNumbers = new Set(parentNode.children.map((c) => c.number));
+
       // Collect open blockers from this ancestor
       const parentDeps = parentNode.dependencies;
       if (parentDeps && parentDeps.blockedBy.length > 0) {
         for (const dep of parentDeps.blockedBy) {
           if (dep.state !== 'open') continue;
+          // Skip self — an issue cannot block itself
+          if (dep.number === issueNumber) continue;
+          // Skip ancestor's own children (siblings of the original issue or the
+          // original issue itself).  GitHub auto-adds sub-issues as blockers of
+          // the parent; propagating those downward would cause children to appear
+          // blocked by their own siblings or by themselves.
+          if (ancestorChildNumbers.has(dep.number)) continue;
           // Skip if this is a direct blocker of the original issue
           if (directBlockerNumbers.has(dep.number)) continue;
           // Skip if already inherited from a closer ancestor
