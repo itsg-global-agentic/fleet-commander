@@ -9,7 +9,8 @@
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseDependenciesFromBody, detectCircularDependencies } from '../../src/server/services/issue-fetcher.js';
+import { parseDependenciesFromBody, detectCircularDependencies, IssueFetcher } from '../../src/server/services/issue-fetcher.js';
+import type { IssueNode } from '../../src/server/services/issue-fetcher.js';
 import type { DependencyRef, IssueDependencyInfo } from '../../src/shared/types.js';
 
 // ---------------------------------------------------------------------------
@@ -1150,6 +1151,323 @@ describe('batch launch dependency gate categorization', () => {
     expect(result.launchable[0].number).toBe(10);
     expect(result.queueable).toHaveLength(2);
     expect(result.queueable.map((q) => q.issue.number)).toEqual([11, 12]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Inherited blockers (parent-child hierarchy)
+// ---------------------------------------------------------------------------
+// Tests for transitive blocker inheritance through the issue tree.
+// Uses IssueFetcher.getDependenciesFromCache with a pre-populated cache.
+// ---------------------------------------------------------------------------
+
+describe('inherited blockers (parent-child hierarchy)', () => {
+  /**
+   * Helper to create a minimal IssueNode for testing.
+   */
+  function makeNode(
+    number: number,
+    opts: {
+      state?: 'open' | 'closed';
+      children?: IssueNode[];
+      dependencies?: IssueDependencyInfo;
+      issueKey?: string;
+    } = {},
+  ): IssueNode {
+    const node: IssueNode = {
+      number,
+      title: `Issue #${number}`,
+      state: opts.state ?? 'open',
+      labels: [],
+      url: `https://github.com/test/repo/issues/${number}`,
+      children: opts.children ?? [],
+      issueKey: opts.issueKey ?? String(number),
+      issueProvider: 'github',
+    };
+    if (opts.dependencies) {
+      node.dependencies = opts.dependencies;
+    }
+    return node;
+  }
+
+  /**
+   * Helper to create a DependencyRef.
+   */
+  function makeDepRef(number: number, state: 'open' | 'closed' = 'open'): DependencyRef {
+    return {
+      number,
+      owner: 'test',
+      repo: 'repo',
+      state,
+      title: `Blocker #${number}`,
+    };
+  }
+
+  /**
+   * Helper to set up an IssueFetcher with a pre-populated cache.
+   */
+  function setupFetcher(issues: IssueNode[]): IssueFetcher {
+    const fetcher = new IssueFetcher();
+    // Directly set the private cache for testing
+    const cache = { issues, cachedAt: new Date().toISOString() };
+    (fetcher as unknown as { cacheByProject: Map<number, { issues: IssueNode[]; cachedAt: string | null }> }).cacheByProject.set(1, cache);
+    return fetcher;
+  }
+
+  it('should inherit blockers from direct parent', () => {
+    // Parent #10 is blocked by #1 (open). Child #20 should inherit #1 via #10.
+    const parent = makeNode(10, {
+      dependencies: {
+        issueNumber: 10,
+        blockedBy: [makeDepRef(1, 'open')],
+        resolved: false,
+        openCount: 1,
+      },
+      children: [makeNode(20)],
+    });
+
+    const fetcher = setupFetcher([parent]);
+    const deps = fetcher.getDependenciesFromCache(1, 20);
+
+    expect(deps).not.toBeNull();
+    expect(deps!.inheritedBlockedBy).toHaveLength(1);
+    expect(deps!.inheritedBlockedBy![0].number).toBe(1);
+    expect(deps!.inheritedBlockedBy![0].viaAncestor).toBe(10);
+    expect(deps!.inheritedBlockedBy![0].state).toBe('open');
+    expect(deps!.resolved).toBe(false);
+    expect(deps!.openCount).toBe(1);
+  });
+
+  it('should inherit blockers transitively through grandparent', () => {
+    // Grandparent #5 is blocked by #1. Parent #10 is child of #5. Child #20 is child of #10.
+    // Issue #20 should inherit #1 via #5 (walking up through #10 then #5).
+    const child = makeNode(20);
+    const parent = makeNode(10, { children: [child] });
+    const grandparent = makeNode(5, {
+      dependencies: {
+        issueNumber: 5,
+        blockedBy: [makeDepRef(1, 'open')],
+        resolved: false,
+        openCount: 1,
+      },
+      children: [parent],
+    });
+
+    const fetcher = setupFetcher([grandparent]);
+    const deps = fetcher.getDependenciesFromCache(1, 20);
+
+    expect(deps).not.toBeNull();
+    expect(deps!.inheritedBlockedBy).toHaveLength(1);
+    expect(deps!.inheritedBlockedBy![0].number).toBe(1);
+    expect(deps!.inheritedBlockedBy![0].viaAncestor).toBe(5);
+    expect(deps!.resolved).toBe(false);
+    expect(deps!.openCount).toBe(1);
+  });
+
+  it('should not duplicate direct blockers in inherited list', () => {
+    // Parent #10 is blocked by #1. Child #20 is also directly blocked by #1.
+    // #1 should appear only in blockedBy (direct), NOT in inheritedBlockedBy.
+    const child = makeNode(20, {
+      dependencies: {
+        issueNumber: 20,
+        blockedBy: [makeDepRef(1, 'open')],
+        resolved: false,
+        openCount: 1,
+      },
+    });
+    const parent = makeNode(10, {
+      dependencies: {
+        issueNumber: 10,
+        blockedBy: [makeDepRef(1, 'open')],
+        resolved: false,
+        openCount: 1,
+      },
+      children: [child],
+    });
+
+    const fetcher = setupFetcher([parent]);
+    const deps = fetcher.getDependenciesFromCache(1, 20);
+
+    expect(deps).not.toBeNull();
+    // #1 is already a direct blocker — should NOT appear as inherited
+    expect(deps!.inheritedBlockedBy ?? []).toHaveLength(0);
+    // openCount should only count the direct blocker
+    expect(deps!.openCount).toBe(1);
+  });
+
+  it('should handle cycle in parent chain gracefully', () => {
+    // Simulate a cycle by having a child that is also an ancestor.
+    // The visited set should prevent infinite loops.
+    // We build a tree: #10 -> #20, then manually create a parent chain cycle
+    // by making #20's parent map point back to a node that points to #10.
+    // Since buildParentMap is derived from children arrays, a true cycle
+    // cannot exist in a tree structure. However, the visited set still protects.
+
+    // Test with a very deep chain (but within limit)
+    const leaf = makeNode(100);
+    let current: IssueNode = leaf;
+    for (let i = 99; i >= 90; i--) {
+      current = makeNode(i, { children: [current] });
+    }
+
+    const fetcher = setupFetcher([current]);
+    const deps = fetcher.getDependenciesFromCache(1, 100);
+
+    // Should return without error (no infinite loop)
+    expect(deps).not.toBeNull();
+    expect(deps!.resolved).toBe(true);
+  });
+
+  it('should respect MAX_ANCESTOR_DEPTH limit', () => {
+    // Build a chain deeper than 10 levels with a blocker at the top.
+    // The blocker at depth > 10 should NOT be inherited.
+    let current: IssueNode = makeNode(20);
+    // Build 12 levels of parents (20 -> 19 -> 18 -> ... -> 8)
+    for (let i = 19; i >= 8; i--) {
+      current = makeNode(i, { children: [current] });
+    }
+    // Add a blocker at the root (issue #8, depth 12 from issue #20)
+    current.dependencies = {
+      issueNumber: 8,
+      blockedBy: [makeDepRef(1, 'open')],
+      resolved: false,
+      openCount: 1,
+    };
+
+    const fetcher = setupFetcher([current]);
+    const deps = fetcher.getDependenciesFromCache(1, 20);
+
+    expect(deps).not.toBeNull();
+    // The blocker should NOT be inherited because the ancestor is beyond MAX_ANCESTOR_DEPTH=10
+    expect(deps!.inheritedBlockedBy ?? []).toHaveLength(0);
+    expect(deps!.resolved).toBe(true);
+  });
+
+  it('should treat resolved inherited blockers as non-blocking', () => {
+    // Parent #10 has a closed blocker #1. Child #20 should NOT be blocked.
+    const parent = makeNode(10, {
+      dependencies: {
+        issueNumber: 10,
+        blockedBy: [makeDepRef(1, 'closed')],
+        resolved: true,
+        openCount: 0,
+      },
+      children: [makeNode(20)],
+    });
+
+    const fetcher = setupFetcher([parent]);
+    const deps = fetcher.getDependenciesFromCache(1, 20);
+
+    expect(deps).not.toBeNull();
+    // Closed blockers are NOT collected as inherited
+    expect(deps!.inheritedBlockedBy ?? []).toHaveLength(0);
+    expect(deps!.resolved).toBe(true);
+    expect(deps!.openCount).toBe(0);
+  });
+
+  it('should not inherit blockers from closed ancestors', () => {
+    // Closed parent #10 has an open blocker #1. Child #20 should NOT inherit.
+    const parent = makeNode(10, {
+      state: 'closed',
+      dependencies: {
+        issueNumber: 10,
+        blockedBy: [makeDepRef(1, 'open')],
+        resolved: false,
+        openCount: 1,
+      },
+      children: [makeNode(20)],
+    });
+
+    const fetcher = setupFetcher([parent]);
+    const deps = fetcher.getDependenciesFromCache(1, 20);
+
+    expect(deps).not.toBeNull();
+    // Closed ancestor does not propagate blockers
+    expect(deps!.inheritedBlockedBy ?? []).toHaveLength(0);
+    expect(deps!.resolved).toBe(true);
+    expect(deps!.openCount).toBe(0);
+  });
+
+  it('should inherit multiple blockers from the same parent', () => {
+    // Parent #10 is blocked by #1 and #2 (both open). Child #20 should inherit both.
+    const parent = makeNode(10, {
+      dependencies: {
+        issueNumber: 10,
+        blockedBy: [makeDepRef(1, 'open'), makeDepRef(2, 'open')],
+        resolved: false,
+        openCount: 2,
+      },
+      children: [makeNode(20)],
+    });
+
+    const fetcher = setupFetcher([parent]);
+    const deps = fetcher.getDependenciesFromCache(1, 20);
+
+    expect(deps).not.toBeNull();
+    expect(deps!.inheritedBlockedBy).toHaveLength(2);
+    expect(deps!.inheritedBlockedBy!.map((b) => b.number).sort()).toEqual([1, 2]);
+    expect(deps!.openCount).toBe(2);
+    expect(deps!.resolved).toBe(false);
+  });
+
+  it('should inherit blockers from multiple ancestors at different depths', () => {
+    // Grandparent #5 blocked by #1, Parent #10 blocked by #2. Child #20 should inherit both.
+    const child = makeNode(20);
+    const parent = makeNode(10, {
+      dependencies: {
+        issueNumber: 10,
+        blockedBy: [makeDepRef(2, 'open')],
+        resolved: false,
+        openCount: 1,
+      },
+      children: [child],
+    });
+    const grandparent = makeNode(5, {
+      dependencies: {
+        issueNumber: 5,
+        blockedBy: [makeDepRef(1, 'open')],
+        resolved: false,
+        openCount: 1,
+      },
+      children: [parent],
+    });
+
+    const fetcher = setupFetcher([grandparent]);
+    const deps = fetcher.getDependenciesFromCache(1, 20);
+
+    expect(deps).not.toBeNull();
+    expect(deps!.inheritedBlockedBy).toHaveLength(2);
+    const inherited = deps!.inheritedBlockedBy!;
+    // #2 inherited via parent #10
+    const via10 = inherited.find((b) => b.number === 2);
+    expect(via10).toBeDefined();
+    expect(via10!.viaAncestor).toBe(10);
+    // #1 inherited via grandparent #5
+    const via5 = inherited.find((b) => b.number === 1);
+    expect(via5).toBeDefined();
+    expect(via5!.viaAncestor).toBe(5);
+    expect(deps!.openCount).toBe(2);
+    expect(deps!.resolved).toBe(false);
+  });
+
+  it('should set viaAncestorKey from the ancestor issueKey', () => {
+    const parent = makeNode(10, {
+      issueKey: 'PROJ-10',
+      dependencies: {
+        issueNumber: 10,
+        blockedBy: [makeDepRef(1, 'open')],
+        resolved: false,
+        openCount: 1,
+      },
+      children: [makeNode(20)],
+    });
+
+    const fetcher = setupFetcher([parent]);
+    const deps = fetcher.getDependenciesFromCache(1, 20);
+
+    expect(deps).not.toBeNull();
+    expect(deps!.inheritedBlockedBy).toHaveLength(1);
+    expect(deps!.inheritedBlockedBy![0].viaAncestorKey).toBe('PROJ-10');
   });
 });
 

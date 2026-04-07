@@ -12,7 +12,7 @@
 
 import config from '../config.js';
 import { getDatabase } from '../db.js';
-import type { DependencyRef, IssueDependencyInfo, Project } from '../../shared/types.js';
+import type { DependencyRef, InheritedDependencyRef, IssueDependencyInfo, Project } from '../../shared/types.js';
 import type { GenericIssue, GenericDependencyRef, IssueRelations } from '../../shared/issue-provider.js';
 import { getIssueProvider, resetProviders } from '../providers/index.js';
 import {
@@ -54,6 +54,13 @@ export interface IssueNode {
   /** Provider name (e.g. 'github', 'jira') */
   issueProvider?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Maximum depth to walk up the parent chain when collecting inherited blockers */
+const MAX_ANCESTOR_DEPTH = 10;
 
 // ---------------------------------------------------------------------------
 // Per-project cache entry
@@ -1026,6 +1033,19 @@ export class IssueFetcher {
       deps.resolved = false;
     }
 
+    // Collect inherited blockers from ancestor issues in the parent-child hierarchy
+    const parentMap = this.buildParentMap(cache.issues);
+    const directBlockerNumbers = new Set(deps.blockedBy.map((b) => b.number));
+    const inherited = this.collectAncestorBlockers(issueNumber, parentMap, cache, directBlockerNumbers);
+    if (inherited.length > 0) {
+      deps.inheritedBlockedBy = inherited;
+      const inheritedOpenCount = inherited.filter((b) => b.state === 'open').length;
+      deps.openCount += inheritedOpenCount;
+      if (inheritedOpenCount > 0) {
+        deps.resolved = false;
+      }
+    }
+
     return deps;
   }
 
@@ -1188,16 +1208,18 @@ export class IssueFetcher {
       try {
         const deps = await provider.getDependencies(key);
         if (deps.length === 0) {
-          return { issueNumber, issueKey: key, blockedBy: [], resolved: true, openCount: 0 };
+          const result: IssueDependencyInfo = { issueNumber, issueKey: key, blockedBy: [], resolved: true, openCount: 0 };
+          return this.enrichWithInheritedBlockers(result, projectId);
         }
         const openCount = deps.filter((d) => d.status === 'open').length;
-        return {
+        const result: IssueDependencyInfo = {
           issueNumber,
           issueKey: key,
           blockedBy: deps.map((d) => genericDepToDepRef(d)),
           resolved: openCount === 0,
           openCount,
         };
+        return this.enrichWithInheritedBlockers(result, projectId);
       } catch {
         return null;
       }
@@ -1320,13 +1342,16 @@ export class IssueFetcher {
 
       const resolved = openCount === 0 && !pendingChildren;
 
-      return {
+      const result: IssueDependencyInfo = {
         issueNumber,
         blockedBy,
         resolved,
         openCount,
         pendingChildren,
       };
+
+      // Enrich with inherited blockers from the in-memory cache
+      return this.enrichWithInheritedBlockers(result, project.id);
     } catch (err) {
       console.error(
         `[IssueFetcher] Failed to fetch dependencies for ${owner}/${repo}#${issueNumber}:`,
@@ -1346,6 +1371,121 @@ export class IssueFetcher {
       resolved: true,
       openCount: 0,
     };
+  }
+
+  /**
+   * Enrich a freshly-fetched IssueDependencyInfo with inherited blockers
+   * from the in-memory issue cache. If the cache is cold (no data for
+   * this project), the deps are returned unchanged.
+   */
+  private enrichWithInheritedBlockers(
+    deps: IssueDependencyInfo,
+    projectId: number,
+  ): IssueDependencyInfo {
+    const cache = this.cacheByProject.get(projectId);
+    if (!cache || !cache.cachedAt) return deps;
+
+    const parentMap = this.buildParentMap(cache.issues);
+    const directBlockerNumbers = new Set(deps.blockedBy.map((b) => b.number));
+    const inherited = this.collectAncestorBlockers(
+      deps.issueNumber,
+      parentMap,
+      cache,
+      directBlockerNumbers,
+    );
+
+    if (inherited.length > 0) {
+      deps.inheritedBlockedBy = inherited;
+      const inheritedOpenCount = inherited.filter((b) => b.state === 'open').length;
+      deps.openCount += inheritedOpenCount;
+      if (inheritedOpenCount > 0) {
+        deps.resolved = false;
+      }
+    }
+
+    return deps;
+  }
+
+  /**
+   * Build a map from child issue number -> parent issue number by walking
+   * the tree recursively. Used for ancestor-chain lookups.
+   */
+  private buildParentMap(nodes: IssueNode[]): Map<number, number> {
+    const map = new Map<number, number>();
+    const walk = (parent: IssueNode): void => {
+      for (const child of parent.children) {
+        map.set(child.number, parent.number);
+        walk(child);
+      }
+    };
+    for (const root of nodes) {
+      walk(root);
+    }
+    return map;
+  }
+
+  /**
+   * Walk up the parent chain from `issueNumber`, collecting blockers from
+   * each open ancestor. Returns InheritedDependencyRef[] with `viaAncestor`
+   * indicating which ancestor the blocker is inherited through.
+   *
+   * - Stops after MAX_ANCESTOR_DEPTH levels to prevent infinite loops
+   * - Uses a visited set to detect parent-chain cycles (defensive)
+   * - Skips closed ancestors (closed parents do not propagate blockers)
+   * - Deduplicates against the issue's own direct blockers
+   */
+  private collectAncestorBlockers(
+    issueNumber: number,
+    parentMap: Map<number, number>,
+    cache: ProjectIssueCache,
+    directBlockerNumbers: Set<number>,
+  ): InheritedDependencyRef[] {
+    const inherited: InheritedDependencyRef[] = [];
+    const visited = new Set<number>();
+    visited.add(issueNumber);
+
+    // Track which blocker numbers we've already added (avoid duplicates across ancestors)
+    const addedBlockers = new Set<number>();
+
+    let current = issueNumber;
+    let depth = 0;
+
+    while (depth < MAX_ANCESTOR_DEPTH) {
+      const parentNumber = parentMap.get(current);
+      if (parentNumber === undefined) break; // reached root
+      if (visited.has(parentNumber)) break; // cycle detected
+      visited.add(parentNumber);
+
+      const parentNode = this.findInTree(cache.issues, parentNumber);
+      if (!parentNode) break; // parent not in cache
+
+      // Skip closed ancestors — they do not propagate blockers downward
+      if (parentNode.state === 'closed') break;
+
+      // Collect open blockers from this ancestor
+      const parentDeps = parentNode.dependencies;
+      if (parentDeps && parentDeps.blockedBy.length > 0) {
+        for (const dep of parentDeps.blockedBy) {
+          if (dep.state !== 'open') continue;
+          // Skip if this is a direct blocker of the original issue
+          if (directBlockerNumbers.has(dep.number)) continue;
+          // Skip if already inherited from a closer ancestor
+          if (addedBlockers.has(dep.number)) continue;
+
+          addedBlockers.add(dep.number);
+          inherited.push({
+            ...dep,
+            viaAncestor: parentNumber,
+            viaAncestorKey: parentNode.issueKey ?? `#${parentNumber}`,
+          });
+        }
+      }
+
+      current = parentNumber;
+      depth++;
+    }
+
+    return inherited;
   }
 
   /**

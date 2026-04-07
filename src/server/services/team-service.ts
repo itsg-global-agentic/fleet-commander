@@ -146,9 +146,13 @@ export class TeamService {
       }
 
       if (!depInfo.resolved) {
-        const blockerNumbers = depInfo.blockedBy
+        const directBlockerNumbers = depInfo.blockedBy
           .filter((b) => b.state === 'open')
           .map((b) => b.number);
+        const inheritedBlockerNumbers = (depInfo.inheritedBlockedBy ?? [])
+          .filter((b) => b.state === 'open')
+          .map((b) => b.number);
+        const blockerNumbers = [...new Set([...directBlockerNumbers, ...inheritedBlockerNumbers])];
 
         // Queue mode: queue the team with blocker metadata instead of rejecting
         if (queue) {
@@ -243,9 +247,13 @@ export class TeamService {
         queueable.push({ issue, blockerNumbers: [] });
         childrenBlockedIssues.set(issue.number, depInfo.pendingChildren.numbers);
       } else if (!depInfo.resolved) {
-        const openBlockerNumbers = depInfo.blockedBy
+        const directOpenNumbers = depInfo.blockedBy
           .filter((b) => b.state === 'open')
           .map((b) => b.number);
+        const inheritedOpenNumbers = (depInfo.inheritedBlockedBy ?? [])
+          .filter((b) => b.state === 'open')
+          .map((b) => b.number);
+        const openBlockerNumbers = [...new Set([...directOpenNumbers, ...inheritedOpenNumbers])];
 
         // If we have unresolved deps but no valid open blocker numbers,
         // treat as launchable rather than blocking forever

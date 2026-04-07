@@ -452,15 +452,23 @@ export class IssueService {
 
       const team = activeTeamMap.get(issue.number);
 
-      // Compute open blockers: only include blockers that are still open
-      const openBlockers: number[] = [];
+      // Compute open blockers: only include blockers that are still open (direct + inherited)
+      const openBlockerSet = new Set<number>();
       if (issue.dependencies) {
         for (const dep of issue.dependencies.blockedBy) {
           if (dep.state === 'open') {
-            openBlockers.push(dep.number);
+            openBlockerSet.add(dep.number);
+          }
+        }
+        if (issue.dependencies.inheritedBlockedBy) {
+          for (const dep of issue.dependencies.inheritedBlockedBy) {
+            if (dep.state === 'open') {
+              openBlockerSet.add(dep.number);
+            }
           }
         }
       }
+      const openBlockers = [...openBlockerSet];
 
       waveIssues.push({
         issueNumber: issue.number,

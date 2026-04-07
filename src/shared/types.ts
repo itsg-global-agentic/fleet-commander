@@ -485,6 +485,14 @@ export interface DependencyRef {
   url?: string;
 }
 
+/** A dependency inherited from an ancestor in the parent-child hierarchy */
+export interface InheritedDependencyRef extends DependencyRef {
+  /** The ancestor issue number through which this block is inherited */
+  viaAncestor: number;
+  /** Display key of the ancestor (e.g. "#42" or "PROJ-123") */
+  viaAncestorKey?: string;
+}
+
 /** Dependency info for an issue */
 export interface IssueDependencyInfo {
   /** The issue these dependencies belong to */
@@ -493,9 +501,11 @@ export interface IssueDependencyInfo {
   issueKey?: string;
   /** Issues that block this one */
   blockedBy: DependencyRef[];
-  /** Whether all blockers are resolved (closed) */
+  /** Blockers inherited from ancestor issues in the parent-child hierarchy */
+  inheritedBlockedBy?: InheritedDependencyRef[];
+  /** Whether all blockers (including inherited) are resolved (closed) */
   resolved: boolean;
-  /** Number of open (unresolved) blockers */
+  /** Number of open (unresolved) blockers (including inherited) */
   openCount: number;
   /** Pending children info — parent issue is blocked until all children close */
   pendingChildren?: { numbers: number[]; total: number; completed: number };

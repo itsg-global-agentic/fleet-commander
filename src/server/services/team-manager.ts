@@ -1206,16 +1206,19 @@ export class TeamManager {
           continue;
         }
 
-        // Has open dependencies — check for circular dependencies
-        const openDeps = deps.blockedBy.filter((d) => d.state === 'open');
+        // Has open dependencies (direct + inherited) — check for circular dependencies
+        const allOpenDeps = [
+          ...deps.blockedBy.filter((d) => d.state === 'open'),
+          ...(deps.inheritedBlockedBy ?? []).filter((d) => d.state === 'open'),
+        ];
 
-        if (detectCircularDeps && openDeps.length > 0) {
+        if (detectCircularDeps && allOpenDeps.length > 0) {
           // Build a local dependency graph for cycle detection
           const depGraph = new Map<number, number[]>();
-          depGraph.set(team.issueNumber, openDeps.map((d) => d.number));
+          depGraph.set(team.issueNumber, allOpenDeps.map((d) => d.number));
 
           // Add the open deps' own dependencies (if we can fetch them)
-          for (const dep of openDeps) {
+          for (const dep of allOpenDeps) {
             try {
               // Try cache first to avoid unnecessary API calls
               let subDeps = fetcher.getDependenciesFromCache(projectId, dep.number);
@@ -1244,14 +1247,14 @@ export class TeamManager {
         // Genuinely blocked — log and track for auto-launch on resolution
         console.log(
           `[TeamManager] Skipping team ${team.id} (issue #${team.issueNumber}) — ` +
-          `blocked by open deps: ${openDeps.map((d) => '#' + d.number).join(', ')}`
+          `blocked by open deps: ${allOpenDeps.map((d) => '#' + d.number).join(', ')}`
         );
 
         if (githubPollerModule) {
           githubPollerModule.githubPoller.trackBlockedIssue(
             projectId,
             team.issueNumber,
-            openDeps.map((d) => d.number),
+            allOpenDeps.map((d) => d.number),
           );
         }
       } catch (err) {

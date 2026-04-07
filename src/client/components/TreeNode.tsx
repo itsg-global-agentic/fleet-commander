@@ -3,7 +3,7 @@ import { StatusBadge } from './StatusBadge';
 import { PRBadge } from './PRBadge';
 import { RelationsPanel } from './RelationsPanel';
 import { PlayIcon, LockIcon, LayersIcon, GitHubIcon, JiraIcon, LinkIcon } from './Icons';
-import type { TeamStatus, PrioritizedIssue, IssueDependencyInfo, CIStatus } from '../../shared/types';
+import type { TeamStatus, PrioritizedIssue, IssueDependencyInfo, InheritedDependencyRef, CIStatus } from '../../shared/types';
 import { formatIssueKey } from '../../shared/issue-provider';
 import type { IssueRelations } from '../../shared/issue-provider';
 
@@ -97,10 +97,15 @@ function PendingChildrenBadge({ pendingChildren }: { pendingChildren: IssueDepen
 }
 
 function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
-  const hasOpenBlockers = dependencies.blockedBy?.length > 0 && !dependencies.resolved && dependencies.openCount > 0;
+  const openDirectBlockers = (dependencies.blockedBy ?? []).filter((d) => d.state === 'open');
+  const openInheritedBlockers: InheritedDependencyRef[] = (dependencies.inheritedBlockedBy ?? []).filter((d) => d.state === 'open');
+  const hasOpenBlockers = (openDirectBlockers.length > 0 || openInheritedBlockers.length > 0) && !dependencies.resolved && dependencies.openCount > 0;
   const hasPendingChildren = dependencies.pendingChildren && dependencies.pendingChildren.total > 0 && dependencies.pendingChildren.completed < dependencies.pendingChildren.total;
 
   if (!hasOpenBlockers && !hasPendingChildren) return null;
+
+  const allBlockers = dependencies.blockedBy ?? [];
+  const totalDirectCount = allBlockers.length;
 
   return (
     <span className="inline-flex items-center gap-2 flex-wrap">
@@ -109,7 +114,7 @@ function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
     <span className="inline-flex items-center gap-1 text-xs text-dark-muted cursor-default flex-wrap">
       <LockIcon size={12} className="text-[#F85149] shrink-0" />
       <span>blocked by</span>
-      {dependencies.blockedBy.map((dep, idx) => {
+      {allBlockers.map((dep, idx) => {
         // Use dep.url if available (Jira deps), otherwise construct GitHub URL
         const issueUrl = dep.url ?? `https://github.com/${dep.owner}/${dep.repo}/issues/${dep.number}`;
         const isClosed = dep.state === 'closed';
@@ -144,7 +149,44 @@ function BlockedBadge({ dependencies }: { dependencies: IssueDependencyInfo }) {
                 {displayKey}
               </span>
             )}
-            {idx < dependencies.blockedBy.length - 1 && (
+            {idx < totalDirectCount - 1 && (
+              <span className="text-dark-muted">,</span>
+            )}
+          </span>
+        );
+      })}
+      {openInheritedBlockers.length > 0 && openDirectBlockers.length > 0 && (
+        <span className="text-dark-muted/50 mx-0.5">|</span>
+      )}
+      {openInheritedBlockers.map((dep, idx) => {
+        const issueUrl = dep.url ?? `https://github.com/${dep.owner}/${dep.repo}/issues/${dep.number}`;
+        const displayKey = dep.issueKey ?? `#${dep.number}`;
+        const viaLabel = dep.viaAncestorKey ?? `#${dep.viaAncestor}`;
+        const tooltipText = dep.title
+          ? `${dep.title} (${dep.state}) — inherited via ${viaLabel}`
+          : `${displayKey} (${dep.state}) — inherited via ${viaLabel}`;
+        const depKey = `inherited-${dep.issueKey ?? `${dep.owner}/${dep.repo}#${dep.number}`}`;
+
+        return (
+          <span key={depKey}>
+            {issueUrl ? (
+              <a
+                href={issueUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={tooltipText}
+                className="hover:text-dark-accent transition-colors text-dark-muted/70"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {displayKey}
+              </a>
+            ) : (
+              <span title={tooltipText} className="text-dark-muted/70">
+                {displayKey}
+              </span>
+            )}
+            <span className="text-dark-muted/50 text-[10px] ml-0.5">(via {viaLabel})</span>
+            {idx < openInheritedBlockers.length - 1 && (
               <span className="text-dark-muted">,</span>
             )}
           </span>

@@ -315,4 +315,28 @@ describe('computeWaves', () => {
     const queuedWaves = result.waves.filter((w) => !w.isActive);
     expect(queuedWaves[0].label).toMatch(/^Wave \d+$/);
   });
+
+  // ---------------------------------------------------------------------------
+  // Inherited (transitive) blockers through parent-child hierarchy
+  // ---------------------------------------------------------------------------
+
+  it('should respect transitive blockers through parent-child hierarchy', () => {
+    // Issue 1 is a root blocker (no deps).
+    // Issue 2 is directly blocked by 1.
+    // Issue 3 inherits the block from 1 (via parent issue 2 in the hierarchy).
+    // The caller (issue-service) resolves inherited blockers into the flat
+    // blockedBy array before passing to computeWaves.
+    const issues = [
+      makeIssue(1),
+      makeIssue(2, { blockedBy: [1] }),
+      makeIssue(3, { blockedBy: [1] }), // inherited from parent #2, flattened by caller
+    ];
+    const result = computeWaves(issues, 5, 0);
+
+    // Wave 0: issue 1 (unblocked)
+    // Wave 1: issues 2 and 3 (both blocked by 1)
+    expect(result.waves.length).toBe(2);
+    expect(result.waves[0].issues[0].issueNumber).toBe(1);
+    expect(result.waves[1].issues.map((i) => i.issueNumber).sort()).toEqual([2, 3]);
+  });
 });
