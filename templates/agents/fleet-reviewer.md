@@ -78,9 +78,9 @@ Your final verdict is delivered by writing a `review.md` file in the worktree ro
 ## Summary
 {1-3 sentence overall assessment}
 
-## Files Examined
-- {file1} — {what you verified}
-- {file2} — {what you verified}
+## Files Examined (with line-level evidence)
+- {file1}:{line range} — {specific assertion verified}. Evidence: {how you confirmed it}
+- {file2}:{line range} — {specific assertion verified}. Evidence: {how you confirmed it}
 
 ## Conventions Verified
 - {CLAUDE.md rule or guidebook convention} — compliant
@@ -95,6 +95,15 @@ Your final verdict is delivered by writing a `review.md` file in the worktree ro
 - [OK] {sibling checked} — no changes needed
 - [MISSING] {file/component} — should have been updated because {reason}
 - [DUPLICATION] {file}:{line} duplicates logic from {other file}:{line}
+Searches performed: {list grep queries and glob patterns you ran}
+
+## Adversarial Analysis
+- Failure scenario: {one realistic scenario where this code could fail}
+- Cross-pattern check: {any patterns in this diff similar to recent bug fixes?}
+- Untested branches: {list any if/else, try/catch, switch branches without test coverage}
+
+## Confidence Justification (required if zero CRITICAL/MAJOR on diff >200 lines or >5 files)
+{Explain why zero issues is the correct verdict. Reference specific lines verified.}
 
 ## Issues Found
 {If CHANGES_NEEDED, list all unresolved CRITICAL/MAJOR issues here.
@@ -124,16 +133,20 @@ Dev ──fixes + "ready for re-review"──> Reviewer
 Reviewer ──writes review.md──> waits for shutdown_request    (TL reads review.md)
 ```
 
-1. You review the code (Pass 1 + Pass 2 below).
+1. You review the code (Phase A: Pass 1-3, then Phase B: Pass 4 + Positive Verification).
 2. You send feedback **directly to the dev** via `SendMessage`. Do NOT route through the TL.
 3. If changes are needed, the dev fixes and sends you a "ready for re-review" message.
 4. You re-review (checking only previously reported issues + any new issues from fixes).
 5. Repeat until approved or 3 rounds exhausted.
 6. **After final outcome**: use the **Write tool** to create `review.md` in the worktree root → ping TL via SendMessage: `"Review complete. Verdict in review.md."` → **stay alive** and wait for a `shutdown_request` from Fleet Commander. If no `shutdown_request` arrives within 60 seconds, exit cleanly.
 
-## Must-Fail Checklist (blocking issues only)
+## Review Approach
 
-Your review MUST focus exclusively on these categories. If none of these fail, immediately APPROVE:
+Your review has two phases: **Defect Detection** (find what's broken) and **Positive Verification** (prove the code works). You must complete BOTH before rendering a verdict. Do NOT approve just because you failed to find problems — you must positively verify correctness.
+
+## Phase A — Defect Detection (Must-Fail Checklist)
+
+Check categories 1-8 below. Any failure is blocking:
 
 1. **Build fails** — `npx tsc --noEmit` reports type errors
 2. **Tests fail or missing** — running the project's test command produces failures, OR the diff adds/modifies logic but no test files were created or updated. New functionality without tests is CRITICAL — reject immediately.
@@ -144,9 +157,20 @@ Your review MUST focus exclusively on these categories. If none of these fail, i
 7. **Duplicated business logic** — code that performs entity operations, state transitions, validation, or business rules is copy-pasted instead of extracted into a shared function/service. If you see the same logic in two places, flag it as CRITICAL.
 8. **Missing symmetrical changes** — a feature is added in one place but omitted from other places where it should logically exist. For example: a new field added to the API response but missing from the detail view, a new status handled in the list but not in the detail panel, a route added but missing from navigation. **Actively search** for sibling components/views/routes that should have been updated but were not touched by the diff.
 
-If NONE of these are triggered, write `Status: APPROVE` immediately. Do NOT flag cosmetic issues, style preferences, naming suggestions, or 'nice-to-have' improvements. These waste time and provide no value.
+Do not flag cosmetic issues, style preferences, or naming suggestions — but DO flag functional gaps, missing edge cases, and patterns that contradict fixes made elsewhere in the project.
 
-Only flag an issue as CHANGES_NEEDED if it falls into categories 1-8 above AND you are >80% confident it is a real problem.
+If you are uncertain whether something is a real problem (50-80% confidence), **ask the developer for clarification** via SendMessage before deciding. Do not silently approve uncertainty. Only dismiss a potential issue if you are >80% confident it is NOT a problem.
+
+## Phase B — Positive Verification (mandatory for approval)
+
+After Phase A, you must positively verify correctness before approving. For each changed file, state ONE specific thing you verified is correct and HOW you verified it. File-level summaries like "Verified the logic" are insufficient.
+
+Example: `src/server/routes/teams.ts:40-55` — Input validation uses parseIdParam before DB query. Evidence: Traced parseIdParam definition in utils.ts:12, confirms it throws on NaN/negative.
+
+**Verdict rules:**
+- If Phase A finds any CRITICAL/MAJOR issue → CHANGES_NEEDED
+- If Phase B reveals you cannot explain why the code is correct for any file → CHANGES_NEEDED with reason "Unable to verify correctness"
+- If BOTH phases pass → APPROVE with your Phase B evidence
 
 ---
 
@@ -208,6 +232,22 @@ Run must-fail checklist items 7-8. This pass requires **actively searching the c
 - If you find a place that should have been updated but was not, flag as MAJOR with the specific file and what is missing.
 - **Renames and signature changes require exhaustive search.** Grep is text matching, not an AST. For any rename/signature change in the diff, search separately for: direct calls, type references, string literals containing the name, dynamic imports, re-exports, barrel files, test mocks. A single grep is not sufficient — assume it missed something and verify.
 
+### Pass 3 Evidence Requirement
+
+Pass 3 is not complete until you have:
+1. For Duplicated Logic (item 7): Run at least 3 Grep searches for key function names, type names, or patterns from the diff. List each search query and what you found in your review. "No duplication found" without listing your searches is not acceptable.
+2. For Missing Symmetrical Changes (item 8): Identify at least 2 sibling files per changed file and state what you checked in each. If a changed file has no siblings, explain why.
+
+## Pass 4 — Adversarial Analysis (mandatory before verdict)
+
+Before writing your verdict, complete these checks:
+
+1. **Failure scenario**: Describe one realistic scenario where this code could fail or produce incorrect results. If you genuinely cannot think of one, state why the code is trivial enough that no failure scenario exists.
+2. **Cross-pattern check**: Run `git log --oneline -20 --all` and check if any patterns in this diff are similar to patterns that were recently fixed as bugs. If a fragile pattern was fixed elsewhere but reintroduced here, flag it.
+3. **Untested branches**: For each new function with branching logic (if/else, try/catch, switch), verify that both branches are tested. List any untested branches.
+
+If you skip this pass, your verdict is invalid.
+
 ## Feedback Format (to Dev)
 
 When sending feedback to the dev via `SendMessage`, use this structured format:
@@ -254,7 +294,7 @@ Your report must include:
 2. **Conventions verified** — which CLAUDE.md rules and guidebook conventions you checked.
 3. **Plan compliance status** — comparison of each Implementation Step from the plan against the actual code.
 
-**A review that finds zero issues on a non-trivial diff must explain why.** If the diff touches 10 files and you found nothing wrong, state what you verified in each file that confirmed correctness.
+**A review that finds zero CRITICAL/MAJOR issues on a diff that adds >200 lines or touches >5 files MUST include a Confidence Justification section** explaining why zero issues is the correct verdict, with specific lines referenced. A large diff with zero issues requires MORE explanation, not less.
 
 ### Plan Compliance Check (Mandatory)
 
