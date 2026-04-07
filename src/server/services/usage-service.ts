@@ -6,7 +6,7 @@
 // =============================================================================
 
 import { getDatabase } from '../db.js';
-import { processUsageSnapshot, getUsageZone } from './usage-tracker.js';
+import { processUsageSnapshot, getUsageZone, isUsageOverrideActive, isHardPaused, activateUsageOverride, deactivateUsageOverride } from './usage-tracker.js';
 import { validationError } from './service-error.js';
 import config from '../config.js';
 
@@ -29,6 +29,7 @@ export class UsageService {
       weekly: config.usageRedWeeklyPct,
       sonnet: config.usageRedSonnetPct,
       extra: config.usageRedExtraPct,
+      hardExtra: config.usageHardExtraPct,
     };
 
     if (!latest) {
@@ -40,6 +41,9 @@ export class UsageService {
         recordedAt: null,
         zone: getUsageZone(),
         redThresholds: thresholds,
+        overrideActive: isUsageOverrideActive(),
+        hardPaused: isHardPaused(),
+        hardExtraThreshold: config.usageHardExtraPct,
       };
     }
 
@@ -47,6 +51,9 @@ export class UsageService {
       ...latest,
       zone: getUsageZone(),
       redThresholds: thresholds,
+      overrideActive: isUsageOverrideActive(),
+      hardPaused: isHardPaused(),
+      hardExtraThreshold: config.usageHardExtraPct,
     };
   }
 
@@ -101,6 +108,24 @@ export class UsageService {
 
     const db = getDatabase();
     return db.getLatestUsage();
+  }
+
+  /**
+   * Activate the usage override to allow launches despite soft red zone.
+   *
+   * @returns Override activation result
+   */
+  async activateOverride(): Promise<{ overrideActive: boolean; hardPaused: boolean }> {
+    return activateUsageOverride();
+  }
+
+  /**
+   * Deactivate the usage override.
+   *
+   * @returns Override deactivation result
+   */
+  deactivateOverride(): { overrideActive: boolean; hardPaused: boolean } {
+    return deactivateUsageOverride();
   }
 }
 

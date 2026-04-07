@@ -3,7 +3,7 @@
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import type { TeamDashboardRow } from '../../src/shared/types';
 import { makeTeam } from './test-utils';
@@ -19,6 +19,14 @@ vi.mock('../../src/client/context/FleetContext', () => ({
     teams: mockTeams,
     fetchError: null,
   }),
+  useSSEDispatch: () => ({
+    subscribe: () => () => {},
+  }),
+}));
+
+// Mock useFleetSSE to be a no-op in tests
+vi.mock('../../src/client/hooks/useFleetSSE', () => ({
+  useFleetSSE: vi.fn(),
 }));
 
 // Import TopBar after the mock is set up
@@ -170,6 +178,123 @@ describe('TopBar', () => {
 
     const dailySpan = screen.getByText('Daily').closest('span');
     expect(dailySpan).not.toHaveAttribute('title');
+  });
+
+  // -------------------------------------------------------------------------
+  // Three-state usage pause display (issue #678)
+  // -------------------------------------------------------------------------
+
+  it('shows "PAUSED" and "Resume with extra" button when in soft red zone', async () => {
+    const usageResponse = {
+      dailyPercent: 90,
+      weeklyPercent: 50,
+      sonnetPercent: 10,
+      extraPercent: 5,
+      zone: 'red',
+      overrideActive: false,
+      hardPaused: false,
+    };
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => usageResponse,
+    } as Response);
+
+    render(<TopBar />);
+
+    await waitFor(() => {
+      expect(screen.getByText('PAUSED')).toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Resume with extra')).toBeInTheDocument();
+    expect(screen.queryByText('HARD PAUSED')).not.toBeInTheDocument();
+    expect(screen.queryByText('EXTRA USAGE')).not.toBeInTheDocument();
+  });
+
+  it('shows "EXTRA USAGE" in amber when override is active', async () => {
+    const usageResponse = {
+      dailyPercent: 90,
+      weeklyPercent: 50,
+      sonnetPercent: 10,
+      extraPercent: 30,
+      zone: 'red',
+      overrideActive: true,
+      hardPaused: false,
+    };
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => usageResponse,
+    } as Response);
+
+    render(<TopBar />);
+
+    await waitFor(() => {
+      expect(screen.getByText('EXTRA USAGE')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('PAUSED')).not.toBeInTheDocument();
+    expect(screen.queryByText('Resume with extra')).not.toBeInTheDocument();
+    expect(screen.queryByText('HARD PAUSED')).not.toBeInTheDocument();
+  });
+
+  it('shows "HARD PAUSED" when hard paused, with no resume button', async () => {
+    const usageResponse = {
+      dailyPercent: 90,
+      weeklyPercent: 50,
+      sonnetPercent: 10,
+      extraPercent: 92,
+      zone: 'hard_red',
+      overrideActive: false,
+      hardPaused: true,
+    };
+
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => usageResponse,
+    } as Response);
+
+    render(<TopBar />);
+
+    await waitFor(() => {
+      expect(screen.getByText('HARD PAUSED')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText('PAUSED')).not.toBeInTheDocument();
+    expect(screen.queryByText('Resume with extra')).not.toBeInTheDocument();
+    expect(screen.queryByText('EXTRA USAGE')).not.toBeInTheDocument();
+  });
+
+  it('calls POST /api/usage/override when "Resume with extra" is clicked', async () => {
+    const usageResponse = {
+      dailyPercent: 90,
+      weeklyPercent: 50,
+      sonnetPercent: 10,
+      extraPercent: 5,
+      zone: 'red',
+      overrideActive: false,
+      hardPaused: false,
+    };
+
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => usageResponse,
+    } as Response);
+
+    render(<TopBar />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Resume with extra')).toBeInTheDocument();
+    });
+
+    // Click the resume button
+    fireEvent.click(screen.getByText('Resume with extra'));
+
+    // Should have called fetch with the POST override URL
+    const postCalls = fetchSpy.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('usage/override')
+    );
+    expect(postCalls.length).toBeGreaterThanOrEqual(1);
   });
 
 });

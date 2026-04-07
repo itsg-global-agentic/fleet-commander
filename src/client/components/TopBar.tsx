@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useTeams } from '../context/FleetContext';
+import { useFleetSSE } from '../hooks/useFleetSSE';
 import { LaunchDialog } from './LaunchDialog';
 import { useApi } from '../hooks/useApi';
 import { RocketIcon } from './Icons';
@@ -26,6 +27,9 @@ interface UsageResponse {
   redThresholds?: RedThresholds;
   dailyResetsAt?: string | null;
   weeklyResetsAt?: string | null;
+  overrideActive?: boolean;
+  hardPaused?: boolean;
+  hardExtraThreshold?: number;
 }
 
 export function TopBar() {
@@ -48,6 +52,12 @@ export function TopBar() {
     const interval = setInterval(fetchUsage, 30_000);
     return () => clearInterval(interval);
   }, [fetchUsage]);
+
+  // Re-fetch usage when override state changes (from any source, including other tabs)
+  const handleSSEEvent = useCallback(() => {
+    fetchUsage();
+  }, [fetchUsage]);
+  useFleetSSE(['usage_override_changed', 'usage_updated'], handleSSEEvent);
 
   // Count teams by status
   const counts = teams.reduce((acc, team) => {
@@ -76,8 +86,19 @@ export function TopBar() {
     { label: 'stuck', count: counts.stuck || 0, color: STATUS_COLORS.stuck },
   ].filter(s => s.count > 0);
 
-  // Use server-provided zone instead of computing locally
-  const isRedZone = usage?.zone === 'red';
+  // Three-state pause display
+  const isHardPaused = usage?.hardPaused === true;
+  const isSoftPaused = usage?.zone === 'red' && !usage?.overrideActive;
+  const isOverrideActive = usage?.overrideActive === true;
+
+  const handleResume = useCallback(async () => {
+    try {
+      await api.post<{ overrideActive: boolean }>('usage/override');
+      await fetchUsage();
+    } catch {
+      // Silently ignore — SSE will update state
+    }
+  }, [api, fetchUsage]);
 
   return (
     <>
@@ -111,10 +132,30 @@ export function TopBar() {
             </span>
           ))}
 
-          {/* PAUSED badge when usage is in red zone */}
-          {isRedZone && (
+          {/* Usage pause indicators */}
+          {isHardPaused && (
             <span className="text-xs font-bold animate-pulse" style={{ color: '#F85149' }}>
-              PAUSED
+              HARD PAUSED
+            </span>
+          )}
+          {isSoftPaused && (
+            <>
+              <span className="text-xs font-bold animate-pulse" style={{ color: '#F85149' }}>
+                PAUSED
+              </span>
+              <button
+                type="button"
+                onClick={handleResume}
+                className="ml-1.5 px-2 py-0.5 text-[11px] font-medium rounded border border-amber-500/40 text-amber-400 hover:bg-amber-500/10 transition-colors"
+                title="Resume launches using extra usage allowance"
+              >
+                Resume with extra
+              </button>
+            </>
+          )}
+          {isOverrideActive && !isHardPaused && !isSoftPaused && (
+            <span className="text-xs font-bold" style={{ color: '#D29922' }}>
+              EXTRA USAGE
             </span>
           )}
 

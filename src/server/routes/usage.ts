@@ -111,6 +111,52 @@ const usageRoutes: FastifyPluginCallback = (
     },
   );
 
+  // -------------------------------------------------------------------------
+  // POST /api/usage/override — activate usage override (allow launches in red zone)
+  // -------------------------------------------------------------------------
+  fastify.post(
+    '/api/usage/override',
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const service = getUsageService();
+        const result = await service.activateOverride();
+        return reply.code(200).send(result);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        _request.log.error(err, 'Failed to activate usage override');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // DELETE /api/usage/override — deactivate usage override
+  // -------------------------------------------------------------------------
+  fastify.delete(
+    '/api/usage/override',
+    async (_request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const service = getUsageService();
+        const result = service.deactivateOverride();
+        return reply.code(200).send(result);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        _request.log.error(err, 'Failed to deactivate usage override');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
   done();
 };
 

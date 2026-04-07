@@ -21,7 +21,7 @@ import config from '../config.js';
 // Types
 // ---------------------------------------------------------------------------
 
-export type UsageZone = 'green' | 'red';
+export type UsageZone = 'green' | 'red' | 'hard_red';
 
 export interface ParsedUsage {
   daily: number;
@@ -68,6 +68,7 @@ export async function processUsageSnapshot(data: {
   // Update module-level tracking variables so getUsageZone() reflects the submitted values
   _latestDaily = data.dailyPercent ?? 0;
   _latestWeekly = data.weeklyPercent ?? 0;
+  _latestExtra = data.extraPercent ?? 0;
 
   const currentZone = getUsageZone();
 
@@ -80,6 +81,8 @@ export async function processUsageSnapshot(data: {
     sonnet_percent: data.sonnetPercent ?? 0,
     extra_percent: data.extraPercent ?? 0,
     zone: currentZone,
+    overrideActive: _usageOverrideActive,
+    hardPaused: currentZone === 'hard_red',
   });
 
   await checkZoneTransitionAndDrain(previousZone, currentZone);
@@ -98,6 +101,8 @@ export async function processUsageSnapshot(data: {
 let _lastZone: UsageZone = 'green';
 let _latestDaily = 0;
 let _latestWeekly = 0;
+let _latestExtra = 0;
+let _usageOverrideActive = false;
 
 /**
  * Returns the latest daily usage percentage.
@@ -108,13 +113,107 @@ export function getLatestDailyPercent(): number {
 }
 
 /**
- * Returns 'red' if usage exceeds the configured thresholds, 'green' otherwise.
+ * Returns the current usage zone:
+ * - 'hard_red' when extra usage >= hard extra threshold (non-overridable)
+ * - 'red' when daily/weekly exceeds soft thresholds (overridable)
+ * - 'green' otherwise
  */
 export function getUsageZone(): UsageZone {
+  if (_latestExtra >= config.usageHardExtraPct) {
+    return 'hard_red';
+  }
   if (_latestDaily >= config.usageRedDailyPct || _latestWeekly >= config.usageRedWeeklyPct) {
     return 'red';
   }
   return 'green';
+}
+
+/**
+ * Returns true when team launches should be blocked.
+ * - hard_red zone: always blocked
+ * - red zone: blocked unless usage override is active
+ * - green zone: never blocked
+ */
+export function isUsageBlocked(): boolean {
+  const zone = getUsageZone();
+  if (zone === 'hard_red') return true;
+  if (zone === 'red' && !_usageOverrideActive) return true;
+  return false;
+}
+
+/**
+ * Returns whether the usage override is currently active.
+ */
+export function isUsageOverrideActive(): boolean {
+  return _usageOverrideActive;
+}
+
+/**
+ * Returns whether the system is in hard pause (extra usage >= hard threshold).
+ */
+export function isHardPaused(): boolean {
+  return getUsageZone() === 'hard_red';
+}
+
+/**
+ * Activate the usage override to allow launches despite soft red zone.
+ * Refuses activation when in hard_red zone.
+ */
+export async function activateUsageOverride(): Promise<{ overrideActive: boolean; hardPaused: boolean }> {
+  const zone = getUsageZone();
+  if (zone === 'hard_red') {
+    return { overrideActive: false, hardPaused: true };
+  }
+  if (zone === 'green') {
+    return { overrideActive: false, hardPaused: false };
+  }
+
+  _usageOverrideActive = true;
+
+  sseBroker.broadcast('usage_override_changed', {
+    overrideActive: true,
+    hardPaused: false,
+  });
+
+  console.log('[UsageTracker] Usage override activated — launches allowed despite red zone');
+
+  // Trigger queue drain for all projects (same pattern as checkZoneTransitionAndDrain)
+  try {
+    const { getTeamManager } = await import('./team-manager.js');
+    const manager = getTeamManager();
+    const db = getDatabase();
+    const projects = db.getProjects({ status: 'active' });
+    for (const project of projects) {
+      const queued = db.getQueuedTeamsByProject(project.id);
+      if (queued.length > 0) {
+        manager.processQueue(project.id).catch((err: unknown) => {
+          console.error(`[UsageTracker] processQueue error for project ${project.id}:`, err);
+        });
+      }
+    }
+  } catch (err: unknown) {
+    console.error('[UsageTracker] Failed to drain queues on override activation:', err);
+  }
+
+  return { overrideActive: true, hardPaused: false };
+}
+
+/**
+ * Deactivate the usage override.
+ */
+export function deactivateUsageOverride(): { overrideActive: boolean; hardPaused: boolean } {
+  _usageOverrideActive = false;
+
+  const hardPaused = getUsageZone() === 'hard_red';
+
+  sseBroker.broadcast('usage_override_changed', {
+    overrideActive: false,
+    hardPaused,
+  });
+
+  console.log('[UsageTracker] Usage override deactivated');
+
+  return { overrideActive: false, hardPaused };
 }
 
 // ---------------------------------------------------------------------------
@@ -132,8 +231,23 @@ export async function checkZoneTransitionAndDrain(
   previousZone: UsageZone,
   currentZone: UsageZone,
 ): Promise<void> {
-  if (previousZone === 'red' && currentZone === 'green') {
-    console.log('[UsageTracker] Zone transition: red -> green — draining queues');
+  // Auto-clear override when transitioning to green (no longer needed)
+  if (currentZone === 'green' && _usageOverrideActive) {
+    _usageOverrideActive = false;
+    sseBroker.broadcast('usage_override_changed', { overrideActive: false, hardPaused: false });
+    console.log('[UsageTracker] Override auto-cleared — zone returned to green');
+  }
+
+  // Auto-clear override when transitioning to hard_red (non-overridable)
+  if (currentZone === 'hard_red' && _usageOverrideActive) {
+    _usageOverrideActive = false;
+    sseBroker.broadcast('usage_override_changed', { overrideActive: false, hardPaused: true });
+    console.log('[UsageTracker] Override auto-cleared — zone transitioned to hard_red');
+  }
+
+  // Drain queues on red/hard_red -> green transition
+  if ((previousZone === 'red' || previousZone === 'hard_red') && currentZone === 'green') {
+    console.log(`[UsageTracker] Zone transition: ${previousZone} -> green — draining queues`);
     try {
       const { getTeamManager } = await import('./team-manager.js');
       const manager = getTeamManager();
@@ -193,9 +307,10 @@ class UsagePoller {
       if (latest) {
         _latestDaily = latest.dailyPercent;
         _latestWeekly = latest.weeklyPercent;
+        _latestExtra = latest.extraPercent ?? 0;
         _lastZone = getUsageZone();
         console.log(
-          `[UsagePoller] Seeded from DB — daily=${_latestDaily}% weekly=${_latestWeekly}% zone=${_lastZone}`,
+          `[UsagePoller] Seeded from DB — daily=${_latestDaily}% weekly=${_latestWeekly}% extra=${_latestExtra}% zone=${_lastZone}`,
         );
       }
     } catch (err: unknown) {
@@ -293,6 +408,7 @@ class UsagePoller {
     // Update module-level tracking variables
     _latestDaily = dailyPercent;
     _latestWeekly = weeklyPercent;
+    _latestExtra = extraPercent;
 
     const previousZone = _lastZone;
     const currentZone = getUsageZone();
@@ -316,6 +432,8 @@ class UsagePoller {
       sonnet_percent: sonnetPercent,
       extra_percent: extraPercent,
       zone: currentZone,
+      overrideActive: _usageOverrideActive,
+      hardPaused: currentZone === 'hard_red',
     });
 
     console.log(

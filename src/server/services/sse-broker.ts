@@ -37,7 +37,8 @@ export type SSEEventType =
   | 'team_thinking_stop'
   | 'task_updated'
   | 'relations_updated'
-  | 'team_handoff_file';
+  | 'team_handoff_file'
+  | 'usage_override_changed';
 
 /** Payload shapes for each event type */
 export interface SSEEventPayloads {
@@ -47,7 +48,7 @@ export interface SSEEventPayloads {
   pr_updated: { pr_number: number; team_id: number; state?: string; ci_status?: string; merge_status?: string; auto_merge?: boolean; ci_fail_count?: number; action?: string };
   team_launched: { team_id: number; issue_number: number; issue_key?: string; project_id?: number | null };
   team_stopped: { team_id: number };
-  usage_updated: { daily_percent: number; weekly_percent: number; sonnet_percent: number; extra_percent: number; zone: UsageZone };
+  usage_updated: { daily_percent: number; weekly_percent: number; sonnet_percent: number; extra_percent: number; zone: UsageZone; overrideActive: boolean; hardPaused: boolean };
   project_added: { project_id: number; name: string; repo_path: string };
   project_updated: { project_id: number; name?: string; status?: string; reason?: string; issue_number?: number };
   project_removed: { project_id: number };
@@ -60,6 +61,7 @@ export interface SSEEventPayloads {
   task_updated: { team_id: number; task_id: string; subject: string; status: string; owner: string };
   relations_updated: { project_id: number; issue_key: string; relations: IssueRelations };
   team_handoff_file: { team_id: number; file_type: string; agent_name: string | null; captured_at: string };
+  usage_override_changed: { overrideActive: boolean; hardPaused: boolean };
 }
 
 // ---------------------------------------------------------------------------

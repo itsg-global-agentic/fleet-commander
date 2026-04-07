@@ -21,7 +21,7 @@ import type { StreamEvent } from './sse-broker.js';
 import { spawnHeadless, spawnInteractive } from '../utils/cc-spawn.js';
 import type { Team, Project } from '../../shared/types.js';
 import { sanitizeIssueKeyForPath } from '../../shared/issue-provider.js';
-import { getUsageZone } from './usage-tracker.js';
+import { isUsageBlocked } from './usage-tracker.js';
 import { resolveMessage } from '../utils/resolve-message.js';
 import { CircularBuffer } from '../utils/circular-buffer.js';
 import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile } from '../utils/fc-manifest.js';
@@ -216,9 +216,9 @@ export class TeamManager {
 
     console.log(`[TeamManager] Launch started: project=${project.name} issue=${effectiveIssueKey}`);
 
-    // Usage gate: if in red zone and not forced, queue instead of launching
-    if (!force && getUsageZone() === 'red') {
-      console.log(`[TeamManager] Usage zone is RED — queueing team for issue ${effectiveIssueKey}`);
+    // Usage gate: if usage is blocked and not forced, queue instead of launching
+    if (!force && isUsageBlocked()) {
+      console.log(`[TeamManager] Usage blocked — queueing team for issue ${effectiveIssueKey}`);
       return this.queueTeam(db, project, projectId, issueNumber, issueTitle, headless, prompt, effectiveIssueKey);
     }
 
@@ -1050,9 +1050,9 @@ export class TeamManager {
       const project = db.getProject(projectId);
       if (!project) return;
 
-      // Usage gate: do not dequeue if in red zone
-      if (getUsageZone() === 'red') {
-        console.log(`[TeamManager] processQueue blocked — usage zone is RED`);
+      // Usage gate: do not dequeue if usage is blocked
+      if (isUsageBlocked()) {
+        console.log(`[TeamManager] processQueue blocked — usage blocked`);
         return;
       }
 

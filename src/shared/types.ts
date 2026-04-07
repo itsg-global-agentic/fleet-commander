@@ -28,7 +28,7 @@ export type MergeStatus = 'unknown' | 'clean' | 'behind' | 'blocked' | 'dirty' |
 export type ProjectStatus = 'active' | 'archived';
 
 /** Usage zone for queue gating */
-export type UsageZone = 'green' | 'red';
+export type UsageZone = 'green' | 'red' | 'hard_red';
 
 // ---------------------------------------------------------------------------
 // Core Entities (matching PRD section 4 schema)
