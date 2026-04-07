@@ -240,6 +240,7 @@ describe('TeamDetail', () => {
   it('renders PR section when PR data is present', async () => {
     mockSelectedTeamId = 1;
     mockGet.mockResolvedValue(makeDetail({
+      githubRepo: 'user/repo',
       pr: {
         number: 42,
         state: 'open',
@@ -253,7 +254,50 @@ describe('TeamDetail', () => {
     render(<TeamDetail />);
     await waitFor(() => {
       expect(screen.getByText('Pull Request')).toBeInTheDocument();
-      expect(screen.getByText('PR #42')).toBeInTheDocument();
+      const link = screen.getByText('PR #42');
+      expect(link.tagName).toBe('A');
+      expect(link).toHaveAttribute('href', 'https://github.com/user/repo/pull/42');
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    });
+  });
+
+  it('renders PR number as plain text when githubRepo is null', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({
+      githubRepo: null,
+      pr: {
+        number: 42,
+        state: 'open',
+        ciStatus: 'passing',
+        mergeStatus: 'clean',
+        autoMerge: false,
+        ciFailCount: 0,
+        checks: [],
+      },
+    }));
+    render(<TeamDetail />);
+    await waitFor(() => {
+      const prText = screen.getByText('PR #42');
+      expect(prText.tagName).toBe('SPAN');
+      expect(prText).not.toHaveAttribute('href');
+    });
+  });
+
+  it('renders PR link in loading fallback when prNumber is set but pr detail is null', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({
+      githubRepo: 'user/repo',
+      prNumber: 99,
+      pr: null,
+    }));
+    render(<TeamDetail />);
+    await waitFor(() => {
+      const link = screen.getByText('PR #99');
+      expect(link.tagName).toBe('A');
+      expect(link).toHaveAttribute('href', 'https://github.com/user/repo/pull/99');
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     });
   });
 

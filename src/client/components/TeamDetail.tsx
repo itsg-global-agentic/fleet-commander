@@ -468,9 +468,20 @@ export function TeamDetail() {
                       </h4>
 
                       <div className="flex items-center gap-3 mb-3 text-sm">
-                        <span className="text-dark-accent font-medium">
-                          PR #{detail.pr.number}
-                        </span>
+                        {detail.githubRepo ? (
+                          <a
+                            href={`https://github.com/${detail.githubRepo}/pull/${detail.pr.number}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-dark-accent font-medium hover:underline"
+                          >
+                            PR #{detail.pr.number}
+                          </a>
+                        ) : (
+                          <span className="text-dark-accent font-medium">
+                            PR #{detail.pr.number}
+                          </span>
+                        )}
                         <span
                           className="text-xs px-1.5 py-0.5 rounded border"
                           style={{
@@ -519,7 +530,21 @@ export function TeamDetail() {
                       <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
                         Pull Request
                       </h4>
-                      <p className="text-sm text-dark-muted">PR #{detail.prNumber} (details loading...)</p>
+                      <p className="text-sm text-dark-muted">
+                        {detail.githubRepo ? (
+                          <a
+                            href={`https://github.com/${detail.githubRepo}/pull/${detail.prNumber}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-dark-accent hover:underline"
+                          >
+                            PR #{detail.prNumber}
+                          </a>
+                        ) : (
+                          <>PR #{detail.prNumber}</>
+                        )}
+                        {' '}(details loading...)
+                      </p>
                     </section>
                   )}
                 </div>
