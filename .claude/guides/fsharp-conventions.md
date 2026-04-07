@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.18 -->
+<!-- fleet-commander v0.0.19 -->
 # F# Conventions
 
 > Applies to: `*.fs`, `*.fsi`, `*.fsx`, `*.fsproj`
