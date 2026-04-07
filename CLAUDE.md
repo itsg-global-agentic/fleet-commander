@@ -193,7 +193,7 @@ Team ID format: `{project_slug}-{sanitized_issue_key}` (used as worktree name). 
 
 ## SSE Event Types
 
-The SSE broker emits 17 event types:
+The SSE broker emits 18 event types:
 
 1. `team_status_changed`
 2. `team_event`
@@ -212,6 +212,7 @@ The SSE broker emits 17 event types:
 15. `team_thinking_start`
 16. `team_thinking_stop`
 17. `task_updated`
+18. `usage_override_changed`
 
 ## Environment Variables
 
@@ -252,6 +253,7 @@ The SSE broker emits 17 event types:
 | `FLEET_USAGE_RED_WEEKLY_PCT` | `95` | Weekly usage percentage threshold for red warning |
 | `FLEET_USAGE_RED_SONNET_PCT` | `95` | Sonnet usage percentage threshold for red warning |
 | `FLEET_USAGE_RED_EXTRA_PCT` | `95` | Extra usage percentage threshold for red warning |
+| `FLEET_USAGE_HARD_EXTRA_PCT` | `90` | Extra usage % that triggers non-overridable hard pause |
 | `FLEET_HOOK_LOG` | (platform data dir) | Path to hook execution log file. Defaults to `hooks.log` in platform data dir |
 | `FLEET_ENCRYPTION_KEY` | (auto-generated) | Hex-encoded 32-byte encryption key for provider credentials. Auto-generated if not set |
 | `FLEET_ENCRYPTION_KEY_OLD` | `null` | Previous encryption key (hex) for key rotation. Set alongside `FLEET_ENCRYPTION_KEY` to re-encrypt |

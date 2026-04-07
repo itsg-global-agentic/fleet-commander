@@ -138,6 +138,7 @@ const config = Object.freeze({
   usageRedWeeklyPct: safeParseInt(process.env['FLEET_USAGE_RED_WEEKLY_PCT'] || '95', 'FLEET_USAGE_RED_WEEKLY_PCT'),
   usageRedSonnetPct: safeParseInt(process.env['FLEET_USAGE_RED_SONNET_PCT'] || '95', 'FLEET_USAGE_RED_SONNET_PCT'),
   usageRedExtraPct: safeParseInt(process.env['FLEET_USAGE_RED_EXTRA_PCT'] || '95', 'FLEET_USAGE_RED_EXTRA_PCT'),
+  usageHardExtraPct: safeParseInt(process.env['FLEET_USAGE_HARD_EXTRA_PCT'] || '90', 'FLEET_USAGE_HARD_EXTRA_PCT'),
 
   claudeCmd: process.env['FLEET_CLAUDE_CMD'] || 'claude',
   skipPermissions: process.env['FLEET_SKIP_PERMISSIONS'] !== 'false',
@@ -219,6 +220,7 @@ export function validateConfig(): void {
     ['retryDelayMin', config.retryDelayMin],
     ['retryMaxDailyPct', config.retryMaxDailyPct],
     ['retryMaxCount', config.retryMaxCount],
+    ['usageHardExtraPct', config.usageHardExtraPct],
   ];
   for (const [name, value] of positiveIntegers) {
     if (isNaN(value) || value <= 0) {

@@ -18,9 +18,16 @@ import { sseBroker } from '../../../src/server/services/sse-broker.js';
 // Service mocks -- must be set up BEFORE importing the route plugin
 // ---------------------------------------------------------------------------
 
+const mockActivateUsageOverride = vi.fn().mockResolvedValue({ overrideActive: true, hardPaused: false });
+const mockDeactivateUsageOverride = vi.fn().mockReturnValue({ overrideActive: false, hardPaused: false });
+
 vi.mock('../../../src/server/services/usage-tracker.js', () => ({
   processUsageSnapshot: vi.fn(),
   getUsageZone: vi.fn().mockReturnValue('green'),
+  isUsageOverrideActive: vi.fn().mockReturnValue(false),
+  isHardPaused: vi.fn().mockReturnValue(false),
+  activateUsageOverride: (...args: unknown[]) => mockActivateUsageOverride(...args),
+  deactivateUsageOverride: (...args: unknown[]) => mockDeactivateUsageOverride(...args),
 }));
 
 // Import routes AFTER mocks
@@ -109,5 +116,57 @@ describe('GET /api/usage/history', () => {
     const body = res.json();
     expect(body).toHaveProperty('count');
     expect(body).toHaveProperty('snapshots');
+  });
+});
+
+// =============================================================================
+// Tests: GET /api/usage — includes override state fields (issue #678)
+// =============================================================================
+
+describe('GET /api/usage — override fields', () => {
+  it('should include overrideActive and hardPaused fields in response', async () => {
+    const res = await server.inject({ method: 'GET', url: '/api/usage' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toHaveProperty('overrideActive');
+    expect(body).toHaveProperty('hardPaused');
+    expect(typeof body.overrideActive).toBe('boolean');
+    expect(typeof body.hardPaused).toBe('boolean');
+  });
+});
+
+// =============================================================================
+// Tests: POST /api/usage/override (issue #678)
+// =============================================================================
+
+describe('POST /api/usage/override', () => {
+  it('should return 200 with override activated', async () => {
+    mockActivateUsageOverride.mockResolvedValue({ overrideActive: true, hardPaused: false });
+    const res = await server.inject({ method: 'POST', url: '/api/usage/override' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toEqual({ overrideActive: true, hardPaused: false });
+  });
+
+  it('should return 200 with hardPaused when activation refused', async () => {
+    mockActivateUsageOverride.mockResolvedValue({ overrideActive: false, hardPaused: true });
+    const res = await server.inject({ method: 'POST', url: '/api/usage/override' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toEqual({ overrideActive: false, hardPaused: true });
+  });
+});
+
+// =============================================================================
+// Tests: DELETE /api/usage/override (issue #678)
+// =============================================================================
+
+describe('DELETE /api/usage/override', () => {
+  it('should return 200 with override deactivated', async () => {
+    mockDeactivateUsageOverride.mockReturnValue({ overrideActive: false, hardPaused: false });
+    const res = await server.inject({ method: 'DELETE', url: '/api/usage/override' });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toEqual({ overrideActive: false, hardPaused: false });
   });
 });
