@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.19 -->
+<!-- fleet-commander v0.0.20 -->
 # Python Conventions
 
 > Applies to: `*.py`, `pyproject.toml`, `requirements.txt`, `setup.cfg`

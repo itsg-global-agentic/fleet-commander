@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-commander v0.0.19
+# fleet-commander v0.0.20
 # Fleet Commander: Universal event sender for Claude Code hooks.
 # POSTs a JSON event to the Fleet Commander dashboard server.
 #

@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.19
+# fleet-commander v0.0.20
 # Fleet Commander hook: PostToolUseFailure (aliased as "tool_error")
 # Tracks tool failures — repeated errors indicate the team is struggling.
 # stdin JSON example: {"session_id":"abc123","tool_name":"Bash","error":"exit code 1","tool_use_id":"toolu_123"}
