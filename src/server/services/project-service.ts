@@ -842,39 +842,13 @@ export class ProjectService {
       }
     }
 
-    // Create project-specific prompt file from default template
-    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-    const promptRelPath = `prompts/${slug}-prompt.md`;
-    const promptAbsPath = path.join(config.fleetCommanderRoot, promptRelPath);
-    const defaultPromptPath = path.join(config.fleetCommanderRoot, 'prompts', 'default-prompt.md');
-
-    try {
-      fs.mkdirSync(path.join(config.fleetCommanderRoot, 'prompts'), { recursive: true });
-
-      if (!fs.existsSync(promptAbsPath)) {
-        if (fs.existsSync(defaultPromptPath)) {
-          fs.copyFileSync(defaultPromptPath, promptAbsPath);
-        } else {
-          fs.writeFileSync(promptAbsPath,
-            'Read the ENTIRE file `.claude/prompts/fleet-workflow.md` before taking any actions.\n' +
-            'You are the TL. There is NO coordinator — you orchestrate the Diamond team directly.\n' +
-            'Phase 0: Spawn fleet-planner. Wait for plan. Phase 1: Spawn fleet-dev WITH the planner\'s plan. Wait for ready. Phase 2: Spawn fleet-reviewer. Planner stays alive for p2p questions.\n' +
-            'Issue: #{{ISSUE_NUMBER}}\n',
-            'utf-8',
-          );
-        }
-      }
-    } catch (promptErr: unknown) {
-      console.warn('[ProjectService] Failed to create project prompt file (non-fatal):', promptErr);
-    }
-
-    // Insert the project
+    // Insert the project (no per-project prompt file — always use prompts/default-prompt.md)
     const project = db.insertProject({
       name: name.trim(),
       repoPath: normalizedPath,
       githubRepo: resolvedGithubRepo,
       maxActiveTeams: maxActiveTeams ?? 5,
-      promptFile: promptRelPath,
+      promptFile: null,
       model: model?.trim() || null,
       issueProvider: resolvedIssueProvider,
       projectKey: resolvedProjectKey,
@@ -1194,70 +1168,6 @@ export class ProjectService {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, error: message };
     }
-  }
-
-  /**
-   * Read the contents of a project's prompt file.
-   * Falls back to the default prompt if the project-specific one is missing.
-   *
-   * @param projectId - The project ID
-   * @returns Prompt file contents and metadata
-   * @throws ServiceError with code NOT_FOUND if project or prompt file not found
-   */
-  getPrompt(projectId: number): { promptFile: string; content: string; isDefault: boolean } {
-    const db = getDatabase();
-    const project = db.getProject(projectId);
-    if (!project) {
-      throw notFoundError(`Project ${projectId} not found`);
-    }
-
-    if (!project.promptFile) {
-      throw notFoundError(`No prompt file configured for project ${projectId}`);
-    }
-
-    const absPath = path.join(config.fleetCommanderRoot, project.promptFile);
-    if (!fs.existsSync(absPath)) {
-      const defaultPath = path.join(config.fleetCommanderRoot, 'prompts', 'default-prompt.md');
-      if (fs.existsSync(defaultPath)) {
-        const content = fs.readFileSync(defaultPath, 'utf-8');
-        return { promptFile: project.promptFile, content, isDefault: true };
-      }
-      throw notFoundError(`Prompt file not found: ${project.promptFile}`);
-    }
-
-    const content = fs.readFileSync(absPath, 'utf-8');
-    return { promptFile: project.promptFile, content, isDefault: false };
-  }
-
-  /**
-   * Save content to a project's prompt file.
-   *
-   * @param projectId - The project ID
-   * @param content - The prompt content to write
-   * @returns Prompt file path and saved content
-   * @throws ServiceError with code NOT_FOUND if project not found
-   * @throws ServiceError with code VALIDATION if content is missing or no prompt file configured
-   */
-  savePrompt(projectId: number, content: string): { promptFile: string; content: string } {
-    const db = getDatabase();
-    const project = db.getProject(projectId);
-    if (!project) {
-      throw notFoundError(`Project ${projectId} not found`);
-    }
-
-    if (content === undefined || typeof content !== 'string') {
-      throw validationError('content is required and must be a string');
-    }
-
-    if (!project.promptFile) {
-      throw validationError(`No prompt file configured for project ${projectId}`);
-    }
-
-    const absPath = path.join(config.fleetCommanderRoot, project.promptFile);
-    fs.mkdirSync(path.dirname(absPath), { recursive: true });
-    fs.writeFileSync(absPath, content, 'utf-8');
-
-    return { promptFile: project.promptFile, content };
   }
 
   /**

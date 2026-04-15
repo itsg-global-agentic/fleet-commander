@@ -39,7 +39,6 @@ interface UpdateProjectBody {
   groupId?: number | null;
   hooksInstalled?: boolean;
   maxActiveTeams?: number;
-  promptFile?: string | null;
   model?: string | null;
   issueProvider?: string | null;
   projectKey?: string | null;
@@ -377,70 +376,6 @@ const projectsRoutes: FastifyPluginCallback = (
           return reply.code(err.statusCode).send({ error: err.code, message: err.message });
         }
         request.log.error(err, 'Failed to execute cleanup');
-        return reply.code(500).send({
-          error: 'Internal Server Error',
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    },
-  );
-
-  // -------------------------------------------------------------------------
-  // GET /api/projects/:id/prompt — return contents of the project's prompt file
-  // -------------------------------------------------------------------------
-  fastify.get(
-    '/api/projects/:id/prompt',
-    async (
-      request: FastifyRequest<{ Params: ProjectIdParams }>,
-      reply: FastifyReply,
-    ) => {
-      try {
-        const projectId = parseIdParam(request.params.id, 'id');
-
-        const service = getProjectService();
-        const result = service.getPrompt(projectId);
-        return reply.code(200).send(result);
-      } catch (err: unknown) {
-        if (err instanceof ServiceError) {
-          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
-        }
-        request.log.error(err, 'Failed to read project prompt');
-        return reply.code(500).send({
-          error: 'Internal Server Error',
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    },
-  );
-
-  // -------------------------------------------------------------------------
-  // PUT /api/projects/:id/prompt — update the contents of the prompt file
-  // -------------------------------------------------------------------------
-  fastify.put(
-    '/api/projects/:id/prompt',
-    async (
-      request: FastifyRequest<{ Params: ProjectIdParams; Body: { content: string } }>,
-      reply: FastifyReply,
-    ) => {
-      try {
-        const projectId = parseIdParam(request.params.id, 'id');
-
-        const { content } = request.body || {};
-        if (content === undefined || typeof content !== 'string') {
-          return reply.code(400).send({
-            error: 'Bad Request',
-            message: 'content is required and must be a string',
-          });
-        }
-
-        const service = getProjectService();
-        const result = service.savePrompt(projectId, content);
-        return reply.code(200).send(result);
-      } catch (err: unknown) {
-        if (err instanceof ServiceError) {
-          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
-        }
-        request.log.error(err, 'Failed to update project prompt');
         return reply.code(500).send({
           error: 'Internal Server Error',
           message: err instanceof Error ? err.message : String(err),

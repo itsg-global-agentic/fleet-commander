@@ -1635,31 +1635,12 @@ export class TeamManager {
   // -------------------------------------------------------------------------
 
   /**
-   * Read the project's prompt file and replace {{ISSUE_NUMBER}} placeholder.
+   * Read prompts/default-prompt.md and replace {{ISSUE_NUMBER}} / {{ISSUE_KEY}} / {{ISSUE_TITLE}} placeholders.
    * Accepts issueKey (string) which replaces the placeholder even for non-numeric keys.
-   * Fallback chain: project prompt file > prompts/default-prompt.md > hardcoded default.
+   * Fallback chain: prompts/default-prompt.md > hardcoded default.
    */
-  private resolvePromptFromFile(project: Project, issueKey: string, issueTitle?: string): string {
-    if (project.promptFile) {
-      const absPath = path.join(config.fleetCommanderRoot, project.promptFile);
-      if (fs.existsSync(absPath)) {
-        try {
-          const template = fs.readFileSync(absPath, 'utf-8');
-          const resolved = template
-            .replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey)
-            .replace(/\{\{ISSUE_KEY\}\}/g, issueKey)
-            .replace(/\{\{ISSUE_TITLE\}\}/g, issueTitle ?? '');
-          console.log(`[TeamManager] Resolved prompt from file: ${project.promptFile}`);
-          return resolved;
-        } catch (err: unknown) {
-          console.warn(`[TeamManager] Failed to read prompt file ${absPath}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      } else {
-        console.warn(`[TeamManager] Prompt file not found: ${absPath}`);
-      }
-    }
-
-    // Fall back to default-prompt.md
+  private resolvePromptFromFile(_project: Project, issueKey: string, issueTitle?: string): string {
+    // Always read the shared default-prompt.md
     const defaultPath = path.join(config.fleetCommanderRoot, 'prompts', 'default-prompt.md');
     if (fs.existsSync(defaultPath)) {
       try {

@@ -44,7 +44,7 @@ function makeProject(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
     status: 'active',
     hooksInstalled: true,
     maxActiveTeams: 5,
-    promptFile: '/path/to/prompt.md',
+    promptFile: null,
     model: 'claude-sonnet',
     createdAt: '2025-01-01T00:00:00Z',
     updatedAt: '2025-01-01T00:00:00Z',

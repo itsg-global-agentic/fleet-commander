@@ -26,7 +26,7 @@ vi.mock('../../src/client/hooks/useApi', () => ({
             status: 'active',
             hooksInstalled: true,
             maxActiveTeams: 5,
-            promptFile: '/path/to/prompt.md',
+            promptFile: null,
             model: 'claude-sonnet',
             createdAt: '2025-01-01T00:00:00Z',
             updatedAt: '2025-01-01T00:00:00Z',
@@ -161,26 +161,14 @@ describe('ProjectCard (via ProjectsPage)', () => {
     expect(await screen.findByText(/Max teams: 5/)).toBeInTheDocument();
   });
 
-  it('shows prompt section when promptFile exists', async () => {
+  it('does not show prompt section (per-project prompts removed)', async () => {
     render(<ProjectsPage />);
     const projectName = await screen.findByText('test-project');
     const row = projectName.closest('[class*="cursor-pointer"]');
     fireEvent.click(row!);
 
-    expect(await screen.findByText('Prompt')).toBeInTheDocument();
-    expect(await screen.findByText('/path/to/prompt.md')).toBeInTheDocument();
-  });
-
-  it('does not show prompt section when promptFile is null', async () => {
-    render(<ProjectsPage />);
-    const projectName = await screen.findByText('partial-project');
-    const row = projectName.closest('[class*="cursor-pointer"]');
-    fireEvent.click(row!);
-
-    // partial-project has no promptFile, so no Prompt heading in its card
-    // But test-project could also have been expanded, so we check more carefully
-    const promptHeadings = screen.queryAllByText('Prompt');
-    // Before expanding test-project, only partial-project expanded: no Prompt section
-    expect(promptHeadings.length).toBe(0);
+    // Prompt section should never appear — per-project prompts have been removed
+    await screen.findByText('Repository'); // wait for expand
+    expect(screen.queryByText('Prompt')).not.toBeInTheDocument();
   });
 });
