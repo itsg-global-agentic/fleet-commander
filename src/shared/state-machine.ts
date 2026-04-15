@@ -97,8 +97,9 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     trigger: 'timer',
     triggerLabel: 'Idle threshold exceeded',
     description:
-      'No hook events received within the idle threshold period. Sends idle_nudge message to TL prompting a subagent status check.',
-    condition: 'lastEventAt + idleThresholdMin < now',
+      'No hook events received within the idle threshold period. Sends idle_nudge message to TL prompting a subagent status check — UNLESS a subagent is currently in_progress (in which case the nudge is suppressed, see issue #690).',
+    condition:
+      'lastEventAt + idleThresholdMin < now AND NOT (phase=pr AND (ciStatus=pending OR mergeStatus IN (blocked_ci_pending, behind)))',
     hookEvent: null,
   },
   {
@@ -142,8 +143,10 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     to: 'stuck',
     trigger: 'timer',
     triggerLabel: 'Stuck threshold exceeded',
-    description: 'Team has been idle beyond the stuck detection threshold',
-    condition: 'lastEventAt + stuckThresholdMin < now',
+    description:
+      'Team has been idle beyond the stuck detection threshold. Suppressed when the team is legitimately waiting on external CI or merge infrastructure (see issue #690).',
+    condition:
+      'lastEventAt + stuckThresholdMin < now AND NOT (phase=pr AND (ciStatus=pending OR mergeStatus IN (blocked_ci_pending, behind)))',
     hookEvent: null,
   },
   {

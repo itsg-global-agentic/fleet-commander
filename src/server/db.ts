@@ -3112,6 +3112,19 @@ export class FleetDatabase {
     return rows.map((r) => this.mapTeamTaskRow(r));
   }
 
+  /**
+   * Check whether a team currently has at least one subagent / task
+   * marked `in_progress` in team_tasks. Used by the stuck-detector to
+   * suppress the idle_nudge while subagents are actively working
+   * (see issue #690).
+   */
+  hasActiveSubagent(teamId: number): boolean {
+    const row = this.stmt(
+      "SELECT 1 FROM team_tasks WHERE team_id = ? AND status = 'in_progress' LIMIT 1"
+    ).get(teamId) as { '1': number } | undefined;
+    return row !== undefined;
+  }
+
   private mapTeamTaskRow(row: Record<string, unknown>): TeamTask {
     return {
       id: row.id as number,

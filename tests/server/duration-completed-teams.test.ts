@@ -141,9 +141,10 @@ describe('v_team_dashboard duration_min for completed teams', () => {
 // =============================================================================
 
 describe('v_team_dashboard idle_min for completed teams', () => {
-  it('caps idle_min at stopped_at for done teams', () => {
-    // Team launched 120 min ago, last event 100 min ago, stopped 90 min ago
-    // idle_min should be ~10 (last_event to stopped_at), NOT ~100 (last_event to now)
+  it('returns null idle_min for done teams (issue #690)', () => {
+    // Terminal teams have no meaningful idleMin — lastEventAt can land
+    // slightly after stoppedAt due to late finalization hooks, producing
+    // negative values. The view reports null for done/failed.
     const launchedAt = minutesAgo(120);
     const lastEventAt = minutesAgo(100);
     const stoppedAt = minutesAgo(90);
@@ -162,10 +163,45 @@ describe('v_team_dashboard idle_min for completed teams', () => {
 
     const rows = db.getTeamDashboard();
     expect(rows).toHaveLength(1);
+    expect(rows[0].idleMin).toBeNull();
+  });
 
-    const row = rows[0];
-    // idle_min should be ~10, NOT ~100
-    expect(row.idleMin).toBeGreaterThanOrEqual(8);
-    expect(row.idleMin).toBeLessThanOrEqual(12);
+  it('returns null idle_min for failed teams (issue #690)', () => {
+    db.insertTeam({
+      issueNumber: 301,
+      worktreeName: 'proj-301',
+      status: 'failed',
+      phase: 'implementing',
+      launchedAt: minutesAgo(60),
+    });
+    db.updateTeam(1, {
+      stoppedAt: minutesAgo(50),
+      lastEventAt: minutesAgo(52),
+    });
+
+    const rows = db.getTeamDashboard();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].idleMin).toBeNull();
+  });
+
+  it('clamps idle_min to >= 0 for active teams with clock skew (issue #690)', () => {
+    // Simulate clock skew: last_event_at slightly in the future relative to now
+    db.insertTeam({
+      issueNumber: 302,
+      worktreeName: 'proj-302',
+      status: 'running',
+      phase: 'implementing',
+      launchedAt: minutesAgo(5),
+    });
+    // lastEventAt 1 min in the future
+    db.updateTeam(1, {
+      lastEventAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+
+    const rows = db.getTeamDashboard();
+    expect(rows).toHaveLength(1);
+    // Clamped to 0, never negative
+    expect(rows[0].idleMin).not.toBeNull();
+    expect(rows[0].idleMin!).toBeGreaterThanOrEqual(0);
   });
 });

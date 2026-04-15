@@ -71,6 +71,16 @@ class StuckDetector {
     const idleThresholdMs = config.idleThresholdMin * 60_000;
 
     for (const team of activeTeams) {
+      // --- Filter out non-detectable statuses (issue #690) -----------------
+      // Idle/stuck detection only makes sense for running/idle teams.
+      // `queued` teams haven't been spawned yet, `launching` is handled by
+      // the launch-timeout block below, and `done`/`failed` are terminal
+      // and wouldn't appear in getActiveTeams() anyway. `queued` is skipped
+      // here so we never compute idleMin against it.
+      if (team.status === 'queued') {
+        continue;
+      }
+
       // --- Launch timeout detection ----------------------------------------
       // Teams stuck in 'launching' (CC process hangs without crashing or
       // sending any events) are transitioned to 'failed' after the timeout.
@@ -129,10 +139,17 @@ class StuckDetector {
       }
 
       // --- Idle / stuck detection based on time since last event -----------
+      // Only run for running/idle teams — other statuses are either terminal,
+      // queued (filtered above), or launching (handled above).
+      if (team.status !== 'running' && team.status !== 'idle') {
+        continue;
+      }
 
       if (team.lastEventAt) {
         const lastEventTime = new Date(team.lastEventAt).getTime();
-        const idleMinutes = (now - lastEventTime) / 60_000;
+        // Clamp to >= 0 to avoid negative idleMin from clock skew between
+        // hooks and DB stop times (issue #690).
+        const idleMinutes = Math.max(0, (now - lastEventTime) / 60_000);
 
         let newStatus: TeamStatus | null = null;
 
@@ -157,15 +174,28 @@ class StuckDetector {
             // TeamManager not initialized — skip thinking check
           }
 
-          // Skip idle/stuck transition if the team has a PR with pending CI.
-          // A team waiting for CI is not idle — it's working.
-          if (team.prNumber) {
+          // Skip idle/stuck transition if the team is legitimately waiting
+          // on external CI or merge infrastructure (issue #690). A team in
+          // phase=pr with CI in flight, or with merge blocked waiting for
+          // CI / branch-up-to-date, is not idle — it's working.
+          if (team.phase === 'pr' && team.prNumber) {
             const pr = db.getPullRequest(team.prNumber);
-            if (pr && pr.ciStatus === 'pending') {
-              console.log(
-                `[StuckDetector] Team ${team.id} skipped — CI pending on PR #${team.prNumber}`
-              );
-              continue;
+            if (pr) {
+              if (pr.ciStatus === 'pending') {
+                console.log(
+                  `[StuckDetector] Team ${team.id} skipped — CI pending on PR #${team.prNumber}`
+                );
+                continue;
+              }
+              if (
+                pr.mergeStatus === 'blocked_ci_pending' ||
+                pr.mergeStatus === 'behind'
+              ) {
+                console.log(
+                  `[StuckDetector] Team ${team.id} skipped — waiting on merge infrastructure (mergeStatus=${pr.mergeStatus}) for PR #${team.prNumber}`
+                );
+                continue;
+              }
             }
           }
 
@@ -193,18 +223,34 @@ class StuckDetector {
           );
 
           // When a team transitions to idle, send an idle nudge to prompt TL
-          // to check subagent status and proceed with next steps
+          // to check subagent status and proceed with next steps — UNLESS a
+          // subagent is currently in_progress (issue #690). Nudging while a
+          // subagent is actively working causes the TL to second-guess the
+          // wait and interrupt a healthy dev mid-task.
           if (newStatus === 'idle') {
-            const idleMsg = resolveMessage('idle_nudge', {
-              IDLE_MINUTES: String(Math.round(idleMinutes)),
-            });
-            if (idleMsg) {
-              try {
-                const manager = getTeamManager();
-                manager.sendMessage(team.id, idleMsg, 'fc', 'idle_nudge');
-                console.log(`[StuckDetector] Idle nudge sent to team ${team.id}`);
-              } catch {
-                console.warn(`[StuckDetector] Failed to send idle nudge to team ${team.id}`);
+            let subagentActive = false;
+            try {
+              subagentActive = db.hasActiveSubagent(team.id);
+            } catch {
+              // If the query fails, err on the side of nudging (previous behaviour)
+            }
+
+            if (subagentActive) {
+              console.log(
+                `[StuckDetector] Team ${team.id} transitioned to idle but has active subagent — skipping idle_nudge`
+              );
+            } else {
+              const idleMsg = resolveMessage('idle_nudge', {
+                IDLE_MINUTES: String(Math.round(idleMinutes)),
+              });
+              if (idleMsg) {
+                try {
+                  const manager = getTeamManager();
+                  manager.sendMessage(team.id, idleMsg, 'fc', 'idle_nudge');
+                  console.log(`[StuckDetector] Idle nudge sent to team ${team.id}`);
+                } catch {
+                  console.warn(`[StuckDetector] Failed to send idle nudge to team ${team.id}`);
+                }
               }
             }
           }

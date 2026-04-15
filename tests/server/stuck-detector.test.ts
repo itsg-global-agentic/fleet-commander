@@ -15,6 +15,7 @@ const mockDb = {
   updateTeamSilent: vi.fn(),
   insertTransition: vi.fn(),
   getPullRequest: vi.fn(),
+  hasActiveSubagent: vi.fn().mockReturnValue(false),
 };
 
 const mockSseBroker = {
@@ -98,6 +99,8 @@ function minutesAgo(min: number): string {
 beforeEach(() => {
   vi.clearAllMocks();
   mockDb.getActiveTeams.mockReturnValue([]);
+  mockDb.hasActiveSubagent.mockReturnValue(false);
+  mockDb.getPullRequest.mockReturnValue(undefined);
   mockGetTeamManager.mockImplementation(() => mockManager);
 });
 
@@ -411,6 +414,7 @@ describe('Idle nudge message', () => {
 
     const team = makeTeam({
       status: 'running',
+      phase: 'pr',
       lastEventAt: minutesAgo(6),
       prNumber: 42,
     });
@@ -426,5 +430,189 @@ describe('Idle nudge message', () => {
     // Reset mocks
     mockedResolveMessage.mockReturnValue(null);
     mockDb.getPullRequest.mockReturnValue(undefined);
+  });
+});
+
+// =============================================================================
+// Issue #690 — false-positive idle/stuck suppression
+// =============================================================================
+
+describe('Issue #690 — false-positive idle/stuck suppression', () => {
+  // --- Fix A: suppress idle_nudge when subagent in progress ----------------
+  describe('Fix A: idle_nudge suppressed when subagent active', () => {
+    it('transitions to idle but does NOT send idle_nudge when a subagent is in_progress', async () => {
+      const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+      const mockedResolveMessage = vi.mocked(resolveMessage);
+      mockedResolveMessage.mockReturnValue('FC status check: idle for 6 minutes');
+
+      const team = makeTeam({
+        status: 'running',
+        lastEventAt: minutesAgo(6),
+      });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+      mockDb.hasActiveSubagent.mockReturnValue(true);
+
+      stuckDetector.check();
+
+      // Transition should still happen — team genuinely has no TL events
+      expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { status: 'idle' });
+      // But the nudge must NOT be sent (active subagent is working)
+      expect(mockManager.sendMessage).not.toHaveBeenCalled();
+      expect(mockDb.hasActiveSubagent).toHaveBeenCalledWith(1);
+
+      mockedResolveMessage.mockReturnValue(null);
+    });
+
+    it('sends idle_nudge normally when no subagent is in_progress', async () => {
+      const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+      const mockedResolveMessage = vi.mocked(resolveMessage);
+      mockedResolveMessage.mockReturnValue('FC status check: idle for 6 minutes');
+
+      const team = makeTeam({
+        status: 'running',
+        lastEventAt: minutesAgo(6),
+      });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+      mockDb.hasActiveSubagent.mockReturnValue(false);
+
+      stuckDetector.check();
+
+      expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { status: 'idle' });
+      expect(mockManager.sendMessage).toHaveBeenCalledWith(
+        1,
+        'FC status check: idle for 6 minutes',
+        'fc',
+        'idle_nudge',
+      );
+
+      mockedResolveMessage.mockReturnValue(null);
+    });
+  });
+
+  // --- Fix B: suppress stuck detection while waiting on CI/merge ----------
+  describe('Fix B: suppress idle/stuck while waiting on CI/merge', () => {
+    it('does NOT transition to idle when phase=pr and mergeStatus=behind', () => {
+      const team = makeTeam({
+        status: 'running',
+        phase: 'pr',
+        lastEventAt: minutesAgo(6),
+        prNumber: 42,
+      });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+      mockDb.getPullRequest.mockReturnValue({
+        ciStatus: 'success',
+        mergeStatus: 'behind',
+      });
+
+      stuckDetector.check();
+
+      expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
+      expect(mockDb.insertTransition).not.toHaveBeenCalled();
+    });
+
+    it('does NOT transition to idle when phase=pr and mergeStatus=blocked_ci_pending', () => {
+      const team = makeTeam({
+        status: 'running',
+        phase: 'pr',
+        lastEventAt: minutesAgo(6),
+        prNumber: 42,
+      });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+      mockDb.getPullRequest.mockReturnValue({
+        ciStatus: 'success',
+        mergeStatus: 'blocked_ci_pending',
+      });
+
+      stuckDetector.check();
+
+      expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
+      expect(mockDb.insertTransition).not.toHaveBeenCalled();
+    });
+
+    it('does NOT transition idle -> stuck when phase=pr and ciStatus=pending', () => {
+      const team = makeTeam({
+        status: 'idle',
+        phase: 'pr',
+        lastEventAt: minutesAgo(11),
+        prNumber: 42,
+      });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+      mockDb.getPullRequest.mockReturnValue({ ciStatus: 'pending' });
+
+      stuckDetector.check();
+
+      expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
+    });
+
+    it('DOES transition to idle when phase is not pr, regardless of PR state', () => {
+      const team = makeTeam({
+        status: 'running',
+        phase: 'implementing', // not pr
+        lastEventAt: minutesAgo(6),
+        prNumber: 42,
+      });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+      // Even with pending CI, the phase guard only kicks in for phase=pr
+      mockDb.getPullRequest.mockReturnValue({ ciStatus: 'success', mergeStatus: 'clean' });
+
+      stuckDetector.check();
+
+      expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { status: 'idle' });
+    });
+  });
+
+  // --- Fix C: clamp idleMin to >= 0 ---------------------------------------
+  describe('Fix C: idleMin clamped to non-negative', () => {
+    it('does not treat a negative idle time as exceeding the idle threshold', () => {
+      // lastEventAt in the future (clock skew) → raw idleMinutes would be negative
+      const team = makeTeam({
+        status: 'running',
+        lastEventAt: new Date(Date.now() + 60_000).toISOString(), // 1 min in future
+      });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+
+      stuckDetector.check();
+
+      // Clamped to 0 — must not transition
+      expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
+      expect(mockDb.insertTransition).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- Fix D: do not compute idle/stuck for queued/launching/done/failed ---
+  describe('Fix D: skip queued/launching/done/failed teams', () => {
+    it('skips queued team that has been queued for hours', () => {
+      const team = makeTeam({
+        status: 'queued',
+        // lastEventAt very old — would easily exceed any threshold
+        lastEventAt: minutesAgo(120),
+        launchedAt: null,
+      });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+
+      stuckDetector.check();
+
+      // No status change, no transition
+      expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
+      expect(mockDb.insertTransition).not.toHaveBeenCalled();
+      expect(mockManager.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it('does not mark a recent launching team as idle/stuck via the event-time path', () => {
+      // launching team within the launch-timeout window, but with an old
+      // lastEventAt — must not fall through to idle/stuck detection.
+      const team = makeTeam({
+        status: 'launching',
+        launchedAt: minutesAgo(2),
+        lastEventAt: minutesAgo(30),
+      });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+
+      stuckDetector.check();
+
+      // Launch-timeout should not fire (2 < 5), and idle/stuck path must be skipped.
+      expect(mockDb.insertTransition).not.toHaveBeenCalled();
+      expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
+    });
   });
 });

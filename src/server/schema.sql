@@ -182,7 +182,18 @@ SELECT
   t.launched_at,
   t.last_event_at,
   ROUND((julianday(COALESCE(t.stopped_at, datetime('now'))) - julianday(t.launched_at)) * 24 * 60, 0) AS duration_min,
-  ROUND((julianday(COALESCE(t.stopped_at, datetime('now'))) - julianday(t.last_event_at)) * 24 * 60, 1) AS idle_min,
+  -- idle_min: null for terminal teams (done/failed) — their lastEventAt can
+  -- race past stoppedAt from late finalization hooks, producing negative
+  -- values (issue #690). For active teams, clamp to >= 0 to protect against
+  -- similar clock skew between hook and DB timestamps.
+  CASE
+    WHEN t.status IN ('done', 'failed') THEN NULL
+    WHEN t.last_event_at IS NULL THEN NULL
+    ELSE MAX(
+      0,
+      ROUND((julianday(COALESCE(t.stopped_at, datetime('now'))) - julianday(t.last_event_at)) * 24 * 60, 1)
+    )
+  END AS idle_min,
   t.total_input_tokens,
   t.total_output_tokens,
   t.total_cache_creation_tokens,

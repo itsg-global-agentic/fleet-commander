@@ -361,10 +361,18 @@ export class TeamService {
       ? Math.round((endTime.getTime() - launchedAt.getTime()) / 60_000)
       : 0;
 
+    // idleMin is not meaningful for terminal teams (done/failed) — the
+    // last-event timestamp often lands slightly after stoppedAt because
+    // finalization hooks race the stop transition, producing negative values
+    // (issue #690). Report null for terminal teams, and clamp to >= 0 for
+    // active teams to protect against similar clock skew.
     const lastEventAt = team.lastEventAt ? new Date(team.lastEventAt) : null;
-    const idleMin = lastEventAt
-      ? Math.round((endTime.getTime() - lastEventAt.getTime()) / 60_000 * 10) / 10
-      : null;
+    const isTerminal = team.status === 'done' || team.status === 'failed';
+    const idleMin = isTerminal
+      ? null
+      : lastEventAt
+        ? Math.max(0, Math.round((endTime.getTime() - lastEventAt.getTime()) / 60_000 * 10) / 10)
+        : null;
 
     // Pull request detail
     let prDetail = null;
