@@ -411,6 +411,74 @@ class GitHubPoller {
 
         // Merge notification is now handled by gracefulShutdown below
         // (sends pr_merged_shutdown instead of pr_merged to avoid duplicates)
+
+        // ── Early shutdown on CI green + auto-merge happy path ────────
+        // When CI turns green, auto-merge is enabled, and merge state is
+        // clean, the team can shut down immediately — GitHub will handle
+        // the actual merge. This avoids the 2-minute grace period wait
+        // that normally follows pr_merged detection.
+        if (
+          existing.ciStatus !== ciStatus &&
+          ciStatus === 'passing' &&
+          autoMerge &&
+          mergeState !== 'dirty'
+        ) {
+          const team = db.getTeam(teamId);
+          if (team && team.status !== 'done') {
+            try {
+              const { getTeamManager } = await import('./team-manager.js');
+              const manager = getTeamManager();
+
+              // Send the early shutdown message
+              const shutdownMsg = resolveMessage('ci_green_auto_shutdown', {
+                PR_NUMBER: String(prNumber),
+              });
+              if (shutdownMsg) manager.sendMessage(teamId, shutdownMsg, 'fc', 'ci_green_auto_shutdown');
+
+              // Transition team to done
+              const previousStatus = team.status;
+              db.insertTransition({
+                teamId,
+                fromStatus: previousStatus,
+                toStatus: 'done',
+                trigger: 'poller',
+                reason: `CI green + auto-merge on PR #${prNumber} — early shutdown`,
+              });
+              db.updateTeamSilent(teamId, { status: 'done', phase: 'done', stoppedAt: new Date().toISOString() });
+
+              sseBroker.broadcast(
+                'team_status_changed',
+                {
+                  team_id: teamId,
+                  status: 'done',
+                  previous_status: previousStatus,
+                },
+                teamId,
+              );
+
+              console.log(
+                `[GitHubPoller] Team ${teamId} early shutdown — CI green + auto-merge on PR #${prNumber}`,
+              );
+
+              // Initiate graceful shutdown (notify TL, grace period, then kill)
+              manager.gracefulShutdown(teamId, prNumber, config.mergeShutdownGraceMs);
+
+              // Advance the queue immediately — the slot is free
+              if (team.projectId) {
+                manager.processQueue(team.projectId).catch((err) => {
+                  console.error(
+                    `[GitHubPoller] processQueue error after early shutdown for team ${teamId}:`,
+                    err instanceof Error ? err.message : err,
+                  );
+                });
+              }
+            } catch (err) {
+              console.error(`[GitHubPoller] Failed to initiate early shutdown for team ${teamId}:`, err);
+            }
+
+            return { ciStatus, state };
+          }
+        }
       }
     } else {
       // First time we see this PR — insert it

@@ -129,6 +129,19 @@ export interface TeamMessageSender {
 const lastToolUseByTeam = new Map<string, number>();
 
 // ---------------------------------------------------------------------------
+// PR polling detection state — module-level, persists across requests
+// ---------------------------------------------------------------------------
+
+/** Window duration for counting PR poll calls (10 minutes) */
+const POLL_WINDOW_MS = 10 * 60 * 1000;
+
+/** Track gh pr view/checks calls per team within a 10-minute window */
+const prPollCountByTeam = new Map<string, { count: number; windowStart: number }>();
+
+/** Track teams that have already received a poll warning in the current window */
+const prPollWarned = new Set<string>();
+
+// ---------------------------------------------------------------------------
 // Subagent tracking for early crash detection
 // ---------------------------------------------------------------------------
 
@@ -532,6 +545,46 @@ export function processEvent(
     timestamp: payload.timestamp || nowIso,
   });
 
+  // ── PR polling frequency detection ──────────────────────────────
+  // Detect teams that excessively call `gh pr view` or `gh pr checks`
+  // via Bash tool_use events. When the count exceeds the configured
+  // threshold within a 10-minute window, send a one-time warning.
+  if (
+    eventType === 'ToolUse' &&
+    payload.tool_name === 'Bash' &&
+    messageSender
+  ) {
+    const toolInput = payload.tool_input || payload.message || '';
+    if (toolInput.includes('gh pr view') || toolInput.includes('gh pr checks')) {
+      const teamKey = payload.team;
+      const entry = prPollCountByTeam.get(teamKey);
+
+      if (!entry || now - entry.windowStart > POLL_WINDOW_MS) {
+        // Start a new window
+        prPollCountByTeam.set(teamKey, { count: 1, windowStart: now });
+        // New window also resets the warned flag
+        prPollWarned.delete(teamKey);
+      } else {
+        entry.count++;
+        if (entry.count > config.maxPrPollCalls && !prPollWarned.has(teamKey)) {
+          // Exceeded threshold — send one-time warning (inline message,
+          // matching the crash-detection pattern — no resolveMessage to
+          // avoid circular import with db.ts).
+          const warnMsg =
+            'Stop polling GitHub with gh pr view / gh pr checks. FC monitors CI and PR status ' +
+            'automatically and will notify you via stdin (ci_green, ci_red, pr_merged). Wait for these events instead of polling.';
+          try {
+            messageSender.sendMessage(teamId, warnMsg, 'fc', 'poll_warning');
+            console.log(`[EventCollector] Poll warning sent to team ${teamId} (${entry.count} gh pr calls in window)`);
+          } catch {
+            // Non-critical — silently ignore send failures
+          }
+          prPollWarned.add(teamKey);
+        }
+      }
+    }
+  }
+
   // ── Task extraction from TaskCreated events ─────────────────────
   // Parse TaskCreated hook events and upsert task data into team_tasks.
   if (eventType === 'TaskCreated' && db.upsertTeamTask) {
@@ -704,6 +757,12 @@ export function resetThrottleState(): void {
 /** Reset subagent tracking state. Intended for use in tests only. */
 export function resetSubagentTrackers(): void {
   subagentTrackers.clear();
+}
+
+/** Reset PR polling detection state. Intended for use in tests only. */
+export function resetPrPollState(): void {
+  prPollCountByTeam.clear();
+  prPollWarned.clear();
 }
 
 /** Return current size of subagent tracker map. Intended for use in tests only. */

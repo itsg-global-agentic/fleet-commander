@@ -131,6 +131,9 @@ const config = Object.freeze({
   /** Minimum tool-use events for a subagent session to be considered healthy */
   earlyCrashMinTools: safeParseInt(process.env['FLEET_EARLY_CRASH_MIN_TOOLS'] || '5', 'FLEET_EARLY_CRASH_MIN_TOOLS'),
 
+  /** Maximum gh pr view/checks calls per team per 10-minute window before sending a poll_warning */
+  maxPrPollCalls: safeParseInt(process.env['FLEET_MAX_PR_POLL_CALLS'] || '5', 'FLEET_MAX_PR_POLL_CALLS'),
+
   eventsRetentionDays: safeParseInt(process.env['FLEET_EVENTS_RETENTION_DAYS'] || '90', 'FLEET_EVENTS_RETENTION_DAYS'),
   usageRetentionDays: safeParseInt(process.env['FLEET_USAGE_RETENTION_DAYS'] || '30', 'FLEET_USAGE_RETENTION_DAYS'),
 
@@ -215,6 +218,7 @@ export function validateConfig(): void {
     ['mergeShutdownGraceMs', config.mergeShutdownGraceMs],
     ['earlyCrashThresholdSec', config.earlyCrashThresholdSec],
     ['earlyCrashMinTools', config.earlyCrashMinTools],
+    ['maxPrPollCalls', config.maxPrPollCalls],
     ['ccQueryMaxTurns', config.ccQueryMaxTurns],
     ['eventsRetentionDays', config.eventsRetentionDays],
     ['usageRetentionDays', config.usageRetentionDays],

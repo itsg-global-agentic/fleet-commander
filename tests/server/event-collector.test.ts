@@ -7,6 +7,7 @@ import {
   processEvent,
   resetThrottleState,
   resetSubagentTrackers,
+  resetPrPollState,
   getSubagentTrackerSize,
   cleanSubagentTrackersForTeam,
   normalizeAgentName,
@@ -127,6 +128,7 @@ function createMockMessageSender(): TeamMessageSender & { sendMessage: ReturnTyp
 beforeEach(() => {
   resetThrottleState();
   resetSubagentTrackers();
+  resetPrPollState();
 });
 
 // =============================================================================
@@ -3225,5 +3227,126 @@ describe('handoff file capture', () => {
 
       expect(insertHandoffFile).toHaveBeenCalledOnce();
     }
+  });
+});
+
+// =============================================================================
+// PR polling frequency detection
+// =============================================================================
+
+describe('PR polling frequency detection', () => {
+  it('sends poll_warning when team exceeds maxPrPollCalls', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const sender = createMockMessageSender();
+
+    // Default maxPrPollCalls = 5, so we need 6 calls to trigger
+    for (let i = 0; i < 6; i++) {
+      const payload = makePayload({
+        event: 'tool_use',
+        tool_name: 'Bash',
+        tool_input: 'gh pr view 42 --json state',
+      });
+      processEvent(payload, db, sse, sender);
+      // Reset throttle so each tool_use goes through
+      resetThrottleState();
+    }
+
+    // The 6th call should trigger the warning
+    expect(sender.sendMessage).toHaveBeenCalledWith(
+      1,
+      expect.stringContaining('Stop polling GitHub'),
+      'fc',
+      'poll_warning',
+    );
+  });
+
+  it('does not warn when calls are below threshold', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const sender = createMockMessageSender();
+
+    // Send 5 calls (at the threshold, not exceeding)
+    for (let i = 0; i < 5; i++) {
+      const payload = makePayload({
+        event: 'tool_use',
+        tool_name: 'Bash',
+        tool_input: 'gh pr view 42 --json state',
+      });
+      processEvent(payload, db, sse, sender);
+      resetThrottleState();
+    }
+
+    // Should NOT have sent a poll_warning
+    const pollWarningCalls = sender.sendMessage.mock.calls.filter(
+      (call: unknown[]) => call[3] === 'poll_warning',
+    );
+    expect(pollWarningCalls).toHaveLength(0);
+  });
+
+  it('resets counter after 10-minute window expires', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const sender = createMockMessageSender();
+
+    // Use real timers with Date.now mocking
+    const baseTime = Date.now();
+    const dateSpy = vi.spyOn(Date, 'now');
+
+    // Send 4 calls in the first window
+    dateSpy.mockReturnValue(baseTime);
+    for (let i = 0; i < 4; i++) {
+      const payload = makePayload({
+        event: 'tool_use',
+        tool_name: 'Bash',
+        tool_input: 'gh pr view 42 --json state',
+      });
+      processEvent(payload, db, sse, sender);
+      resetThrottleState();
+    }
+
+    // Jump forward 11 minutes (past the 10-minute window)
+    dateSpy.mockReturnValue(baseTime + 11 * 60 * 1000);
+
+    // Send 4 more calls in the new window — should NOT trigger warning
+    for (let i = 0; i < 4; i++) {
+      const payload = makePayload({
+        event: 'tool_use',
+        tool_name: 'Bash',
+        tool_input: 'gh pr view 42 --json state',
+      });
+      processEvent(payload, db, sse, sender);
+      resetThrottleState();
+    }
+
+    const pollWarningCalls = sender.sendMessage.mock.calls.filter(
+      (call: unknown[]) => call[3] === 'poll_warning',
+    );
+    expect(pollWarningCalls).toHaveLength(0);
+
+    dateSpy.mockRestore();
+  });
+
+  it('only warns once per window', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const sender = createMockMessageSender();
+
+    // Send 10 calls — should only trigger one warning
+    for (let i = 0; i < 10; i++) {
+      const payload = makePayload({
+        event: 'tool_use',
+        tool_name: 'Bash',
+        tool_input: 'gh pr checks 42',
+      });
+      processEvent(payload, db, sse, sender);
+      resetThrottleState();
+    }
+
+    // Should have sent exactly 1 poll_warning
+    const pollWarningCalls = sender.sendMessage.mock.calls.filter(
+      (call: unknown[]) => call[3] === 'poll_warning',
+    );
+    expect(pollWarningCalls).toHaveLength(1);
   });
 });
