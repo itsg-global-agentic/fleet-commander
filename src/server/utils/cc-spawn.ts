@@ -85,6 +85,14 @@ export function buildEnv(fleetContext?: FleetEnvContext): SpawnEnv {
     env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS'] = undefined;
   }
 
+  // Explicitly set or clear the 1-hour prompt cache TTL flag so it is never
+  // accidentally inherited from the outer server process with a stale value.
+  if (config.promptCache1h) {
+    env['ENABLE_PROMPT_CACHING_1H'] = '1';
+  } else {
+    env['ENABLE_PROMPT_CACHING_1H'] = undefined;
+  }
+
   // Absolute path to the shared hooks.log file. Hook scripts read this env
   // var instead of computing a fragile relative path from their own location.
   env['FLEET_HOOK_LOG'] = config.hookLogPath;

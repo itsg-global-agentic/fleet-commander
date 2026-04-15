@@ -227,6 +227,7 @@ The SSE broker emits 18 event types:
 | `FLEET_CLAUDE_CMD` | `claude` | Claude Code CLI command |
 | `FLEET_SKIP_PERMISSIONS` | `true` | Skip CC permission prompts (`true`/`false`) |
 | `FLEET_ENABLE_AGENT_TEAMS` | `true` | Enable agent teams feature (`true`/`false`) |
+| `FLEET_PROMPT_CACHE_1H` | `true` | When `true`, set `ENABLE_PROMPT_CACHING_1H=1` on spawned CC processes for 1-hour prompt cache TTL. Set to `false` to use the default 5-minute TTL. |
 | `LOG_LEVEL` | `info` | Server log level |
 | `FLEET_GITHUB_POLL_MS` | `30000` | GitHub PR/CI/merge poll interval (ms) |
 | `FLEET_ISSUE_POLL_MS` | `300000` | Issue list poll interval (ms, default 5min) |

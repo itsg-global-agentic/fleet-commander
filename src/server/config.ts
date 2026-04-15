@@ -143,6 +143,7 @@ const config = Object.freeze({
   claudeCmd: process.env['FLEET_CLAUDE_CMD'] || 'claude',
   skipPermissions: process.env['FLEET_SKIP_PERMISSIONS'] !== 'false',
   enableAgentTeams: process.env['FLEET_ENABLE_AGENT_TEAMS'] !== 'false',
+  promptCache1h: process.env['FLEET_PROMPT_CACHE_1H'] !== 'false',
 
   dbPath: process.env['FLEET_DB_PATH'] || defaultDbPath(),
   hookLogPath: process.env['FLEET_HOOK_LOG'] || defaultHookLogPath(),

@@ -22,6 +22,7 @@ import { EventEmitter } from 'events';
 const mockConfig = vi.hoisted(() => ({
   skipPermissions: true,
   enableAgentTeams: true,
+  promptCache1h: true,
   terminalCmd: 'auto' as 'auto' | 'wt' | 'cmd',
   ccQueryModel: 'sonnet',
   ccQueryTimeoutMs: 30000,
@@ -131,6 +132,7 @@ describe('cc-spawn', () => {
     // Reset config to defaults
     mockConfig.skipPermissions = true;
     mockConfig.enableAgentTeams = true;
+    mockConfig.promptCache1h = true;
     mockConfig.terminalCmd = 'auto';
     mockConfig.ccQueryModel = 'sonnet';
     mockConfig.ccQueryTimeoutMs = 30000;
@@ -208,6 +210,20 @@ describe('cc-spawn', () => {
 
       expect(env['FLEET_PROJECT_ID']).toBe('99');
       expect(typeof env['FLEET_PROJECT_ID']).toBe('string');
+    });
+
+    it('includes ENABLE_PROMPT_CACHING_1H when promptCache1h is true', () => {
+      mockConfig.promptCache1h = true;
+      const env = buildEnv(makeFleetContext());
+
+      expect(env['ENABLE_PROMPT_CACHING_1H']).toBe('1');
+    });
+
+    it('sets ENABLE_PROMPT_CACHING_1H to undefined when promptCache1h is false', () => {
+      mockConfig.promptCache1h = false;
+      const env = buildEnv(makeFleetContext());
+
+      expect(env['ENABLE_PROMPT_CACHING_1H']).toBeUndefined();
     });
   });
 
