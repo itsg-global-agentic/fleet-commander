@@ -313,6 +313,57 @@ if [ "$REMOVED_COUNT" -gt 0 ]; then
   echo "  Removed $REMOVED_COUNT retired agent templates"
 fi
 
+# ── 7. Ensure FC-managed files are in .gitignore ────────────────
+# These paths must match getGitignoreEntries() in src/server/utils/fc-manifest.ts.
+# Explicit file paths only — no globs, no directory-level entries.
+FC_GITIGNORE_ENTRIES=(
+  ".claude/agents/fleet-dev.md"
+  ".claude/agents/fleet-planner.md"
+  ".claude/agents/fleet-reviewer.md"
+  ".claude/settings.json"
+  ".claude/prompts/fleet-workflow.md"
+  ".claude/scheduled_tasks.lock"
+  "changes.md"
+  "review.md"
+  "plan.md"
+  ".fleet-issue-context.md"
+  ".fleet-pm-message"
+)
+
+GITIGNORE="$TARGET/.gitignore"
+GITIGNORE_CONTENT=""
+if [ -f "$GITIGNORE" ]; then
+  # Normalize CRLF to LF for reliable matching
+  GITIGNORE_CONTENT=$(tr -d '\r' < "$GITIGNORE")
+fi
+
+MISSING_ENTRIES=()
+for ENTRY in "${FC_GITIGNORE_ENTRIES[@]}"; do
+  # Check if the entry already exists as a standalone line (trimmed)
+  if ! echo "$GITIGNORE_CONTENT" | grep -qxF "$ENTRY"; then
+    MISSING_ENTRIES+=("$ENTRY")
+  fi
+done
+
+if [ "${#MISSING_ENTRIES[@]}" -gt 0 ]; then
+  # Ensure trailing newline before appending
+  if [ -n "$GITIGNORE_CONTENT" ] && [ "${GITIGNORE_CONTENT: -1}" != $'\n' ]; then
+    APPEND=$'\n'
+  else
+    APPEND=""
+  fi
+  APPEND+=$'\n'"# Fleet Commander managed files"
+  for ENTRY in "${MISSING_ENTRIES[@]}"; do
+    APPEND+=$'\n'"$ENTRY"
+  done
+  APPEND+=$'\n'
+  # Write with LF line endings only
+  printf '%s%s' "$GITIGNORE_CONTENT" "$APPEND" > "$GITIGNORE"
+  echo "  Added ${#MISSING_ENTRIES[@]} entries to .gitignore"
+else
+  echo "  .gitignore already contains all FC entries"
+fi
+
 # ── Done ──────────────────────────────────────────────────────────
 echo ""
 echo "Fleet Commander installed successfully!"

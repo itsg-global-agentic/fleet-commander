@@ -81,6 +81,33 @@ export function getHookEventTypes(): string[] {
   }
 }
 
+/**
+ * Get the explicit .gitignore entries for FC-managed files that should never
+ * be committed to target repos. These are files created/modified at install
+ * time or at team runtime that would otherwise pollute `git status`.
+ *
+ * Returns path strings exactly as they should appear in .gitignore (forward
+ * slashes, no globs, no directory-level entries).
+ *
+ * NOTE: If you add a new FC-managed runtime file, add it here AND in
+ * scripts/install.sh step 7 (bash cannot call this function).
+ */
+export function getGitignoreEntries(): string[] {
+  return [
+    '.claude/agents/fleet-dev.md',
+    '.claude/agents/fleet-planner.md',
+    '.claude/agents/fleet-reviewer.md',
+    '.claude/settings.json',
+    '.claude/prompts/fleet-workflow.md',
+    '.claude/scheduled_tasks.lock',
+    'changes.md',
+    'review.md',
+    'plan.md',
+    '.fleet-issue-context.md',
+    '.fleet-pm-message',
+  ];
+}
+
 /** Aggregated manifest of all FC-managed files. */
 export interface FCManifest {
   /** Hook script filenames (e.g. 'on_session_start.sh') */
@@ -93,6 +120,8 @@ export interface FCManifest {
   workflow: string;
   /** Settings example filename (always 'settings.json.example') */
   settingsExample: string;
+  /** Explicit .gitignore entries for FC-managed files */
+  gitignoreEntries: string[];
 }
 
 /**
@@ -107,5 +136,6 @@ export function getAllManagedFiles(): FCManifest {
     guides: getGuideFiles(),
     workflow: getWorkflowFile(),
     settingsExample: getSettingsExampleFile(),
+    gitignoreEntries: getGitignoreEntries(),
   };
 }

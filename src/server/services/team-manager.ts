@@ -24,7 +24,7 @@ import { sanitizeIssueKeyForPath } from '../../shared/issue-provider.js';
 import { isUsageBlocked } from './usage-tracker.js';
 import { resolveMessage } from '../utils/resolve-message.js';
 import { CircularBuffer } from '../utils/circular-buffer.js';
-import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile } from '../utils/fc-manifest.js';
+import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile, getGitignoreEntries } from '../utils/fc-manifest.js';
 import { classifyAgentRole, shouldAdvancePhase } from './event-collector.js';
 import type { TeamPhase } from '../../shared/types.js';
 import { isValidGithubRepo } from '../utils/exec-gh.js';
@@ -1993,20 +1993,20 @@ export class TeamManager {
       fs.copyFileSync(workflowSrc, workflowDest);
     }
 
-    // ── 6. Ensure plan.md and review.md are gitignored ──
+    // ── 6. Ensure FC-managed files are gitignored ──
     const gitignorePath = path.join(worktreeAbsPath, '.gitignore');
     let gitignoreContent = '';
     if (fs.existsSync(gitignorePath)) {
       gitignoreContent = fs.readFileSync(gitignorePath, 'utf-8');
     }
-    const lines = gitignoreContent.split('\n').map(l => l.trim());
-    const toAdd: string[] = [];
-    if (!lines.includes('plan.md')) toAdd.push('plan.md');
-    if (!lines.includes('review.md')) toAdd.push('review.md');
-    if (!lines.includes('.fleet-issue-context.md')) toAdd.push('.fleet-issue-context.md');
+    // Normalize CRLF to LF for reliable matching
+    const normalizedContent = gitignoreContent.replace(/\r\n/g, '\n');
+    const lines = normalizedContent.split('\n').map(l => l.trim());
+    const toAdd = getGitignoreEntries().filter(entry => !lines.includes(entry));
     if (toAdd.length > 0) {
-      const suffix = gitignoreContent.length > 0 && !gitignoreContent.endsWith('\n') ? '\n' : '';
-      fs.writeFileSync(gitignorePath, gitignoreContent + suffix + toAdd.join('\n') + '\n', 'utf-8');
+      const suffix = normalizedContent.length > 0 && !normalizedContent.endsWith('\n') ? '\n' : '';
+      const block = '\n# Fleet Commander managed files\n' + toAdd.join('\n') + '\n';
+      fs.writeFileSync(gitignorePath, normalizedContent + suffix + block, 'utf-8');
     }
 
     console.log(`[TeamManager] FC files copied to worktree (hooks, settings, agents, guides, prompt)`);

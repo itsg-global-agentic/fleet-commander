@@ -145,6 +145,19 @@ vi.mock('../../src/server/utils/fc-manifest.js', () => ({
   getAgentFiles: vi.fn().mockReturnValue([]),
   getGuideFiles: vi.fn().mockReturnValue([]),
   getWorkflowFile: vi.fn().mockReturnValue(null),
+  getGitignoreEntries: vi.fn().mockReturnValue([
+    '.claude/agents/fleet-dev.md',
+    '.claude/agents/fleet-planner.md',
+    '.claude/agents/fleet-reviewer.md',
+    '.claude/settings.json',
+    '.claude/prompts/fleet-workflow.md',
+    '.claude/scheduled_tasks.lock',
+    'changes.md',
+    'review.md',
+    'plan.md',
+    '.fleet-issue-context.md',
+    '.fleet-pm-message',
+  ]),
 }));
 
 // Mock event-collector
@@ -349,8 +362,7 @@ describe('TeamManager.copyFCFiles gitignore', () => {
     tm = new TeamManager();
   });
 
-  it('should add .fleet-issue-context.md to gitignore', () => {
-    // Simulate an empty gitignore
+  it('should add all FC-managed entries to gitignore', () => {
     mockFs.existsSync.mockImplementation((p: string) => {
       if (typeof p === 'string' && p.includes('.gitignore')) return true;
       return false;
@@ -359,23 +371,48 @@ describe('TeamManager.copyFCFiles gitignore', () => {
 
     (tm as any).copyFCFiles('/tmp/worktree');
 
-    // Find the writeFileSync call that writes the .gitignore
     const gitignoreCall = mockFs.writeFileSync.mock.calls.find(
       (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('.gitignore'),
     );
     expect(gitignoreCall).toBeDefined();
     const writtenContent = gitignoreCall![1] as string;
-    expect(writtenContent).toContain('.fleet-issue-context.md');
-    expect(writtenContent).toContain('plan.md');
+    // Verify all entries from getGitignoreEntries() are present
+    expect(writtenContent).toContain('.claude/agents/fleet-dev.md');
+    expect(writtenContent).toContain('.claude/agents/fleet-planner.md');
+    expect(writtenContent).toContain('.claude/agents/fleet-reviewer.md');
+    expect(writtenContent).toContain('.claude/settings.json');
+    expect(writtenContent).toContain('.claude/prompts/fleet-workflow.md');
+    expect(writtenContent).toContain('.claude/scheduled_tasks.lock');
+    expect(writtenContent).toContain('changes.md');
     expect(writtenContent).toContain('review.md');
+    expect(writtenContent).toContain('plan.md');
+    expect(writtenContent).toContain('.fleet-issue-context.md');
+    expect(writtenContent).toContain('.fleet-pm-message');
+    // Verify the header comment is present
+    expect(writtenContent).toContain('# Fleet Commander managed files');
+    // Verify existing content is preserved
+    expect(writtenContent).toContain('node_modules');
   });
 
-  it('should not duplicate .fleet-issue-context.md if already in gitignore', () => {
+  it('should not duplicate entries if all already present in gitignore', () => {
     mockFs.existsSync.mockImplementation((p: string) => {
       if (typeof p === 'string' && p.includes('.gitignore')) return true;
       return false;
     });
-    mockFs.readFileSync.mockReturnValue('plan.md\nreview.md\n.fleet-issue-context.md\n');
+    // All 11 entries already present
+    mockFs.readFileSync.mockReturnValue(
+      '.claude/agents/fleet-dev.md\n' +
+      '.claude/agents/fleet-planner.md\n' +
+      '.claude/agents/fleet-reviewer.md\n' +
+      '.claude/settings.json\n' +
+      '.claude/prompts/fleet-workflow.md\n' +
+      '.claude/scheduled_tasks.lock\n' +
+      'changes.md\n' +
+      'review.md\n' +
+      'plan.md\n' +
+      '.fleet-issue-context.md\n' +
+      '.fleet-pm-message\n',
+    );
 
     (tm as any).copyFCFiles('/tmp/worktree');
 
@@ -384,5 +421,50 @@ describe('TeamManager.copyFCFiles gitignore', () => {
       (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('.gitignore'),
     );
     expect(gitignoreCall).toBeUndefined();
+  });
+
+  it('should only add missing entries when some already exist', () => {
+    mockFs.existsSync.mockImplementation((p: string) => {
+      if (typeof p === 'string' && p.includes('.gitignore')) return true;
+      return false;
+    });
+    // Only plan.md and review.md already present
+    mockFs.readFileSync.mockReturnValue('plan.md\nreview.md\n');
+
+    (tm as any).copyFCFiles('/tmp/worktree');
+
+    const gitignoreCall = mockFs.writeFileSync.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('.gitignore'),
+    );
+    expect(gitignoreCall).toBeDefined();
+    const writtenContent = gitignoreCall![1] as string;
+    // The new entries should be present
+    expect(writtenContent).toContain('.claude/agents/fleet-dev.md');
+    expect(writtenContent).toContain('.fleet-pm-message');
+    // But the full content should only have one instance of plan.md and review.md
+    const planCount = (writtenContent.match(/^plan\.md$/gm) || []).length;
+    expect(planCount).toBe(1);
+  });
+
+  it('should handle CRLF line endings in existing gitignore', () => {
+    mockFs.existsSync.mockImplementation((p: string) => {
+      if (typeof p === 'string' && p.includes('.gitignore')) return true;
+      return false;
+    });
+    // CRLF line endings with plan.md already present
+    mockFs.readFileSync.mockReturnValue('node_modules\r\nplan.md\r\n');
+
+    (tm as any).copyFCFiles('/tmp/worktree');
+
+    const gitignoreCall = mockFs.writeFileSync.mock.calls.find(
+      (call: unknown[]) => typeof call[0] === 'string' && (call[0] as string).includes('.gitignore'),
+    );
+    expect(gitignoreCall).toBeDefined();
+    const writtenContent = gitignoreCall![1] as string;
+    // Should not duplicate plan.md
+    const planCount = (writtenContent.match(/plan\.md/g) || []).length;
+    expect(planCount).toBe(1);
+    // Output should use LF only (no CRLF)
+    expect(writtenContent).not.toContain('\r');
   });
 });

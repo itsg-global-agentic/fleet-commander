@@ -10,6 +10,7 @@ import {
   getWorkflowFile,
   getSettingsExampleFile,
   getHookEventTypes,
+  getGitignoreEntries,
   getAllManagedFiles,
 } from '../../src/server/utils/fc-manifest.js';
 
@@ -124,6 +125,57 @@ describe('getHookEventTypes', () => {
 });
 
 // ---------------------------------------------------------------------------
+// getGitignoreEntries
+// ---------------------------------------------------------------------------
+
+describe('getGitignoreEntries', () => {
+  it('returns a non-empty array of path strings', () => {
+    const entries = getGitignoreEntries();
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) {
+      expect(typeof entry).toBe('string');
+      expect(entry.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('contains all 8 issue-specified paths', () => {
+    const entries = getGitignoreEntries();
+    // Paths from the issue acceptance criteria
+    expect(entries).toContain('.claude/agents/fleet-dev.md');
+    expect(entries).toContain('.claude/agents/fleet-planner.md');
+    expect(entries).toContain('.claude/agents/fleet-reviewer.md');
+    expect(entries).toContain('.claude/settings.json');
+    expect(entries).toContain('.claude/prompts/fleet-workflow.md');
+    expect(entries).toContain('.claude/scheduled_tasks.lock');
+    expect(entries).toContain('changes.md');
+    expect(entries).toContain('review.md');
+  });
+
+  it('contains worktree scratch files', () => {
+    const entries = getGitignoreEntries();
+    expect(entries).toContain('plan.md');
+    expect(entries).toContain('.fleet-issue-context.md');
+    expect(entries).toContain('.fleet-pm-message');
+  });
+
+  it('uses forward slashes only (no backslashes)', () => {
+    const entries = getGitignoreEntries();
+    for (const entry of entries) {
+      expect(entry).not.toContain('\\');
+    }
+  });
+
+  it('contains no glob or directory-level entries', () => {
+    const entries = getGitignoreEntries();
+    for (const entry of entries) {
+      expect(entry).not.toContain('*');
+      expect(entry).not.toContain('?');
+      expect(entry).not.toMatch(/\/$/);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // getAllManagedFiles
 // ---------------------------------------------------------------------------
 
@@ -135,6 +187,7 @@ describe('getAllManagedFiles', () => {
     expect(manifest.guides.length).toBeGreaterThan(0);
     expect(manifest.workflow).toBe('fleet-workflow.md');
     expect(manifest.settingsExample).toBe('settings.json.example');
+    expect(manifest.gitignoreEntries.length).toBeGreaterThan(0);
   });
 
   it('hooks match getHookFiles()', () => {
@@ -150,5 +203,10 @@ describe('getAllManagedFiles', () => {
   it('guides match getGuideFiles()', () => {
     const manifest = getAllManagedFiles();
     expect(manifest.guides).toEqual(getGuideFiles());
+  });
+
+  it('gitignoreEntries match getGitignoreEntries()', () => {
+    const manifest = getAllManagedFiles();
+    expect(manifest.gitignoreEntries).toEqual(getGitignoreEntries());
   });
 });
