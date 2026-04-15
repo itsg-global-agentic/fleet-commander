@@ -162,6 +162,14 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
     placeholders: ['PR_NUMBER'],
   },
   {
+    id: 'verification_required',
+    template:
+      'Verification required: your shutdown reason claims PR #{{PR_NUMBER}} was merged, but GitHub reports state={{PR_STATE}}. Re-check with `gh pr view {{PR_NUMBER}} --json state,mergeStateStatus,autoMergeRequest` and either merge it for real (a force-push may have dropped pending auto-merge) or correct your shutdown reason. Do not exit until this is resolved.',
+    description:
+      'Sent to TL when FC rejects a done transition because the shutdown reason claims merge but the PR is still open on GitHub',
+    placeholders: ['PR_NUMBER', 'PR_STATE'],
+  },
+  {
     id: 'poll_warning',
     template:
       'Stop polling GitHub with gh pr view / gh pr checks. FC monitors CI and PR status automatically and will notify you via stdin (ci_green, ci_red, pr_merged). Wait for these events instead of polling.',

@@ -335,11 +335,19 @@ After TL reads `review.md` with `Status: APPROVE`:
    - `pr_merged` → state Done → close issue, shut down agents
    FC already polls GitHub every 30s. If you also poll, you burn tokens on redundant `gh` calls.
 
+5. **Force-push re-verification (MANDATORY)**: Any time you run `git push --force-with-lease` on the PR branch (e.g. after a `branch_behind` rebase), **GitHub silently drops the pending auto-merge** because the head SHA changed. Before returning to wait-mode you MUST:
+   ```bash
+   gh pr view {PR} --json state,mergeStateStatus,autoMergeRequest,statusCheckRollup
+   ```
+   - If `autoMergeRequest` is `null` → **re-arm** with `gh pr merge {PR} --auto --squash --delete-branch`.
+   - Only flip **Phase 3: Create PR and merge** to `completed` when `state == MERGED` **or** (CI passing AND `autoMergeRequest != null` AND `mergeStateStatus != BLOCKED`). Never flip it to `completed` purely from memory ("I enabled auto-merge earlier").
+   ⚠️ **Anti-pattern — DO NOT**: declare the PR merged from memory. Force-push invalidates auto-merge. Every force-push requires one `gh pr view` round-trip before you trust the merge decision. FC will reject a `done` transition whose shutdown reason claims merge while the PR is still open on GitHub.
+
 ---
 
 ## Phase 5 — Done
 
-0. **TodoWrite "Phase 3: Create PR and merge"** — status: `completed`.
+0. **TodoWrite "Phase 3: Create PR and merge"** — status: `completed` — only if `gh pr view` confirms `state == MERGED` or auto-merge is armed and not blocked (see Phase 4 step 5).
 1. Close issue: `gh issue close {N} --comment "Closed. PR #{PR} merged."`
 2. **Explicit shutdown sequence** (MANDATORY):
    a. Run `TaskList` to identify all active subagents.

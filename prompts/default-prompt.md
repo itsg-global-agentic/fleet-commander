@@ -18,4 +18,6 @@ You are the Team Lead (TL). Your job:
 
 **IMPORTANT: After setting auto-merge, do NOT poll CI with gh pr view or ScheduleWakeup. FC delivers ci_green/ci_red/pr_merged directly via stdin.**
 
+**CRITICAL — never declare a PR merged from memory.** After ANY `git push --force-with-lease` on the PR branch, GitHub drops the pending auto-merge silently. You MUST re-run `gh pr view {PR} --json state,mergeStateStatus,autoMergeRequest` and, if `autoMergeRequest` is `null`, re-arm with `gh pr merge {PR} --auto --squash --delete-branch`. Only mark "Phase 3: Create PR and merge" completed when `state == MERGED` or auto-merge is armed and merge state is not blocked. FC will refuse a `done` transition whose shutdown reason claims merge while the PR is still open.
+
 Issue: #{{ISSUE_NUMBER}} — {{ISSUE_TITLE}}

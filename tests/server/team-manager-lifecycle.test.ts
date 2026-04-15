@@ -80,10 +80,12 @@ vi.mock('../../src/server/services/issue-fetcher.js', () => ({
   detectCircularDependencies: vi.fn().mockReturnValue(null),
 }));
 
+const mockGithubPoller = vi.hoisted(() => ({
+  trackBlockedIssue: vi.fn(),
+  reconcilePR: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('../../src/server/services/github-poller.js', () => ({
-  githubPoller: {
-    trackBlockedIssue: vi.fn(),
-  },
+  githubPoller: mockGithubPoller,
 }));
 
 vi.mock('../../src/server/services/issue-context-generator.js', () => ({
@@ -456,25 +458,45 @@ describe('TeamManager.sendMessage', () => {
 describe('TeamManager.attachProcessHandlers (exit)', () => {
   let tm: TeamManager;
 
+  // Flush the async exit-handler microtasks AND the dynamic `import()` for
+  // github-poller. handleProcessExit() awaits one dynamic import + one
+  // reconcilePR() call, so we need a few ticks of setImmediate to let them
+  // resolve before asserting DB state.
+  async function flushExit(): Promise<void> {
+    for (let i = 0; i < 5; i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+
+  function setupTeamMaps(teamId: number, child: ReturnType<typeof createMockChildProcess>): void {
+    (tm as any).childProcesses.set(teamId, child);
+    (tm as any).outputBuffers.set(teamId, new CircularBuffer<string>(500));
+    (tm as any).parsedEvents.set(teamId, new CircularBuffer<unknown>(1000));
+    (tm as any).tokenCounters.set(teamId, {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheCreationTokens: 0,
+      cacheReadTokens: 0,
+      costUsd: 0,
+    });
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
+    mockGithubPoller.reconcilePR.mockResolvedValue(undefined);
     tm = new TeamManager();
   });
 
-  it('marks team done on exit code 0', () => {
+  it('marks team done on exit code 0 (no PR)', async () => {
     const child = createMockChildProcess();
-    const team = makeTeam({ id: 1, status: 'running' });
-
-    (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
-    (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
+    const team = makeTeam({ id: 1, status: 'running', prNumber: null });
+    setupTeamMaps(1, child);
 
     mockDb.getTeam.mockReturnValue(team);
 
     (tm as any).attachProcessHandlers(1, child);
-
     child.emit('exit', 0, null);
+    await flushExit();
 
     expect(mockDb.insertTransition).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -489,22 +511,20 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
       1,
       expect.objectContaining({ status: 'done', pid: null }),
     );
+    // No PR → no forced reconcile
+    expect(mockGithubPoller.reconcilePR).not.toHaveBeenCalled();
   });
 
-  it('marks team failed on non-zero exit code', () => {
+  it('marks team failed on non-zero exit code', async () => {
     const child = createMockChildProcess();
     const team = makeTeam({ id: 1, status: 'running' });
-
-    (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
-    (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
+    setupTeamMaps(1, child);
 
     mockDb.getTeam.mockReturnValue(team);
 
     (tm as any).attachProcessHandlers(1, child);
-
     child.emit('exit', 1, null);
+    await flushExit();
 
     expect(mockDb.insertTransition).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -519,22 +539,20 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
       1,
       expect.objectContaining({ status: 'failed', pid: null }),
     );
+    // Non-zero exit skips forced reconcile entirely
+    expect(mockGithubPoller.reconcilePR).not.toHaveBeenCalled();
   });
 
-  it('includes signal in reason when process exits with signal', () => {
+  it('includes signal in reason when process exits with signal', async () => {
     const child = createMockChildProcess();
     const team = makeTeam({ id: 1, status: 'running' });
-
-    (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
-    (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
+    setupTeamMaps(1, child);
 
     mockDb.getTeam.mockReturnValue(team);
 
     (tm as any).attachProcessHandlers(1, child);
-
     child.emit('exit', null, 'SIGTERM');
+    await flushExit();
 
     expect(mockDb.insertTransition).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -546,38 +564,30 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
     );
   });
 
-  it('does nothing when team is already done or failed', () => {
+  it('does nothing when team is already done or failed', async () => {
     const child = createMockChildProcess();
     const team = makeTeam({ id: 1, status: 'done' });
-
-    (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
-    (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
+    setupTeamMaps(1, child);
 
     mockDb.getTeam.mockReturnValue(team);
 
     (tm as any).attachProcessHandlers(1, child);
-
     child.emit('exit', 0, null);
+    await flushExit();
 
     expect(mockDb.insertTransition).not.toHaveBeenCalled();
   });
 
-  it('broadcasts team_stopped on process exit', () => {
+  it('broadcasts team_stopped on clean process exit with no PR', async () => {
     const child = createMockChildProcess();
-    const team = makeTeam({ id: 1, status: 'running' });
-
-    (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
-    (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
+    const team = makeTeam({ id: 1, status: 'running', prNumber: null });
+    setupTeamMaps(1, child);
 
     mockDb.getTeam.mockReturnValue(team);
 
     (tm as any).attachProcessHandlers(1, child);
-
     child.emit('exit', 0, null);
+    await flushExit();
 
     expect(mockSseBroker.broadcast).toHaveBeenCalledWith(
       'team_stopped',
@@ -586,19 +596,269 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
     );
   });
 
-  it('does not throw when team not found in DB on exit', () => {
+  it('does not throw when team not found in DB on exit', async () => {
     const child = createMockChildProcess();
-
-    (tm as any).childProcesses.set(1, child);
-    (tm as any).outputBuffers.set(1, new CircularBuffer<string>(500));
-    (tm as any).parsedEvents.set(1, new CircularBuffer<unknown>(1000));
-    (tm as any).tokenCounters.set(1, { inputTokens: 0, outputTokens: 0, cacheCreationTokens: 0, cacheReadTokens: 0, costUsd: 0 });
+    setupTeamMaps(1, child);
 
     mockDb.getTeam.mockReturnValue(undefined);
 
     (tm as any).attachProcessHandlers(1, child);
 
     expect(() => child.emit('exit', 0, null)).not.toThrow();
+    await flushExit();
+  });
+
+  // =========================================================================
+  // Issue #701 — merge-claim cross-check
+  // =========================================================================
+
+  it('rejects done transition when TL claims merge but PR is still open', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: 42 });
+    setupTeamMaps(1, child);
+
+    // Inject a fake assistant event claiming the PR was merged into
+    // parsedEvents BEFORE emitting exit. handleProcessExit snapshots the
+    // buffer before purgeTeamMaps clears it.
+    const events = (tm as any).parsedEvents.get(1) as CircularBuffer<any>;
+    events.push({
+      type: 'assistant',
+      agentName: 'team-lead',
+      message: {
+        content: [
+          { type: 'text', text: 'PR #42 merged, issue #10 closed. Team done.' },
+        ],
+      },
+    });
+
+    // Stdin pipe so verification_required delivery attempt is exercised.
+    const mockStdin = createMockStdin();
+    (tm as any).stdinPipes.set(1, mockStdin);
+
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      teamId: 1,
+      title: null,
+      state: 'open',
+      mergeStatus: 'blocked_ci_pending',
+      ciStatus: 'pending',
+      ciFailCount: 0,
+      checksJson: null,
+      autoMerge: false,
+      mergedAt: null,
+      baseRefName: 'main',
+      updatedAt: new Date().toISOString(),
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    // Forced reconcile MUST have been awaited before the decision
+    expect(mockGithubPoller.reconcilePR).toHaveBeenCalledWith(1);
+    expect(mockDb.getPullRequest).toHaveBeenCalledWith(42);
+
+    // Transition recorded with from==to==running (stay put)
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'running',
+        toStatus: 'running',
+        trigger: 'system',
+        reason: expect.stringContaining('Done transition rejected'),
+      }),
+    );
+    // pid cleared so PM can see the anomaly
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(1, { pid: null });
+    // Critically: team was NOT marked done
+    expect(mockDb.updateTeamSilent).not.toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'done' }),
+    );
+    // team_stopped NOT broadcast (slot still occupied)
+    expect(mockSseBroker.broadcast).not.toHaveBeenCalledWith(
+      'team_stopped',
+      expect.anything(),
+      expect.anything(),
+    );
+    // Warning logged with both the TL claim and the poller truth
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('REJECTING done transition'),
+    );
+    expect(warnSpy.mock.calls[0]![0]).toContain('PR #42');
+    expect(warnSpy.mock.calls[0]![0]).toContain('state=open');
+
+    warnSpy.mockRestore();
+  });
+
+  it('accepts done transition with stale poller data (reconcile lag)', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: 43 });
+    setupTeamMaps(1, child);
+
+    // Clean shutdown — no merge language in the TL text
+    const events = (tm as any).parsedEvents.get(1) as CircularBuffer<any>;
+    events.push({
+      type: 'assistant',
+      agentName: 'team-lead',
+      message: {
+        content: [
+          { type: 'text', text: 'All phases complete. Shutting down.' },
+        ],
+      },
+    });
+
+    mockDb.getTeam.mockReturnValue(team);
+
+    // Simulate reconcilePR refreshing the PR row. Before reconcile: no row;
+    // after reconcile: state=merged. We flip the mock during the call.
+    mockDb.getPullRequest.mockReturnValueOnce(undefined);
+    mockGithubPoller.reconcilePR.mockImplementation(async () => {
+      // Stale poller caught up — PR row is now "merged"
+      mockDb.getPullRequest.mockReturnValue({
+        prNumber: 43,
+        teamId: 1,
+        title: null,
+        state: 'merged',
+        mergeStatus: 'clean',
+        ciStatus: 'passing',
+        ciFailCount: 0,
+        checksJson: null,
+        autoMerge: true,
+        mergedAt: new Date().toISOString(),
+        baseRefName: 'main',
+        updatedAt: new Date().toISOString(),
+      });
+    });
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    // Forced reconcile ran
+    expect(mockGithubPoller.reconcilePR).toHaveBeenCalledWith(1);
+
+    // Team transitioned to done
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'running',
+        toStatus: 'done',
+        trigger: 'system',
+      }),
+    );
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'done', pid: null }),
+    );
+    expect(mockSseBroker.broadcast).toHaveBeenCalledWith(
+      'team_stopped',
+      { team_id: 1 },
+      1,
+    );
+  });
+
+  it('accepts done transition on happy path (PR merged + matching reason)', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: 44 });
+    setupTeamMaps(1, child);
+
+    const events = (tm as any).parsedEvents.get(1) as CircularBuffer<any>;
+    events.push({
+      type: 'assistant',
+      agentName: 'team-lead',
+      message: {
+        content: [
+          { type: 'text', text: 'PR #44 merged. Closing issue and exiting.' },
+        ],
+      },
+    });
+
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 44,
+      teamId: 1,
+      title: null,
+      state: 'merged',
+      mergeStatus: 'clean',
+      ciStatus: 'passing',
+      ciFailCount: 0,
+      checksJson: null,
+      autoMerge: true,
+      mergedAt: new Date().toISOString(),
+      baseRefName: 'main',
+      updatedAt: new Date().toISOString(),
+    });
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    // Forced reconcile ran
+    expect(mockGithubPoller.reconcilePR).toHaveBeenCalledWith(1);
+
+    // Transitioned to done normally
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'running',
+        toStatus: 'done',
+      }),
+    );
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'done', pid: null }),
+    );
+    expect(mockSseBroker.broadcast).toHaveBeenCalledWith(
+      'team_stopped',
+      { team_id: 1 },
+      1,
+    );
+  });
+
+  it('accepts done transition when PR is open but reason has no merge claim', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: 45 });
+    setupTeamMaps(1, child);
+
+    // PM-triggered manual stop, no merge language
+    const events = (tm as any).parsedEvents.get(1) as CircularBuffer<any>;
+    events.push({
+      type: 'assistant',
+      agentName: 'team-lead',
+      message: {
+        content: [{ type: 'text', text: 'Stopping per PM request. Goodbye.' }],
+      },
+    });
+
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 45,
+      teamId: 1,
+      title: null,
+      state: 'open',
+      mergeStatus: 'clean',
+      ciStatus: 'passing',
+      ciFailCount: 0,
+      checksJson: null,
+      autoMerge: false,
+      mergedAt: null,
+      baseRefName: 'main',
+      updatedAt: new Date().toISOString(),
+    });
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    // Accepted
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'done' }),
+    );
   });
 });
 

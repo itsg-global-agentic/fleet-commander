@@ -118,8 +118,22 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     to: 'done',
     trigger: 'hook',
     triggerLabel: 'Session ends successfully',
-    description: 'Claude Code session completes normally with exit code 0',
-    condition: 'Process exits with code 0 or session_end event',
+    description:
+      'Claude Code session completes normally with exit code 0. FC forces a final github-poller reconciliation before committing the done transition so stale ci/merge state is refreshed (see issue #701 / #686).',
+    condition:
+      'Process exits with code 0 AND (team has no PR OR forced reconcile shows PR state = merged OR shutdown reason contains no merge claim)',
+    hookEvent: 'session_end',
+  },
+  {
+    id: 'running-done-rejected',
+    from: 'running',
+    to: 'running',
+    trigger: 'system',
+    triggerLabel: 'Done rejected — bogus merge claim',
+    description:
+      'Process exited with code 0 and the TL\'s shutdown reason or last assistant message claimed the PR was merged, but the final forced github-poller reconcile shows the PR is still OPEN on GitHub. FC refuses the done transition, sends a verification_required message to the TL via stdin, and logs a warning. Typical cause: force-push after enabling auto-merge silently dropped the pending auto-merge and the TL declared merge success from memory without re-verifying (see issue #701).',
+    condition:
+      'Process exit code 0 AND shutdown reason claims merge AND forced reconcile shows PR state = open',
     hookEvent: 'session_end',
   },
   {

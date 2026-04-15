@@ -43,6 +43,69 @@ const MAX_PARSED_EVENTS = 1000;
 // summarizeEvent — short text summary for console logging
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Merge-claim detection (Issue #701)
+// ---------------------------------------------------------------------------
+// When the TL's process exits with code 0, FC performs a final github-poller
+// reconcile before committing the `done` transition. If the TL's last
+// utterances claim the PR was merged but the forced reconcile shows the PR is
+// still OPEN, FC rejects the transition (see state-machine.ts
+// `running-done-rejected`).
+
+const MERGE_CLAIM_PATTERNS: RegExp[] = [
+  /\bmerged\b/i,
+  /\bmerge(d|s)?\s+(the\s+)?pr\b/i,
+  /\bpr\s*#?\d+\s+merged\b/i,
+  /\bzmergowan/i, // Polish: "zmergowany" / "zmergowana"
+  /\bzamerged\b/i,
+  /\bcloses\s+#\d+\b/i,
+  /\bauto[-\s]?merged\b/i,
+  /\bshipped\b/i,
+];
+
+/** Returns true if the text contains language claiming the PR was merged. */
+export function containsMergeClaim(text: string | null | undefined): boolean {
+  if (!text) return false;
+  return MERGE_CLAIM_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * Extract the concatenated text of recent team-lead assistant messages from a
+ * parsed-event buffer. Used to inspect the TL's "shutdown reason" during the
+ * final done-transition cross-check. Walks the last `lookback` events and
+ * collects plain text from assistant content blocks attributed to team-lead.
+ */
+export function extractRecentTlText(
+  events: StreamEvent[] | undefined,
+  lookback = 30,
+): string {
+  if (!events || events.length === 0) return '';
+  const chunks: string[] = [];
+  const start = Math.max(0, events.length - lookback);
+  for (let i = start; i < events.length; i++) {
+    const ev = events[i];
+    if (!ev) continue;
+    if (ev.type !== 'assistant' && ev.type !== 'user' && ev.type !== 'fc') continue;
+    const agent = (ev as Record<string, unknown>).agentName as string | undefined;
+    if (agent && agent !== 'team-lead' && agent !== '__pm__' && agent !== '__fc__') continue;
+    const message = (ev as Record<string, unknown>).message as
+      | { content?: unknown }
+      | undefined;
+    const content = message?.content;
+    if (typeof content === 'string') {
+      chunks.push(content);
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (block && typeof block === 'object' && (block as { type?: string }).type === 'text') {
+          const text = (block as { text?: unknown }).text;
+          if (typeof text === 'string') chunks.push(text);
+        }
+      }
+    }
+  }
+  return chunks.join('\n');
+}
+
 function summarizeEvent(event: StreamEvent): string {
   switch (event.type) {
     case 'assistant': {
@@ -1742,6 +1805,163 @@ export class TeamManager {
   }
 
   /**
+   * Post-exit transition logic (issue #701). Separated from the synchronous
+   * `on('exit')` handler so we can await a forced github-poller reconcile
+   * before committing the `done` state. This fixes two bugs:
+   *
+   *   1. **Bogus merge claims** — a TL can exit with code 0 after declaring
+   *      the PR merged from memory (e.g. after a force-push dropped the
+   *      pending auto-merge). Without cross-checking GitHub, FC used to
+   *      flip the team to `done` and leave the PR orphaned. Now we force
+   *      one final reconcile and reject the transition if the TL's recent
+   *      text claims merge while GitHub still reports `open`.
+   *   2. **Reconcile lag** — a team exiting cleanly immediately after a
+   *      genuine merge could be marked `done` ~30s before the next natural
+   *      poll tick updated the PR row. The forced reconcile here refreshes
+   *      `pr_state`, `merge_status`, `ci_status`, and `merged_at` before
+   *      the transition commits (see issue #686).
+   *
+   * @param teamId The team whose process just exited.
+   * @param code The process exit code (0 = normal, non-zero = failure).
+   * @param signal The signal that killed the process, if any.
+   * @param tlTextSnapshot Concatenated recent team-lead assistant text,
+   *   captured before purgeTeamMaps cleared the parsed-event buffer.
+   */
+  private async handleProcessExit(
+    teamId: number,
+    code: number | null,
+    signal: NodeJS.Signals | null,
+    tlTextSnapshot: string,
+  ): Promise<void> {
+    const db = getDatabase();
+    const currentTeam = db.getTeam(teamId);
+    if (!currentTeam) return;
+
+    // Only act on states that are still "live" — not already done/failed.
+    if (!['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
+      return;
+    }
+
+    // Non-zero exit → always a failure, skip all merge-verification logic.
+    if (code !== 0) {
+      db.insertTransition({
+        teamId,
+        fromStatus: currentTeam.status,
+        toStatus: 'failed',
+        trigger: 'system',
+        reason: `Process exited with code ${code}${signal ? `, signal ${signal}` : ''}`,
+      });
+      db.updateTeamSilent(teamId, {
+        status: 'failed',
+        pid: null,
+        stoppedAt: new Date().toISOString(),
+      });
+      sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
+      this.broadcastSnapshot();
+
+      if (currentTeam.projectId) {
+        this.processQueue(currentTeam.projectId).catch((err) => {
+          console.error(`[TeamManager] processQueue error after team exit:`, err);
+        });
+      }
+      return;
+    }
+
+    // code === 0 — candidate for `done`. Before committing, force one final
+    // PR reconciliation if the team has a PR. This refreshes stale CI/merge
+    // state AND gives us authoritative ground truth to cross-check the TL's
+    // shutdown reason.
+    if (currentTeam.prNumber) {
+      try {
+        const { githubPoller } = await import('./github-poller.js');
+        await githubPoller.reconcilePR(teamId);
+      } catch (err) {
+        console.error(
+          `[TeamManager] Forced reconcilePR failed for team ${teamId}:`,
+          err instanceof Error ? err.message : err,
+        );
+        // Fall through — we still want to commit the transition even if the
+        // poll failed. We'll use whatever DB row is currently present.
+      }
+
+      // Re-read the PR row AFTER the forced reconcile so we see fresh state.
+      const freshPr = db.getPullRequest(currentTeam.prNumber);
+      const prStillOpen =
+        freshPr !== undefined && (freshPr.state === 'open' || freshPr.state === 'draft');
+      const claimsMerge = containsMergeClaim(tlTextSnapshot);
+
+      if (prStillOpen && claimsMerge) {
+        // Reject the done transition. Keep the team in its current live
+        // status (usually `running`), clear pid, and message the TL.
+        console.warn(
+          `[TeamManager] REJECTING done transition for team ${teamId}: ` +
+            `TL claims PR #${currentTeam.prNumber} merged but github-poller ` +
+            `reports state=${freshPr?.state ?? 'unknown'}. TL text snippet: ` +
+            `"${tlTextSnapshot.slice(0, 200).replace(/\s+/g, ' ')}"`,
+        );
+
+        db.insertTransition({
+          teamId,
+          fromStatus: currentTeam.status,
+          toStatus: currentTeam.status, // stay put
+          trigger: 'system',
+          reason:
+            `Done transition rejected: shutdown reason claims PR #${currentTeam.prNumber} ` +
+            `merged but github-poller reports state=${freshPr?.state ?? 'unknown'}. ` +
+            `See issue #701.`,
+        });
+
+        // Best-effort: drop pid so the PM sees the anomaly ("running with no
+        // process"). The stuck-detector will pick it up from here.
+        db.updateTeamSilent(teamId, { pid: null });
+
+        // Best-effort stdin delivery. The child process has already exited,
+        // so sendMessage() will almost always return false — that's fine;
+        // the warning log above is the actionable signal for the PM.
+        const msg = resolveMessage('verification_required', {
+          PR_NUMBER: String(currentTeam.prNumber),
+          PR_STATE: String(freshPr?.state ?? 'unknown'),
+        });
+        if (msg) {
+          try {
+            this.sendMessage(teamId, msg, 'fc', 'verification_required');
+          } catch {
+            // ignore — stdin is expected to be gone
+          }
+        }
+
+        // Do NOT broadcast team_stopped or advance the queue — the team
+        // slot is still occupied until a human resolves the anomaly.
+        this.broadcastSnapshot();
+        return;
+      }
+    }
+
+    // Accept the done transition.
+    db.insertTransition({
+      teamId,
+      fromStatus: currentTeam.status,
+      toStatus: 'done',
+      trigger: 'system',
+      reason: 'Process exited normally (code 0)',
+    });
+    db.updateTeamSilent(teamId, {
+      status: 'done',
+      pid: null,
+      stoppedAt: new Date().toISOString(),
+    });
+
+    sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
+    this.broadcastSnapshot();
+
+    if (currentTeam.projectId) {
+      this.processQueue(currentTeam.projectId).catch((err) => {
+        console.error(`[TeamManager] processQueue error after team exit:`, err);
+      });
+    }
+  }
+
+  /**
    * Attach exit and error handlers to a child process.
    * These handlers clean up maps, transition the team to done/failed,
    * broadcast SSE events, and trigger queue processing.
@@ -1753,46 +1973,26 @@ export class TeamManager {
       console.log(`[TeamManager] Process exited for team ${teamId} (code=${code}, signal=${signal})`);
       this.flushTokenCounters(teamId);
       this.persistParsedEvents(teamId);
+
+      // Snapshot recent TL text BEFORE purgeTeamMaps clears the parsed-event
+      // buffer. Used by the done-transition cross-check (Issue #701).
+      const tlTextSnapshot = extractRecentTlText(
+        this.parsedEvents.get(teamId)?.toArray(),
+      );
+
       this.purgeTeamMaps(teamId);
 
-      const currentTeam = db.getTeam(teamId);
-      if (!currentTeam) return;
-
-      if (['launching', 'running', 'idle', 'stuck'].includes(currentTeam.status)) {
-        const exitStatus = (code === 0) ? 'done' : 'failed';
-        db.insertTransition({
-          teamId,
-          fromStatus: currentTeam.status,
-          toStatus: exitStatus,
-          trigger: 'system',
-          reason: code === 0
-            ? 'Process exited normally (code 0)'
-            : `Process exited with code ${code}${signal ? `, signal ${signal}` : ''}`,
-        });
-        db.updateTeamSilent(teamId, {
-          status: exitStatus,
-          pid: null,
-          stoppedAt: new Date().toISOString(),
-        });
-
-        sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
-        this.broadcastSnapshot();
-
-        // Final PR reconciliation on team done — clear stale CI/merge data
-        if (exitStatus === 'done' && currentTeam.prNumber) {
-          import('./github-poller.js').then(({ githubPoller }) => {
-            githubPoller.reconcilePR(teamId).catch((err) => {
-              console.error(`[TeamManager] reconcilePR error for team ${teamId}:`, err instanceof Error ? err.message : err);
-            });
-          }).catch(() => { /* ignore import failure */ });
-        }
-      }
-
-      if (currentTeam.projectId) {
-        this.processQueue(currentTeam.projectId).catch((err) => {
-          console.error(`[TeamManager] processQueue error after team exit:`, err);
-        });
-      }
+      // Offload the (potentially async) transition decision. The exit event
+      // handler itself must return synchronously, so we fire the async IIFE
+      // and let it resolve in the background. All DB work inside the IIFE is
+      // sync (better-sqlite3); the only async step is the forced poller
+      // reconcile, which we MUST await before committing the done state.
+      void this.handleProcessExit(teamId, code, signal, tlTextSnapshot).catch((err) => {
+        console.error(
+          `[TeamManager] handleProcessExit error for team ${teamId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      });
     });
 
     child.on('error', (err) => {
