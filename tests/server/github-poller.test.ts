@@ -2153,3 +2153,219 @@ describe('Post-merge CI filtering and cleanup', () => {
     );
   });
 });
+
+// =============================================================================
+// Fix #692 (C) — branchName reconciliation against PR headRefName
+// =============================================================================
+
+describe('Fix #692 (C) — branchName reconciliation', () => {
+  it('reconciles team.branchName to PR headRefName on poll when they differ', async () => {
+    const project = makeProject();
+    const team = makeTeam({
+      id: 1,
+      prNumber: 42,
+      branchName: 'wrong-branch',
+      status: 'running',
+    });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+    mockDb.getTeam.mockReturnValue(team);
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        headRefName: 'actual-branch',
+      }),
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await githubPoller.poll();
+
+    // Team should be updated with the correct branchName
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ branchName: 'actual-branch' }),
+    );
+
+    // A system transition should be logged with the reconcile reason
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        trigger: 'system',
+        reason: expect.stringContaining('branchName reconciled from "wrong-branch" to "actual-branch"'),
+      }),
+    );
+
+    // Warning should be logged
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('branchName drift'),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('does not reconcile or log when branchName already matches headRefName', async () => {
+    const project = makeProject();
+    const team = makeTeam({
+      id: 1,
+      prNumber: 42,
+      branchName: 'feat/10-test',
+      status: 'running',
+    });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+    mockDb.getTeam.mockReturnValue(team);
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        headRefName: 'feat/10-test',
+      }),
+    );
+
+    await githubPoller.poll();
+
+    // Should NOT insert a reconcile transition — branches already match.
+    const reconcileCall = mockDb.insertTransition.mock.calls.find((call) =>
+      String((call[0] as { reason?: string })?.reason ?? '').includes('branchName reconciled'),
+    );
+    expect(reconcileCall).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Fix #692 (A) — branch collision audit warning
+// =============================================================================
+
+describe('Fix #692 (A) — branch collision audit warning', () => {
+  it('emits team_warning SSE event when two running teams claim the same branch', async () => {
+    const project = makeProject({ id: 1 });
+    const teamA = makeTeam({
+      id: 1,
+      prNumber: 42,
+      branchName: 'shared-branch',
+      projectId: 1,
+      status: 'running',
+    });
+    const teamB = makeTeam({
+      id: 2,
+      prNumber: null,
+      branchName: 'shared-branch',
+      projectId: 1,
+      status: 'running',
+    });
+
+    mockDb.getProjects.mockReturnValue([project]);
+    // Only team A is polled via pollPR (has prNumber); team B is in active list
+    mockDb.getActiveTeams.mockReturnValue([teamA, teamB]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+    mockDb.getTeam.mockImplementation((id: number) => {
+      if (id === 1) return teamA;
+      if (id === 2) return teamB;
+      return undefined;
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        headRefName: 'shared-branch',
+      }),
+    );
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await githubPoller.poll();
+
+    // A branch collision warning SSE event should have been broadcast
+    const collisionCall = mockSseBroker.broadcast.mock.calls.find(
+      (call) => call[0] === 'team_warning',
+    );
+    expect(collisionCall).toBeDefined();
+    expect(collisionCall?.[1]).toEqual(
+      expect.objectContaining({
+        team_id: 1,
+        warning_type: 'branch_collision',
+        message: expect.stringContaining('branch collision detected'),
+        details: expect.objectContaining({
+          pr_number: 42,
+          branch_name: 'shared-branch',
+          other_team_id: 2,
+        }),
+      }),
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('branch collision detected'),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('does not emit team_warning when teams have different branches', async () => {
+    const project = makeProject({ id: 1 });
+    const teamA = makeTeam({
+      id: 1,
+      prNumber: 42,
+      branchName: 'branch-a',
+      projectId: 1,
+      status: 'running',
+    });
+    const teamB = makeTeam({
+      id: 2,
+      prNumber: null,
+      branchName: 'branch-b',
+      projectId: 1,
+      status: 'running',
+    });
+
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([teamA, teamB]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+    mockDb.getTeam.mockImplementation((id: number) => {
+      if (id === 1) return teamA;
+      if (id === 2) return teamB;
+      return undefined;
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        headRefName: 'branch-a',
+      }),
+    );
+
+    await githubPoller.poll();
+
+    // No team_warning broadcast expected
+    const collisionCall = mockSseBroker.broadcast.mock.calls.find(
+      (call) => call[0] === 'team_warning',
+    );
+    expect(collisionCall).toBeUndefined();
+  });
+});

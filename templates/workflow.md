@@ -348,7 +348,7 @@ After TL reads `review.md` with `Status: APPROVE`:
 ## Phase 5 — Done
 
 0. **TodoWrite "Phase 3: Create PR and merge"** — status: `completed` — only if `gh pr view` confirms `state == MERGED` or auto-merge is armed and not blocked (see Phase 4 step 5).
-1. Close issue: `gh issue close {N} --comment "Closed. PR #{PR} merged."`
+1. Do **NOT** run `gh issue close` — the PR's `Closes #{N}` footer auto-closes the issue.
 2. **Explicit shutdown sequence** (MANDATORY):
    a. Run `TaskList` to identify all active subagents.
    b. For each active subagent, send `shutdown_request` via `TaskUpdate`.

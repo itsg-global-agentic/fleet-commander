@@ -81,6 +81,13 @@ class GitHubPoller {
   private previouslyBlocked = new Map<string, { projectId: number; issueNumber: number; blockerNumbers: number[] }>();
 
   /**
+   * In-memory set of team-pair keys for which we have already warned about
+   * branch collisions. Key format: "sortedLowTeamId:sortedHighTeamId:branch".
+   * Prevents log spam across repeated polls while the collision persists.
+   */
+  private warnedCollisions = new Set<string>();
+
+  /**
    * Start the polling loop. Uses adaptive intervals:
    * - Normal: config.githubPollIntervalMs (default 30s)
    * - Fast: 10s when teams are awaiting PR detection or have pending CI
@@ -260,6 +267,84 @@ class GitHubPoller {
 
     const db = getDatabase();
     const existing = db.getPullRequest(prNumber);
+
+    // ── Fix #692 (C): reconcile team.branchName against PR headRefName ──
+    // The team may have pushed to a different branch than FC recorded in the
+    // DB. If so, update the DB to match GitHub truth and log a transition.
+    // Idempotent: only fires when a mismatch actually exists.
+    if (data.headRefName) {
+      const teamRow = db.getTeam(teamId);
+      if (teamRow && teamRow.branchName && teamRow.branchName !== data.headRefName) {
+        const oldBranch = teamRow.branchName;
+        const newBranch = data.headRefName;
+        console.warn(
+          `[GitHubPoller] Team ${teamId} branchName drift: DB says "${oldBranch}" but PR #${prNumber} is actually "${newBranch}" — reconciling DB to match GitHub truth`,
+        );
+        db.updateTeamSilent(teamId, { branchName: newBranch });
+        try {
+          db.insertTransition({
+            teamId,
+            fromStatus: teamRow.status,
+            toStatus: teamRow.status,
+            trigger: 'system',
+            reason: `branchName reconciled from "${oldBranch}" to "${newBranch}"`,
+          });
+        } catch (err) {
+          console.error(
+            `[GitHubPoller] Failed to insert reconcile transition for team ${teamId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+    }
+
+    // ── Fix #692 (A): pre-push audit — detect branch collision ──
+    // If another running team in the same project claims the same branch,
+    // emit a prominent warning and broadcast a team_warning SSE event.
+    // Detection-only; no enforcement.
+    if (data.headRefName) {
+      try {
+        const teamRow = db.getTeam(teamId);
+        if (teamRow && teamRow.projectId) {
+          const others = db.getActiveTeams().filter(
+            (t) =>
+              t.id !== teamId &&
+              t.projectId === teamRow.projectId &&
+              t.branchName === data.headRefName,
+          );
+          for (const other of others) {
+            const lo = Math.min(teamId, other.id);
+            const hi = Math.max(teamId, other.id);
+            const key = `${lo}:${hi}:${data.headRefName}`;
+            const warnMsg = `[GitHubPoller] WARNING: branch collision detected — team ${teamId} and team ${other.id} both claim branch "${data.headRefName}" on PR #${prNumber}`;
+            if (!this.warnedCollisions.has(key)) {
+              console.warn(warnMsg);
+              this.warnedCollisions.add(key);
+              sseBroker.broadcast(
+                'team_warning',
+                {
+                  team_id: teamId,
+                  warning_type: 'branch_collision',
+                  message: warnMsg,
+                  details: {
+                    pr_number: prNumber,
+                    branch_name: data.headRefName,
+                    other_team_id: other.id,
+                    project_id: teamRow.projectId,
+                  },
+                },
+                teamId,
+              );
+            }
+          }
+        }
+      } catch (err) {
+        console.error(
+          `[GitHubPoller] Failed to check branch collision for team ${teamId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
 
     // Map GitHub state to our state — detect merged via mergedAt field
     const isMerged = !!data.mergedAt;

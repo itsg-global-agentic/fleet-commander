@@ -38,6 +38,7 @@ export type SSEEventType =
   | 'task_updated'
   | 'relations_updated'
   | 'team_handoff_file'
+  | 'team_warning'
   | 'usage_override_changed';
 
 /** Payload shapes for each event type */
@@ -61,6 +62,7 @@ export interface SSEEventPayloads {
   task_updated: { team_id: number; task_id: string; subject: string; status: string; owner: string };
   relations_updated: { project_id: number; issue_key: string; relations: IssueRelations };
   team_handoff_file: { team_id: number; file_type: string; agent_name: string | null; captured_at: string };
+  team_warning: { team_id: number; warning_type: string; message: string; details?: Record<string, unknown> };
   usage_override_changed: { overrideActive: boolean; hardPaused: boolean };
 }
 
