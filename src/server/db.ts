@@ -124,6 +124,7 @@ export interface TeamInsert {
   blockedByJson?: string | null;
   pendingChildrenJson?: string | null;
   launchedAt?: string | null;
+  startedAt?: string | null;
 }
 
 export interface TeamUpdate {
@@ -145,6 +146,7 @@ export interface TeamUpdate {
   totalCostUsd?: number;
   retryCount?: number;
   launchedAt?: string | null;
+  startedAt?: string | null;
   stoppedAt?: string | null;
   lastEventAt?: string | null;
 }
@@ -418,6 +420,9 @@ export class FleetDatabase {
 
     // Migrate branch_behind templates to use {{BASE_BRANCH}} placeholder (v17 migration)
     this.migrateBranchBehindTemplates();
+
+    // Add started_at column to teams and recreate v_team_dashboard view (v18 migration)
+    this.addStartedAtColumn();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1136,6 +1141,52 @@ export class FleetDatabase {
   }
 
   /**
+   * Add started_at column to teams table and recreate v_team_dashboard view.
+   * v18 migration — separates run-time from queue-wait (issue #691).
+   *
+   * Backfill strategy: for teams that have already transitioned out of queued,
+   * use last_event_at as a best-effort proxy for the first-run timestamp.
+   * Teams still in queued/launching are left NULL — they will be populated
+   * on their first run-time event. Teams with no last_event_at also stay
+   * NULL and fall back to launched_at via the view's COALESCE.
+   */
+  private addStartedAtColumn(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(teams)').all() as Array<{ name: string }>;
+      // Fresh DB: teams table doesn't exist yet — schema.sql will create it
+      // with started_at already present. Nothing to migrate.
+      if (cols.length === 0) return;
+      const hasColumn = cols.some((c) => c.name === 'started_at');
+      if (!hasColumn) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN started_at TEXT');
+
+        // Best-effort backfill: teams past the queued/launching phase with a
+        // last_event_at timestamp use that as a proxy for started_at.
+        // (The real start is slightly earlier, but within a minute.)
+        this.db.exec(`
+          UPDATE teams
+             SET started_at = last_event_at
+           WHERE status IN ('running','idle','stuck','done','failed')
+             AND last_event_at IS NOT NULL
+             AND started_at IS NULL
+        `);
+
+        console.log('[DB] v18 migration: added started_at column to teams');
+      }
+
+      // Recreate v_team_dashboard view so duration_min uses started_at.
+      // Safe to re-run — schema.sql will create the authoritative definition
+      // afterwards, but we drop the stale one here so the version check matches.
+      this.db.exec('DROP VIEW IF EXISTS v_team_dashboard');
+
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (18)');
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v18 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Migrate branch_behind and branch_behind_resolved message templates
    * from hardcoded 'main' to use {{BASE_BRANCH}} placeholder.
    * Only updates templates that exactly match the old defaults (user edits are preserved).
@@ -1491,8 +1542,8 @@ export class FleetDatabase {
   insertTeam(data: TeamInsert): Team {
     const now = new Date().toISOString();
     const stmt = this.stmt(`
-      INSERT INTO teams (issue_number, issue_title, issue_key, issue_provider, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, headless, blocked_by_json, pending_children_json, launched_at, created_at, updated_at)
-      VALUES (@issueNumber, @issueTitle, @issueKey, @issueProvider, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @headless, @blockedByJson, @pendingChildrenJson, @launchedAt, @createdAt, @updatedAt)
+      INSERT INTO teams (issue_number, issue_title, issue_key, issue_provider, project_id, worktree_name, branch_name, status, phase, pid, session_id, pr_number, custom_prompt, headless, blocked_by_json, pending_children_json, launched_at, started_at, created_at, updated_at)
+      VALUES (@issueNumber, @issueTitle, @issueKey, @issueProvider, @projectId, @worktreeName, @branchName, @status, @phase, @pid, @sessionId, @prNumber, @customPrompt, @headless, @blockedByJson, @pendingChildrenJson, @launchedAt, @startedAt, @createdAt, @updatedAt)
     `);
 
     try {
@@ -1514,6 +1565,7 @@ export class FleetDatabase {
         blockedByJson: data.blockedByJson ?? null,
         pendingChildrenJson: data.pendingChildrenJson ?? null,
         launchedAt: data.launchedAt ?? null,
+        startedAt: data.startedAt ?? null,
         createdAt: now,
         updatedAt: now,
       });
@@ -1754,6 +1806,13 @@ export class FleetDatabase {
       setClauses.push('launched_at = @launchedAt');
       params.launchedAt = fields.launchedAt;
     }
+    if (fields.startedAt !== undefined) {
+      // COALESCE guards against overwriting an already-set started_at.
+      // The first event/transition wins; later transitions (e.g. idle→running)
+      // must not reset the run-time clock.
+      setClauses.push('started_at = COALESCE(started_at, @startedAt)');
+      params.startedAt = fields.startedAt;
+    }
     if (fields.stoppedAt !== undefined) {
       setClauses.push('stopped_at = @stoppedAt');
       params.stoppedAt = fields.stoppedAt;
@@ -1783,8 +1842,11 @@ export class FleetDatabase {
    * and processThrottledUpdate.
    */
   private updateTeamHeartbeat(id: number, lastEventAt: string): void {
+    // Also populate started_at on the first event via COALESCE — this is the
+    // earliest reliable "run started" signal we have (issue #691). Idempotent:
+    // subsequent heartbeats leave the existing started_at untouched.
     this.stmt(
-      "UPDATE teams SET last_event_at = @lastEventAt, updated_at = datetime('now') WHERE id = @id"
+      "UPDATE teams SET last_event_at = @lastEventAt, started_at = COALESCE(started_at, @lastEventAt), updated_at = datetime('now') WHERE id = @id"
     ).run({ id, lastEventAt });
   }
 
@@ -2942,6 +3004,7 @@ export class FleetDatabase {
       pendingChildrenJson: (row.pending_children_json as string | null) ?? null,
       retryCount: (row.retry_count as number | undefined) ?? 0,
       launchedAt: utcify(row.launched_at as string | null),
+      startedAt: utcify((row.started_at as string | null) ?? null),
       stoppedAt: utcify(row.stopped_at as string | null),
       lastEventAt: utcify(row.last_event_at as string | null),
       createdAt: utcify(row.created_at as string),

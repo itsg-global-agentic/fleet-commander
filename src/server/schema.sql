@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS teams (
   total_cache_read_tokens INTEGER DEFAULT 0,
   total_cost_usd  REAL DEFAULT 0,
   launched_at     TEXT,
+  started_at      TEXT,                           -- first-run timestamp (excludes queue-wait)
   stopped_at      TEXT,
   last_event_at   TEXT,
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
@@ -181,7 +182,17 @@ SELECT
   t.pr_number,
   t.launched_at,
   t.last_event_at,
-  ROUND((julianday(COALESCE(t.stopped_at, datetime('now'))) - julianday(t.launched_at)) * 24 * 60, 0) AS duration_min,
+  -- duration_min: true run time, excluding queue-wait (issue #691).
+  -- Uses started_at (set on first run-time event) when available; falls back
+  -- to launched_at for legacy rows and still-queued teams. Queued teams
+  -- always report 0 since they haven't started running yet.
+  CASE
+    WHEN t.status = 'queued' THEN 0
+    ELSE ROUND(
+      (julianday(COALESCE(t.stopped_at, datetime('now'))) - julianday(COALESCE(t.started_at, t.launched_at))) * 24 * 60,
+      0
+    )
+  END AS duration_min,
   -- idle_min: null for terminal teams (done/failed) — their lastEventAt can
   -- race past stoppedAt from late finalization hooks, producing negative
   -- values (issue #690). For active teams, clamp to >= 0 to protect against
@@ -375,5 +386,5 @@ CREATE TABLE IF NOT EXISTS provider_state (
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Insert schema version 9 (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (14);
+-- Insert schema version (or upgrade from earlier versions)
+INSERT OR IGNORE INTO schema_version (version) VALUES (18);

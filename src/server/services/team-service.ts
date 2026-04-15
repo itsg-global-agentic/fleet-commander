@@ -19,6 +19,7 @@ import { buildTimeline } from '../utils/build-timeline.js';
 import { ServiceError, validationError, notFoundError, conflictError, projectNotReadyError } from './service-error.js';
 import { getProjectService } from './project-service.js';
 import { formatIssueKey } from '../../shared/issue-provider.js';
+import { execGHAsync, isValidGithubRepo } from '../utils/exec-gh.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,6 +49,111 @@ async function checkDependencies(projectId: number, issueNumber: number): Promis
       err instanceof Error ? err.message : err,
     );
     return null;
+  }
+}
+
+/**
+ * Epic pre-flight decision returned by {@link epicPreflightCheck}.
+ *
+ * - `proceed`: no-op, allow launch to continue.
+ * - `already_closed`: the issue itself is already closed → skip launch idempotently.
+ * - `all_subs_closed`: the issue has sub-issues and every sub is closed → auto-close
+ *   the epic with a summary comment and skip launch.
+ * - `unknown`: could not determine state (network failure, missing gh CLI) → caller
+ *   should proceed with launch (conservative: don't block on unknown).
+ */
+type EpicPreflightDecision =
+  | { action: 'proceed' }
+  | { action: 'already_closed'; total: number }
+  | { action: 'all_subs_closed'; total: number }
+  | { action: 'unknown' };
+
+/**
+ * Pre-flight check for GitHub epics before spawning a team (issue #691).
+ *
+ * Uses `gh api graphql` to fetch the issue's state and subIssuesSummary in a
+ * single round-trip. If the issue has sub-issues AND all are already closed,
+ * we skip the launch and auto-close the epic — otherwise the team would wake
+ * up, do ~90 seconds of no-op work, and close the epic itself, burning a slot.
+ *
+ * Downgrade: if the `gh` graphql call fails for any reason (CLI missing,
+ * network, unsupported query fields, etc.), this function returns `unknown`
+ * and the caller continues with the launch. We do NOT try to parse checklist
+ * markers from the issue body — sub-issues are the authoritative signal and
+ * falling back to body-parsed checkboxes produces false positives for
+ * non-epic issues that happen to contain task lists in their body.
+ */
+async function epicPreflightCheck(
+  githubRepo: string,
+  issueNumber: number,
+): Promise<EpicPreflightDecision> {
+  if (!isValidGithubRepo(githubRepo)) return { action: 'unknown' };
+  if (!Number.isInteger(issueNumber) || issueNumber <= 0) return { action: 'unknown' };
+
+  const [owner, repo] = githubRepo.split('/');
+  // Keep the GraphQL query minimal — we only need state + subIssuesSummary.
+  // Single-quote outer, escaped-quote inner: works across bash/cmd/powershell.
+  const query =
+    `query { repository(owner: \\"${owner}\\", name: \\"${repo}\\") { ` +
+    `issue(number: ${issueNumber}) { state subIssuesSummary { total completed } } } }`;
+  const command = `gh api graphql -f query="${query}"`;
+
+  const stdout = await execGHAsync(command, { timeout: 10_000 });
+  if (!stdout) return { action: 'unknown' };
+
+  try {
+    const parsed = JSON.parse(stdout) as {
+      data?: {
+        repository?: {
+          issue?: {
+            state?: string;
+            subIssuesSummary?: { total: number; completed: number };
+          } | null;
+        } | null;
+      };
+    };
+    const issue = parsed.data?.repository?.issue;
+    if (!issue || !issue.state) return { action: 'unknown' };
+
+    const state = issue.state.toLowerCase();
+    if (state === 'closed') {
+      // Idempotent: treat already-closed as a skip (don't re-close, don't launch).
+      return { action: 'already_closed', total: issue.subIssuesSummary?.total ?? 0 };
+    }
+
+    const summary = issue.subIssuesSummary;
+    if (summary && summary.total > 0 && summary.completed >= summary.total) {
+      return { action: 'all_subs_closed', total: summary.total };
+    }
+
+    return { action: 'proceed' };
+  } catch {
+    return { action: 'unknown' };
+  }
+}
+
+/**
+ * Auto-close an epic whose sub-issues are all already resolved.
+ * Fire-and-forget — failures are logged but do not abort the skip response.
+ */
+async function autoCloseEpic(
+  githubRepo: string,
+  issueNumber: number,
+  total: number,
+): Promise<void> {
+  if (!isValidGithubRepo(githubRepo)) return;
+  const comment =
+    `All ${total} sub-issues already resolved. ` +
+    `Fleet Commander is closing this epic automatically (no team spawned).`;
+  // Use --comment to drop the rationale on the issue at close time.
+  const command =
+    `gh issue close ${issueNumber} --repo ${githubRepo} --comment ${JSON.stringify(comment)}`;
+  const result = await execGHAsync(command, { timeout: 15_000 });
+  if (result === null) {
+    console.warn(
+      `[TeamService] Failed to auto-close epic ${githubRepo}#${issueNumber} — ` +
+      `skip still honored, but the issue remains open on GitHub`,
+    );
   }
 }
 
@@ -94,6 +200,39 @@ export class TeamService {
         throw projectNotReadyError(
           `Project is not ready for launch: ${readiness.errors.join('; ')}`,
         );
+      }
+    }
+
+    // Epic pre-flight check (issue #691) — skip spawning a team on an epic
+    // whose sub-issues are already all closed. GitHub-only; force=true
+    // bypasses the check so operators can still launch manually.
+    if (!force && issueNumber > 0) {
+      const db = getDatabase();
+      const project = db.getProject(projectId);
+      if (project?.githubRepo && project.issueProvider === 'github') {
+        const decision = await epicPreflightCheck(project.githubRepo, issueNumber);
+
+        if (decision.action === 'already_closed') {
+          console.log(
+            `[TeamService] Skipping launch: issue ${project.githubRepo}#${issueNumber} is already closed`,
+          );
+          return { skipped: true, reason: 'already_closed', issueNumber };
+        }
+
+        if (decision.action === 'all_subs_closed') {
+          console.log(
+            `[TeamService] Skipping launch: epic ${project.githubRepo}#${issueNumber} has all ` +
+            `${decision.total} sub-issues already closed — auto-closing epic`,
+          );
+          await autoCloseEpic(project.githubRepo, issueNumber, decision.total);
+          return {
+            skipped: true,
+            reason: 'all_subs_closed',
+            issueNumber,
+            subIssueCount: decision.total,
+          };
+        }
+        // proceed / unknown → fall through to launch
       }
     }
 
@@ -353,13 +492,20 @@ export class TeamService {
     }
 
     // Compute duration & idle in minutes
-    // For completed teams (done/failed), cap at stopped_at rather than growing forever
+    // For completed teams (done/failed), cap at stopped_at rather than growing forever.
+    // duration uses started_at (true run time) when available, falling back to
+    // launched_at for legacy rows. Queued teams always report 0. (issue #691)
     const launchedAt = team.launchedAt ? new Date(team.launchedAt) : null;
+    const startedAt = team.startedAt ? new Date(team.startedAt) : null;
+    const durationStart = startedAt ?? launchedAt;
     const now = new Date();
     const endTime = team.stoppedAt ? new Date(team.stoppedAt) : now;
-    const durationMin = launchedAt
-      ? Math.round((endTime.getTime() - launchedAt.getTime()) / 60_000)
-      : 0;
+    const durationMin =
+      team.status === 'queued'
+        ? 0
+        : durationStart
+          ? Math.round((endTime.getTime() - durationStart.getTime()) / 60_000)
+          : 0;
 
     // idleMin is not meaningful for terminal teams (done/failed) — the
     // last-event timestamp often lands slightly after stoppedAt because

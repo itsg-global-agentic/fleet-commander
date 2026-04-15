@@ -2452,7 +2452,11 @@ export class TeamManager {
                     trigger: 'system',
                     reason: 'Stdout stream event received (hook fallback)',
                   });
-                  db.updateTeamSilent(teamId, { status: 'running', lastEventAt: new Date().toISOString() });
+                  // Also populate started_at — this is the first run-time signal
+                  // we have in the stdout-fallback path (issue #691). COALESCE in
+                  // updateTeamSilent ensures we don't overwrite an earlier value.
+                  const nowIso = new Date().toISOString();
+                  db.updateTeamSilent(teamId, { status: 'running', lastEventAt: nowIso, startedAt: nowIso });
                   sseBroker.broadcast('team_status_changed', {
                     team_id: teamId,
                     status: 'running',

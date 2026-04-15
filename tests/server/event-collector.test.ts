@@ -8,6 +8,7 @@ import {
   resetThrottleState,
   resetSubagentTrackers,
   resetPrPollState,
+  resetEventDedupState,
   getSubagentTrackerSize,
   cleanSubagentTrackersForTeam,
   normalizeAgentName,
@@ -129,6 +130,7 @@ beforeEach(() => {
   resetThrottleState();
   resetSubagentTrackers();
   resetPrPollState();
+  resetEventDedupState();
 });
 
 // =============================================================================
@@ -756,19 +758,44 @@ describe('Non-tool_use events never throttled', () => {
     'worktree_remove',
   ];
 
+  // Shutdown-family events are deduped in issue #691 when payloads match
+  // byte-for-byte within 200ms. This test verifies tool_use throttling does
+  // not apply to them — distinct sessions must all be processed.
+  const DEDUP_EVENTS_IN_TEST = new Set(['stop', 'stop_failure', 'session_end', 'subagent_stop']);
+
   for (const eventType of nonToolUseEvents) {
     it(`${eventType} is never throttled even when sent rapidly`, () => {
       const db = createMockDb();
       const sse = createMockSse();
 
-      const r1 = processEvent(makePayload({ event: eventType }), db, sse);
-      const r2 = processEvent(makePayload({ event: eventType }), db, sse);
-      const r3 = processEvent(makePayload({ event: eventType }), db, sse);
+      // Use distinct session_ids so the shutdown-dedup path (issue #691 C)
+      // does not apply — this test is about tool_use throttling, not dedup.
+      const r1 = processEvent(makePayload({ event: eventType, session_id: 'sess-a' }), db, sse);
+      const r2 = processEvent(makePayload({ event: eventType, session_id: 'sess-b' }), db, sse);
+      const r3 = processEvent(makePayload({ event: eventType, session_id: 'sess-c' }), db, sse);
 
       expect(r1.processed).toBe(true);
       expect(r2.processed).toBe(true);
       expect(r3.processed).toBe(true);
     });
+
+    if (DEDUP_EVENTS_IN_TEST.has(eventType)) {
+      it(`${eventType} is deduped when identical payloads arrive within 200ms`, () => {
+        const db = createMockDb();
+        const sse = createMockSse();
+
+        // Freeze the timestamp so payloads are byte-identical.
+        const payload = makePayload({ event: eventType, timestamp: '2026-04-15T12:00:00.000Z' });
+
+        const r1 = processEvent(payload, db, sse);
+        const r2 = processEvent(payload, db, sse);
+        const r3 = processEvent(payload, db, sse);
+
+        expect(r1.processed).toBe(true);
+        expect(r2.processed).toBe(false);
+        expect(r3.processed).toBe(false);
+      });
+    }
   }
 });
 

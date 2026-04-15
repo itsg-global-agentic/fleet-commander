@@ -232,6 +232,7 @@ export interface Team {
   totalCacheReadTokens: number;
   totalCostUsd: number;
   launchedAt: string | null;
+  startedAt: string | null;
   stoppedAt: string | null;
   lastEventAt: string | null;
   blockedByJson: string | null;

@@ -129,6 +129,55 @@ export interface TeamMessageSender {
 const lastToolUseByTeam = new Map<string, number>();
 
 // ---------------------------------------------------------------------------
+// Event dedup state — module-level, persists across requests
+// ---------------------------------------------------------------------------
+// Guards against duplicate hook events landing in the events table with
+// consecutive IDs and identical payloads (issue #691 part C). The dominant
+// symptom was adjacent shutdown rows, but the dedup is generic: any event
+// that arrives within DEDUP_WINDOW_MS with the same (team, type, agent,
+// payload-fingerprint) as the previous event from that team is dropped.
+//
+// We store an in-memory fingerprint per (team, event_type, agent_name)
+// rather than re-reading the DB, because the dual-write symptom is a
+// sub-200ms burst — the cost of a read per event is higher than the cost
+// of a tiny map.
+
+/** Window in which consecutive identical events are treated as duplicates. */
+const DEDUP_WINDOW_MS = 200;
+
+/**
+ * Event types subject to dedup. Scoped narrowly to the observed dual-write
+ * symptom (shutdown paths) to avoid penalizing legitimate event bursts.
+ */
+const DEDUP_EVENT_TYPES = new Set<string>([
+  'stop',
+  'stop_failure',
+  'session_end',
+  'subagent_stop',
+]);
+
+interface DedupEntry {
+  fingerprint: string;
+  at: number;
+}
+
+/** Most recent (fingerprint, timestamp) per `${teamId}:${eventType}:${agentName}`. */
+const lastEventFingerprint = new Map<string, DedupEntry>();
+
+/**
+ * Cheap string fingerprint for dedup — djb2 hash of the JSON payload.
+ * We use a rolling hash rather than the full payload string so the map
+ * entries stay bounded (O(40 bytes/entry) regardless of payload size).
+ */
+function fingerprintPayload(payload: string): string {
+  let hash = 5381;
+  for (let i = 0; i < payload.length; i++) {
+    hash = ((hash << 5) + hash + payload.charCodeAt(i)) | 0;
+  }
+  return hash.toString(36);
+}
+
+// ---------------------------------------------------------------------------
 // PR polling detection state — module-level, persists across requests
 // ---------------------------------------------------------------------------
 
@@ -485,6 +534,41 @@ export function processEvent(
     });
   }
 
+  // ── Dedup: drop back-to-back identical shutdown events (issue #691 C) ─
+  // Shutdown hooks were observed inserting consecutive rows with identical
+  // payloads within a few milliseconds (dual-write path, not pinned to a
+  // single smoking gun). We can't identify the exact dual-write site with
+  // confidence, so we add a narrow safety net: for shutdown-family events
+  // only, if an event with the same (team, type, agent) and payload
+  // fingerprint arrived within DEDUP_WINDOW_MS, drop the duplicate.
+  //
+  // Scoped to shutdown events to avoid penalizing legitimate event bursts
+  // (e.g. sequential worktree_create/remove) that happen to share payloads.
+  // The transition/heartbeat writes from the first event already captured
+  // the relevant side effects, so dropping the insert is safe.
+  const payloadJson = JSON.stringify(payload);
+  const fingerprint = fingerprintPayload(payloadJson);
+  if (DEDUP_EVENT_TYPES.has(eventNameLower)) {
+    const dedupKey = `${teamId}:${eventType}:${agentName}`;
+    const prevFingerprint = lastEventFingerprint.get(dedupKey);
+    if (
+      prevFingerprint &&
+      prevFingerprint.fingerprint === fingerprint &&
+      now - prevFingerprint.at < DEDUP_WINDOW_MS
+    ) {
+      // Duplicate: refresh timestamp so a burst of N copies collapses to one.
+      lastEventFingerprint.set(dedupKey, { fingerprint, at: now });
+      return { event_id: null, team_id: teamId, processed: false };
+    }
+    lastEventFingerprint.set(dedupKey, { fingerprint, at: now });
+    // Prune stale entries to prevent unbounded growth.
+    if (lastEventFingerprint.size > 1024) {
+      for (const [k, v] of lastEventFingerprint) {
+        if (now - v.at > DEDUP_WINDOW_MS * 20) lastEventFingerprint.delete(k);
+      }
+    }
+  }
+
   // ── Execute all DB writes in a single transaction ────────────────
   let eventId: number;
   try {
@@ -498,7 +582,7 @@ export function processEvent(
         agentName,
         eventType,
         toolName: payload.tool_name || null,
-        payload: JSON.stringify(payload),
+        payload: payloadJson,
       },
       agentMessages: agentMessages.length > 0 ? agentMessages : undefined,
     });
@@ -752,6 +836,11 @@ export class EventCollectorError extends Error {
 /** Reset all throttle state. Intended for use in tests only. */
 export function resetThrottleState(): void {
   lastToolUseByTeam.clear();
+}
+
+/** Reset event dedup state. Intended for use in tests only. */
+export function resetEventDedupState(): void {
+  lastEventFingerprint.clear();
 }
 
 /** Reset subagent tracking state. Intended for use in tests only. */
