@@ -153,4 +153,19 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
     description: 'Sent to TL when the issue body/description is edited',
     placeholders: ['ISSUE_KEY', 'BODY_DIFF_SUMMARY'],
   },
+  {
+    id: 'ci_green_auto_shutdown',
+    template:
+      'CI passed on PR #{{PR_NUMBER}}, all checks green. Auto-merge is enabled and no conflicts — GitHub will merge automatically. Shut down all subagents immediately and exit. Do not start new work.',
+    description:
+      'Sent to TL when CI is green, auto-merge is enabled, and no merge conflicts — triggers early shutdown without waiting for actual merge.',
+    placeholders: ['PR_NUMBER'],
+  },
+  {
+    id: 'poll_warning',
+    template:
+      'Stop polling GitHub with gh pr view / gh pr checks. FC monitors CI and PR status automatically and will notify you via stdin (ci_green, ci_red, pr_merged). Wait for these events instead of polling.',
+    description: 'Sent to TL when excessive gh pr view/checks polling is detected.',
+    placeholders: [],
+  },
 ];

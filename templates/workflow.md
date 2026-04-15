@@ -327,11 +327,13 @@ After TL reads `review.md` with `Status: APPROVE`:
    gh pr merge {PR} --auto --squash --delete-branch
    ```
 
-4. Wait for FC to send CI status via stdin:
-   - `ci_green` → auto-merge handles merge → wait for `pr_merged`
-   - `ci_red` → TL forwards failure details to dev → dev fixes and pushes
-   - After 3 unique CI failure types → state Blocked (FC sends `ci_blocked`)
-   - `pr_merged` → state Done
+4. **STOP and wait for FC events via stdin** (MANDATORY — do NOT poll):
+   After setting auto-merge, **stop all activity**. Do NOT run `gh pr view`, `gh pr checks`, or `ScheduleWakeup` to poll CI status. FC monitors CI every 30 seconds and delivers results directly to you via stdin:
+   - `ci_green` or `ci_green_auto_shutdown` → merge is handled automatically → team shuts down
+   - `ci_red` → forward failure details to dev → dev fixes and pushes → wait again
+   - `ci_blocked` → too many CI failure types → state Blocked
+   - `pr_merged` → state Done → close issue, shut down agents
+   FC already polls GitHub every 30s. If you also poll, you burn tokens on redundant `gh` calls.
 
 ---
 
@@ -364,6 +366,7 @@ Fleet Commander sends these messages directly to the TL via stdin. They arrive a
 | Message ID | When | Content |
 |------------|------|---------|
 | `ci_green` | CI passes on PR | "CI passed on PR #{PR}. All checks green. Auto-merge is {status}." |
+| `ci_green_auto_shutdown` | CI green + auto-merge + clean | "CI passed, auto-merge enabled, no conflicts. Shut down immediately." |
 | `ci_red` | CI fails on PR | "CI failed on PR #{PR}. Failing checks: {details}. Fix count: {N}/{max}." |
 | `ci_blocked` | Too many CI failures | "STOP. {N} unique CI failure types on PR #{PR}. Wait for instructions." |
 | `pr_merged` | PR is merged | "PR #{PR} merged. Close the issue, clean up, and finish." |
@@ -376,7 +379,8 @@ Fleet Commander sends these messages directly to the TL via stdin. They arrive a
 
 ### TL Response to FC Messages
 
-**On `ci_green`**: Acknowledge and wait for `pr_merged` (auto-merge handles it).
+**On `ci_green`**: Acknowledge and wait for `pr_merged` or `ci_green_auto_shutdown` (auto-merge handles it).
+**On `ci_green_auto_shutdown`**: Shut down all subagents immediately and exit. GitHub will merge the PR automatically.
 **On `ci_red`**: Forward failure details to dev. Counts toward failure limit.
 **On `ci_blocked`**: STOP all work. Wait for PM instructions.
 **On `pr_merged`**: Close issue, shut down all agents (`shutdown_request`), finish.

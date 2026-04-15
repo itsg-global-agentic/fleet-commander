@@ -270,6 +270,18 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     hookEvent: null,
   },
   {
+    id: 'ci_green_auto_shutdown',
+    from: 'running',
+    to: 'done',
+    trigger: 'poller',
+    triggerLabel: 'CI green + auto-merge → early shutdown',
+    description:
+      'CI passes, auto-merge is enabled, and no merge conflicts. Team shuts down ' +
+      'immediately without waiting for the actual merge event — GitHub handles the merge.',
+    condition: 'CI status = passing AND autoMerge = true AND mergeStatus != dirty',
+    hookEvent: null,
+  },
+  {
     id: 'ci_green_but_dirty',
     from: 'running',
     to: 'running',
