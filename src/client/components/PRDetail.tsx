@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useApi } from '../hooks/useApi';
 import { CIChecks } from './CIChecks';
+import { getMergeStatusColor, getMergeStatusLabel } from '../utils/merge-status';
 import type { TeamDetail } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
@@ -12,17 +13,6 @@ const STATE_COLORS: Record<string, { color: string; label: string }> = {
   merged: { color: '#A371F7', label: 'MERGED' },
   closed: { color: '#8B949E', label: 'CLOSED' },
   draft: { color: '#8B949E', label: 'DRAFT' },
-};
-
-const MERGE_STATUS_COLORS: Record<string, string> = {
-  clean: '#3FB950',
-  behind: '#D29922',
-  blocked: '#F85149',
-  dirty: '#F85149',
-  unstable: '#D29922',
-  has_hooks: '#D29922',
-  draft: '#8B949E',
-  unknown: '#8B949E',
 };
 
 // ---------------------------------------------------------------------------
@@ -142,7 +132,8 @@ export function PRDetail({ prNumber, teamId, onClose, githubRepo }: PRDetailProp
   const effectiveGithubRepo = githubRepo ?? detail?.githubRepo ?? null;
   const prUrl = effectiveGithubRepo && pr ? `https://github.com/${effectiveGithubRepo}/pull/${pr.number}` : null;
   const stateInfo = STATE_COLORS[pr?.state ?? ''] ?? { color: '#8B949E', label: 'UNKNOWN' };
-  const mergeStatusColor = MERGE_STATUS_COLORS[(pr?.mergeStatus ?? 'unknown').toLowerCase()] ?? '#8B949E';
+  const mergeStatusColor = getMergeStatusColor(pr?.mergeStatus);
+  const mergeStatusLabel = getMergeStatusLabel(pr?.mergeStatus);
   const isOpen = pr?.state === 'open';
 
   return (
@@ -224,7 +215,7 @@ export function PRDetail({ prNumber, teamId, onClose, githubRepo }: PRDetailProp
                   backgroundColor: mergeStatusColor + '10',
                 }}
               >
-                {pr.mergeStatus.toUpperCase()}
+                {mergeStatusLabel}
               </span>
             )}
 

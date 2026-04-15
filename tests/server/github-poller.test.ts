@@ -150,6 +150,7 @@ function makeGHPRViewResult(overrides?: Record<string, unknown>) {
     headRefName: 'feat/10-test',
     baseRefName: 'main',
     mergedAt: null,
+    reviewDecision: null,
     ...overrides,
   });
 }
@@ -1559,7 +1560,7 @@ describe('Surgical cache update on PR merge', () => {
   });
 });
 
-// =============================================================================
+
 // CI green + auto-merge early shutdown
 // =============================================================================
 
@@ -1704,5 +1705,310 @@ describe('CI green + auto-merge early shutdown', () => {
       },
     );
     expect(earlyShutdownTransition).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Merge status disambiguation (issue #686)
+// =============================================================================
+
+describe('Merge status disambiguation', () => {
+  it('disambiguates blocked with pending CI as blocked_ci_pending', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'unknown',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        mergeStateStatus: 'BLOCKED',
+        statusCheckRollup: [
+          { name: 'build', conclusion: null, status: 'IN_PROGRESS' },
+        ],
+        reviewDecision: null,
+      }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockDb.updatePullRequest).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ mergeStatus: 'blocked_ci_pending' }),
+    );
+  });
+
+  it('disambiguates blocked with failing CI as blocked_ci_failed', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'unknown',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        mergeStateStatus: 'BLOCKED',
+        statusCheckRollup: [
+          { name: 'build', conclusion: 'FAILURE', status: 'COMPLETED' },
+        ],
+        reviewDecision: null,
+      }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockDb.updatePullRequest).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ mergeStatus: 'blocked_ci_failed' }),
+    );
+  });
+
+  it('disambiguates blocked with review required as blocked_review', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'unknown',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        mergeStateStatus: 'BLOCKED',
+        statusCheckRollup: [
+          { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED' },
+        ],
+        reviewDecision: 'REVIEW_REQUIRED',
+      }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockDb.updatePullRequest).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ mergeStatus: 'blocked_review' }),
+    );
+  });
+
+  it('disambiguates blocked with CHANGES_REQUESTED as blocked_review', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'unknown',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        mergeStateStatus: 'BLOCKED',
+        statusCheckRollup: [
+          { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED' },
+        ],
+        reviewDecision: 'CHANGES_REQUESTED',
+      }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockDb.updatePullRequest).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ mergeStatus: 'blocked_review' }),
+    );
+  });
+
+  it('disambiguates blocked with unknown reason as blocked_unknown', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'none',
+      mergeStatus: 'unknown',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        mergeStateStatus: 'BLOCKED',
+        statusCheckRollup: [
+          { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED' },
+        ],
+        reviewDecision: null,
+      }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockDb.updatePullRequest).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ mergeStatus: 'blocked_unknown' }),
+    );
+  });
+});
+
+// =============================================================================
+// Post-merge CI filtering and cleanup (issue #686)
+// =============================================================================
+
+describe('Post-merge CI filtering and cleanup', () => {
+  it('resets ciFailCount to 0 when PR is merged', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42, status: 'running' });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'failing',
+      mergeStatus: 'blocked',
+      autoMerge: false,
+      ciFailCount: 2,
+    });
+    mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        state: 'CLOSED',
+        mergedAt: '2025-01-01T00:00:00Z',
+        statusCheckRollup: [
+          { name: 'build', conclusion: 'FAILURE', status: 'COMPLETED' },
+        ],
+      }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockDb.updatePullRequest).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ ciFailCount: 0 }),
+    );
+  });
+
+  it('sets mergeStatus to clean on merge', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42, status: 'running' });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'pending',
+      mergeStatus: 'blocked',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+    mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        state: 'CLOSED',
+        mergedAt: '2025-01-01T00:00:00Z',
+      }),
+    );
+
+    await githubPoller.poll();
+
+    expect(mockDb.updatePullRequest).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ mergeStatus: 'clean' }),
+    );
+  });
+
+  it('filters post-merge IN_PROGRESS checks from ciStatus derivation', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42, status: 'running' });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'passing',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+    mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
+
+    // Merged PR with one passing pre-merge check and one IN_PROGRESS post-merge check
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        state: 'CLOSED',
+        mergedAt: '2025-01-01T00:00:00Z',
+        statusCheckRollup: [
+          { name: 'build', conclusion: 'SUCCESS', status: 'COMPLETED' },
+          { name: 'deploy', conclusion: null, status: 'IN_PROGRESS' },
+        ],
+      }),
+    );
+
+    await githubPoller.poll();
+
+    // ciStatus should be 'passing' (post-merge IN_PROGRESS check filtered out)
+    expect(mockDb.updatePullRequest).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ ciStatus: 'passing' }),
+    );
+  });
+
+  it('reconcilePR triggers a single PR poll for a team', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 42, projectId: 1, status: 'done' });
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 42,
+      state: 'open',
+      ciStatus: 'pending',
+      mergeStatus: 'blocked',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        state: 'CLOSED',
+        mergedAt: '2025-01-01T00:00:00Z',
+      }),
+    );
+
+    await githubPoller.reconcilePR(1);
+
+    // Should have called gh pr view for the team's PR
+    expect(mockExecGHAsync).toHaveBeenCalledWith(
+      expect.stringContaining('gh pr view 42'),
+    );
+    // ciFailCount should be 0 and mergeStatus should be clean
+    expect(mockDb.updatePullRequest).toHaveBeenCalledWith(
+      42,
+      expect.objectContaining({ ciFailCount: 0, mergeStatus: 'clean' }),
+    );
   });
 });

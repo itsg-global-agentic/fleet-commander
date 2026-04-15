@@ -111,7 +111,7 @@ CREATE TABLE IF NOT EXISTS pull_requests (
   title           TEXT,
   state           TEXT,                           -- OPEN|MERGED|CLOSED|draft
   ci_status       TEXT,                           -- none|pending|passing|failing
-  merge_status    TEXT,                           -- unknown|clean|behind|blocked|dirty
+  merge_status    TEXT,                           -- unknown|clean|behind|blocked|blocked_ci_pending|blocked_ci_failed|blocked_review|blocked_unknown|dirty|unstable|has_hooks|draft
   auto_merge      INTEGER NOT NULL DEFAULT 0,     -- 0|1
   ci_fail_count   INTEGER NOT NULL DEFAULT 0,     -- unique failure types; >= 3 means blocked
   checks_json     TEXT,                           -- JSON array: [{name, status, conclusion}]

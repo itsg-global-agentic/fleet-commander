@@ -10,6 +10,7 @@ import { CommandInput } from './CommandInput';
 import { CommGraph } from './CommGraph';
 import { HandoffFileCard } from './HandoffFileCard';
 import { STATUS_COLORS } from '../utils/constants';
+import { getMergeStatusLabel } from '../utils/merge-status';
 import { formatIssueKey } from '../../shared/issue-provider';
 import type { TeamTask, HandoffFile } from '../../shared/types';
 
@@ -243,9 +244,9 @@ export function TeamDetail() {
 
   // PR merge status label — hide when PR is merged or closed (GitHub returns
   // "unknown" for mergeStateStatus once a PR is no longer open, which is confusing)
-  const mergeStatusLabel =
+  const mergeStatusLabelText =
     detail?.pr && detail.pr.state !== 'merged' && detail.pr.state !== 'closed'
-      ? (detail.pr.mergeStatus ?? null)
+      ? getMergeStatusLabel(detail.pr.mergeStatus)
       : null;
 
   return (
@@ -505,9 +506,9 @@ export function TeamDetail() {
                         >
                           {detail.pr.state?.toUpperCase() ?? 'UNKNOWN'}
                         </span>
-                        {mergeStatusLabel && (
+                        {mergeStatusLabelText && (
                           <span className="text-xs text-dark-muted">
-                            Merge: {mergeStatusLabel}
+                            Merge: {mergeStatusLabelText}
                           </span>
                         )}
                         {detail.pr.autoMerge && (

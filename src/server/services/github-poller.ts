@@ -43,6 +43,7 @@ interface GHPRViewResult {
   autoMergeRequest?: { enabledAt?: string } | null;
   headRefName?: string;
   baseRefName?: string;
+  reviewDecision?: string | null;
 }
 
 interface GHPRListItem {
@@ -245,7 +246,7 @@ class GitHubPoller {
     // Use gh pr view to get PR status, CI checks, merge state, and auto-merge
     const result = await execGHAsync(
       `gh pr view ${prNumber} --repo "${githubRepo}" ` +
-        `--json number,title,state,mergeStateStatus,statusCheckRollup,autoMergeRequest,headRefName,baseRefName,mergedAt`
+        `--json number,title,state,mergeStateStatus,statusCheckRollup,autoMergeRequest,headRefName,baseRefName,mergedAt,reviewDecision`
     );
     if (!result) return null; // gh CLI failed — skip this cycle
 
@@ -264,20 +265,33 @@ class GitHubPoller {
     const isMerged = !!data.mergedAt;
     const rawState = data.state?.toLowerCase() ?? 'open';
     const state: PRState = isMerged ? 'merged' : (['draft', 'open', 'merged', 'closed'].includes(rawState) ? rawState as PRState : 'open');
-    const rawMerge = data.mergeStateStatus?.toLowerCase() ?? 'unknown';
-    const mergeState: MergeStatus = (['clean', 'behind', 'blocked', 'dirty', 'unstable', 'has_hooks', 'draft', 'unknown'].includes(rawMerge) ? rawMerge as MergeStatus : 'unknown');
-
-    // Derive CI status from statusCheckRollup
-    const checks: GHCheckRun[] = data.statusCheckRollup ?? [];
+    // Derive CI status from statusCheckRollup, filtering post-merge checks for merged PRs
+    const rawChecks: GHCheckRun[] = data.statusCheckRollup ?? [];
+    const checks = isMerged ? this.filterPostMergeChecks(rawChecks, data.mergedAt ?? null) : rawChecks;
     const ciStatus = this.deriveCIStatus(checks);
 
+    // Map GitHub mergeStateStatus to our MergeStatus, disambiguating 'blocked'
+    const rawMerge = data.mergeStateStatus?.toLowerCase() ?? 'unknown';
+    let mergeState: MergeStatus;
+    if (isMerged) {
+      // Merged PRs have no merge blockers
+      mergeState = 'clean';
+    } else if (rawMerge === 'blocked') {
+      mergeState = this.disambiguateBlocked(checks, ciStatus, data.reviewDecision);
+    } else {
+      mergeState = (['clean', 'behind', 'dirty', 'unstable', 'has_hooks', 'draft', 'unknown'].includes(rawMerge) ? rawMerge as MergeStatus : 'unknown');
+    }
+
     const autoMerge = !!data.autoMergeRequest;
-    const checksJson = JSON.stringify(checks);
+    const checksJson = JSON.stringify(rawChecks);
     const title = data.title ?? `PR #${prNumber}`;
 
-    // Count unique CI failures — cumulative (only goes up or resets to 0 on green)
+    // Count unique CI failures — cumulative (only goes up or resets to 0 on green/merge)
     let ciFailCount = existing?.ciFailCount ?? 0;
-    if (ciStatus === 'passing') {
+    if (isMerged) {
+      // Reset failure count on merge — stale CI data should not pollute merged PRs
+      ciFailCount = 0;
+    } else if (ciStatus === 'passing') {
       // Reset failure count when CI is green
       ciFailCount = 0;
     } else if (ciStatus === 'failing') {
@@ -949,6 +963,77 @@ class GitHubPoller {
         `[GitHubPoller] Detected PR #${prs[0]!.number} for branch "${branchName}" (team ${teamId}, repo: ${githubRepo})`
       );
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Public: reconcile a single team's PR (final poll on team done)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Trigger a single PR poll for a team. Called when a team transitions to
+   * `done` so that stale mergeStatus/ciFailCount is reconciled even if
+   * the normal poll cycle hasn't caught the merge yet.
+   */
+  async reconcilePR(teamId: number): Promise<void> {
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team?.prNumber || !team.projectId) return;
+
+    const projects = db.getProjects({ status: 'active' });
+    const project = projects.find((p) => p.id === team.projectId);
+    const githubRepo = project?.githubRepo;
+    if (!githubRepo) return;
+
+    await this.pollPR(team.prNumber, teamId, githubRepo);
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: disambiguate GitHub's generic BLOCKED merge state
+  // -------------------------------------------------------------------------
+
+  /**
+   * When GitHub reports `mergeStateStatus: 'BLOCKED'`, inspect CI status and
+   * review decision to determine the specific reason. Returns a disambiguated
+   * `MergeStatus` sub-state.
+   */
+  private disambiguateBlocked(
+    _checks: GHCheckRun[],
+    ciStatus: CIStatus,
+    reviewDecision: string | null | undefined,
+  ): MergeStatus {
+    if (ciStatus === 'pending') return 'blocked_ci_pending';
+    if (ciStatus === 'failing') return 'blocked_ci_failed';
+    if (
+      reviewDecision === 'REVIEW_REQUIRED' ||
+      reviewDecision === 'CHANGES_REQUESTED'
+    ) {
+      return 'blocked_review';
+    }
+    return 'blocked_unknown';
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: filter post-merge cleanup workflows from check runs
+  // -------------------------------------------------------------------------
+
+  /**
+   * For merged PRs, filter out check runs that are still IN_PROGRESS with no
+   * conclusion. These are post-merge cleanup workflows (deploy, release, etc.)
+   * that should not influence the stored CI status of a merged PR.
+   *
+   * For non-merged PRs (mergedAt is null), returns all checks unmodified.
+   */
+  private filterPostMergeChecks(checks: GHCheckRun[], mergedAt: string | null): GHCheckRun[] {
+    if (!mergedAt) return checks;
+    return checks.filter((c) => {
+      // Keep checks that have a conclusion (they completed before or after merge)
+      if (c.conclusion) return true;
+      // Filter out still-running checks (no conclusion + IN_PROGRESS) — these are
+      // post-merge workflows that would otherwise make ciStatus stay "pending"
+      if (c.status === 'IN_PROGRESS') return false;
+      // Keep all other checks (e.g. queued but not yet started)
+      return true;
+    });
   }
 
   // -------------------------------------------------------------------------

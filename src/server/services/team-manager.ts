@@ -1777,6 +1777,15 @@ export class TeamManager {
 
         sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
         this.broadcastSnapshot();
+
+        // Final PR reconciliation on team done — clear stale CI/merge data
+        if (exitStatus === 'done' && currentTeam.prNumber) {
+          import('./github-poller.js').then(({ githubPoller }) => {
+            githubPoller.reconcilePR(teamId).catch((err) => {
+              console.error(`[TeamManager] reconcilePR error for team ${teamId}:`, err instanceof Error ? err.message : err);
+            });
+          }).catch(() => { /* ignore import failure */ });
+        }
       }
 
       if (currentTeam.projectId) {
