@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.21
+# fleet-commander v0.0.22
 # Fleet Commander hook: StopFailure
 # Fires when the agent stops due to rate limits or API errors.
 # stdin JSON example: {"session_id":"abc123","error_details":"rate_limit","last_assistant_message":"..."}

@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.21
+# fleet-commander v0.0.22
 # Fleet Commander hook: SessionEnd
 # Detects team finish. Clean shutdown signal.
 # stdin JSON example: {"session_id":"abc123"}

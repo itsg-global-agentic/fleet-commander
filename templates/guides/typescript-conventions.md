@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.21 -->
+<!-- fleet-commander v0.0.22 -->
 # TypeScript / JavaScript Conventions
 
 > Applies to: `*.ts`, `*.tsx`, `*.js`, `*.jsx`, `package.json`, `tsconfig.json`

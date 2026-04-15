@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.21
+# fleet-commander v0.0.22
 # Fleet Commander hook: TaskCreated
 # Fires when an agent creates or updates a task via TaskCreate/TodoWrite.
 # stdin JSON example: {"session_id":"abc123","task_id":"task_1","subject":"Implement feature","status":"in_progress"}

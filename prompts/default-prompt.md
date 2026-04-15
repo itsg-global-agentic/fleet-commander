@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.21 -->
+<!-- fleet-commander v0.0.22 -->
 Read the ENTIRE file `.claude/prompts/fleet-workflow.md` before taking any actions.
 
 Read `.fleet-issue-context.md` in the worktree root for full issue context (body, comments, acceptance criteria). If the file does not exist, the planner will fetch issue details via `gh issue view`.

@@ -1,5 +1,5 @@
 #!/bin/bash
-# fleet-commander v0.0.21
+# fleet-commander v0.0.22
 # Fleet Commander: Sends a handoff file (plan.md, changes.md, review.md)
 # to the Fleet Commander server via multipart form upload.
 #
