@@ -443,6 +443,7 @@ export class TeamManager {
       worktreeName,
       cwd: project.repoPath,
       model: project.model,
+      effort: project.effort ?? config.defaultEffort,
       resume: false,
       fleetContext: { teamId: worktreeName, projectId, githubRepo: project.githubRepo ?? '' },
     });
@@ -647,6 +648,7 @@ export class TeamManager {
       worktreeName: team.worktreeName,
       cwd: project.repoPath,
       model: project.model,
+      effort: project.effort ?? config.defaultEffort,
       resume: true,
       fleetContext: { teamId: team.worktreeName, projectId: project.id, githubRepo: project.githubRepo ?? '' },
     });
@@ -1413,6 +1415,7 @@ export class TeamManager {
       worktreeName: team.worktreeName,
       cwd: project.repoPath,
       model: project.model,
+      effort: project.effort ?? config.defaultEffort,
       resume: false,
       fleetContext: { teamId: team.worktreeName, projectId, githubRepo: project.githubRepo ?? '' },
     });
@@ -1780,6 +1783,7 @@ export class TeamManager {
       worktreeName: team.worktreeName,
       cwd: worktreeAbsPath,
       model: project.model,
+      effort: project.effort ?? config.defaultEffort,
       prompt,
       windowTitle: `Team ${team.worktreeName}`,
       fleetContext: { teamId: team.worktreeName, projectId: team.projectId!, githubRepo: project.githubRepo ?? '' },

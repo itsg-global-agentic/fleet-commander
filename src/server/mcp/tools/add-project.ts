@@ -24,15 +24,17 @@ import { ServiceError } from '../../services/service-error.js';
 export function registerAddProjectTool(server: McpServer): void {
   server.tool(
     'fleet_add_project',
-    'Registers a new git repository as a Fleet Commander project',
+    'Registers a new git repository as a Fleet Commander project, optionally specifying model and adaptive-reasoning effort level',
     {
       repoPath: z.string().describe('Absolute path to the git repository'),
       name: z.string().optional().describe('Project display name (defaults to directory name)'),
       githubRepo: z.string().optional().describe('GitHub repo in owner/name format (auto-detected if omitted)'),
       maxActiveTeams: z.number().optional().describe('Maximum concurrent active teams (default 5)'),
       model: z.string().optional().describe('Claude model to use for this project'),
+      effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional()
+        .describe('Adaptive-reasoning effort level (Opus 4.7+). xhigh/max are Opus-4.7-only.'),
     },
-    async ({ repoPath, name, githubRepo, maxActiveTeams, model }) => {
+    async ({ repoPath, name, githubRepo, maxActiveTeams, model, effort }) => {
       try {
         const service = getProjectService();
         const project = await service.createProject({
@@ -41,6 +43,7 @@ export function registerAddProjectTool(server: McpServer): void {
           githubRepo,
           maxActiveTeams,
           model,
+          effort,
         });
 
         return {

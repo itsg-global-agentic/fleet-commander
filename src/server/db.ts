@@ -228,6 +228,7 @@ export interface ProjectInsert {
   maxActiveTeams?: number;
   promptFile?: string | null;
   model?: string | null;
+  effort?: string | null;
   issueProvider?: string | null;
   projectKey?: string | null;
   providerConfig?: string | null;
@@ -242,6 +243,7 @@ export interface ProjectUpdate {
   maxActiveTeams?: number;
   promptFile?: string | null;
   model?: string | null;
+  effort?: string | null;
   issueProvider?: string | null;
   projectKey?: string | null;
   providerConfig?: string | null;
@@ -423,6 +425,9 @@ export class FleetDatabase {
 
     // Add started_at column to teams and recreate v_team_dashboard view (v18 migration)
     this.addStartedAtColumn();
+
+    // Add effort column to projects (v19 migration — adaptive-reasoning effort level)
+    this.addEffortColumn();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1187,6 +1192,33 @@ export class FleetDatabase {
   }
 
   /**
+   * Add effort column to projects table if it doesn't exist (v19 migration).
+   * Nullable TEXT with CHECK constraint restricting values to the 5 CC
+   * adaptive-reasoning effort levels: low, medium, high, xhigh, max.
+   * Fresh databases get the column via schema.sql; upgraded databases use this
+   * migration. Existing rows will have NULL effort which the CHECK allows.
+   */
+  private addEffortColumn(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+      // Fresh DB: projects table doesn't exist yet — schema.sql will create it
+      // with effort already present. Nothing to migrate.
+      if (cols.length === 0) return;
+      const hasColumn = cols.some((c) => c.name === 'effort');
+      if (!hasColumn) {
+        this.db.exec(
+          "ALTER TABLE projects ADD COLUMN effort TEXT CHECK(effort IS NULL OR effort IN ('low','medium','high','xhigh','max'))"
+        );
+        console.log('[DB] v19 migration: added effort column to projects');
+      }
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (19)');
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v19 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Migrate branch_behind and branch_behind_resolved message templates
    * from hardcoded 'main' to use {{BASE_BRANCH}} placeholder.
    * Only updates templates that exactly match the old defaults (user edits are preserved).
@@ -1247,8 +1279,8 @@ export class FleetDatabase {
   insertProject(data: ProjectInsert): Project {
     const now = new Date().toISOString();
     const stmt = this.stmt(`
-      INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, issue_provider, project_key, provider_config, created_at, updated_at)
-      VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @issueProvider, @projectKey, @providerConfig, @createdAt, @updatedAt)
+      INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, effort, issue_provider, project_key, provider_config, created_at, updated_at)
+      VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @effort, @issueProvider, @projectKey, @providerConfig, @createdAt, @updatedAt)
     `);
 
     const info = stmt.run({
@@ -1259,6 +1291,7 @@ export class FleetDatabase {
       maxActiveTeams: data.maxActiveTeams ?? 5,
       promptFile: data.promptFile ?? null,
       model: data.model ?? null,
+      effort: data.effort ?? null,
       issueProvider: data.issueProvider ?? 'github',
       projectKey: data.projectKey ?? null,
       providerConfig: data.providerConfig ? encrypt(data.providerConfig) : null,
@@ -1354,6 +1387,10 @@ export class FleetDatabase {
     if (fields.model !== undefined) {
       setClauses.push('model = @model');
       params.model = fields.model;
+    }
+    if (fields.effort !== undefined) {
+      setClauses.push('effort = @effort');
+      params.effort = fields.effort;
     }
     if (fields.issueProvider !== undefined) {
       setClauses.push('issue_provider = @issueProvider');
@@ -2936,6 +2973,7 @@ export class FleetDatabase {
       maxActiveTeams: (row.max_active_teams as number | undefined) ?? 5,
       promptFile: (row.prompt_file as string | null) ?? null,
       model: (row.model as string | null) ?? null,
+      effort: (row.effort as string | null) ?? null,
       issueProvider: (row.issue_provider as string | null) ?? 'github',
       projectKey: (row.project_key as string | null) ?? null,
       providerConfig,

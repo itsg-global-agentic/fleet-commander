@@ -170,6 +170,7 @@ const config = Object.freeze({
   retryMaxCount: safeParseInt(process.env['FLEET_RETRY_MAX_COUNT'] || '2', 'FLEET_RETRY_MAX_COUNT'),
 
   defaultModel: process.env['FLEET_DEFAULT_MODEL'] || 'opus',
+  defaultEffort: process.env['FLEET_DEFAULT_EFFORT'] || null,
   ccQueryModel: process.env['FLEET_CC_QUERY_MODEL'] || 'sonnet',
   ccQueryTimeoutMs: safeParseInt(process.env['FLEET_CC_QUERY_TIMEOUT_MS'] || '30000', 'FLEET_CC_QUERY_TIMEOUT_MS'),
   ccQueryPrioritizeTimeoutMs: safeParseInt(process.env['FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS'] || '300000', 'FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS'),

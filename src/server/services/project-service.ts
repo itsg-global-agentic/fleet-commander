@@ -760,11 +760,12 @@ export class ProjectService {
     githubRepo?: string;
     maxActiveTeams?: number;
     model?: string;
+    effort?: string | null;
     issueProvider?: string;
     projectKey?: string;
     providerConfig?: string;
   }): Promise<unknown> {
-    const { name, repoPath, githubRepo, maxActiveTeams, model, issueProvider, projectKey, providerConfig } = data;
+    const { name, repoPath, githubRepo, maxActiveTeams, model, effort, issueProvider, projectKey, providerConfig } = data;
 
     // Validate name
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -842,6 +843,13 @@ export class ProjectService {
       }
     }
 
+    // Validate effort if provided (empty string coerces to null below)
+    const normalizedEffort = effort?.trim() || null;
+    if (normalizedEffort !== null &&
+        !['low', 'medium', 'high', 'xhigh', 'max'].includes(normalizedEffort)) {
+      throw validationError('Invalid effort. Must be one of: low, medium, high, xhigh, max');
+    }
+
     // Insert the project (no per-project prompt file — always use prompts/default-prompt.md)
     const project = db.insertProject({
       name: name.trim(),
@@ -850,6 +858,7 @@ export class ProjectService {
       maxActiveTeams: maxActiveTeams ?? 5,
       promptFile: null,
       model: model?.trim() || null,
+      effort: normalizedEffort,
       issueProvider: resolvedIssueProvider,
       projectKey: resolvedProjectKey,
       providerConfig: resolvedProviderConfig,
@@ -1189,6 +1198,7 @@ export class ProjectService {
     maxActiveTeams?: number;
     promptFile?: string | null;
     model?: string | null;
+    effort?: string | null;
   }): unknown {
     if (isNaN(projectId) || projectId < 1) {
       throw validationError('Invalid project ID');
@@ -1200,7 +1210,7 @@ export class ProjectService {
       throw notFoundError(`Project ${projectId} not found`);
     }
 
-    const { name, status, githubRepo, groupId, hooksInstalled, maxActiveTeams, promptFile, model } = data;
+    const { name, status, githubRepo, groupId, hooksInstalled, maxActiveTeams, promptFile, model, effort } = data;
 
     // Validate status if provided
     if (status !== undefined) {
@@ -1222,6 +1232,16 @@ export class ProjectService {
       }
     }
 
+    // Validate effort if provided (empty string coerces to null below)
+    let normalizedEffort: string | null | undefined = undefined;
+    if (effort !== undefined) {
+      normalizedEffort = effort?.trim() || null;
+      if (normalizedEffort !== null &&
+          !['low', 'medium', 'high', 'xhigh', 'max'].includes(normalizedEffort)) {
+        throw validationError('Invalid effort. Must be one of: low, medium, high, xhigh, max');
+      }
+    }
+
     const updated = db.updateProject(projectId, {
       name: name?.trim(),
       status,
@@ -1231,6 +1251,7 @@ export class ProjectService {
       maxActiveTeams,
       promptFile,
       model: model !== undefined ? (model?.trim() || null) : undefined,
+      effort: normalizedEffort,
     });
 
     // Broadcast SSE event

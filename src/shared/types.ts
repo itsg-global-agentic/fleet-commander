@@ -27,6 +27,9 @@ export type MergeStatus = 'unknown' | 'clean' | 'behind' | 'blocked' | 'blocked_
 /** Project status */
 export type ProjectStatus = 'active' | 'archived';
 
+/** Claude Code adaptive-reasoning effort level (Opus 4.7+) */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 /** Usage zone for queue gating */
 export type UsageZone = 'green' | 'red' | 'hard_red';
 
@@ -55,6 +58,7 @@ export interface Project {
   maxActiveTeams: number;
   promptFile: string | null;
   model?: string | null;
+  effort?: string | null;
   issueProvider: string | null;
   projectKey: string | null;
   providerConfig: string | null;

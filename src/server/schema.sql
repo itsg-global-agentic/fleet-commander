@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS projects (
   max_active_teams INTEGER NOT NULL DEFAULT 5,        -- max concurrent active teams before queueing
   prompt_file     TEXT,                               -- relative path to launch prompt .md file
   model           TEXT,                               -- Claude model override e.g. "opus", "sonnet", "claude-opus-4-6"
+  effort          TEXT CHECK(effort IS NULL OR effort IN ('low','medium','high','xhigh','max')),  -- CC adaptive-reasoning effort level
   issue_provider  TEXT DEFAULT 'github',              -- issue provider: github | jira | linear
   project_key     TEXT,                               -- provider-specific project key (e.g. Jira project key)
   provider_config TEXT,                               -- JSON blob of provider-specific configuration
@@ -387,4 +388,4 @@ CREATE TABLE IF NOT EXISTS provider_state (
 );
 
 -- Insert schema version (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (18);
+INSERT OR IGNORE INTO schema_version (version) VALUES (19);

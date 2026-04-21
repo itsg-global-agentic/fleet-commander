@@ -660,6 +660,7 @@ function ProjectCard({
   onToggleExpand,
   onSaveLimit,
   onSaveModel,
+  onSaveEffort,
   onReinstall,
   onCleanup,
   onDelete,
@@ -675,6 +676,7 @@ function ProjectCard({
   onToggleExpand: () => void;
   onSaveLimit: (projectId: number, value: number) => void;
   onSaveModel: (projectId: number, value: string) => void;
+  onSaveEffort: (projectId: number, value: string) => void;
   onReinstall: (p: ProjectSummary) => void;
   onCleanup: (p: ProjectSummary) => void;
   onDelete: (p: ProjectSummary) => void;
@@ -942,6 +944,25 @@ function ProjectCard({
                   <PencilIcon size={11} className="text-dark-muted/40 group-hover:text-dark-muted transition-colors" />
                 </span>
               )}
+
+              {/* Effort (select) */}
+              <span className="shrink-0 inline-flex items-center gap-1">
+                <span>Effort:</span>
+                <select
+                  value={project.effort ?? ''}
+                  onChange={(e) => onSaveEffort(project.id, e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="shrink-0 px-1 py-0 text-xs rounded border border-dark-border bg-dark-base text-dark-muted hover:text-dark-text focus:outline-none cursor-pointer"
+                  title="Effort level (Opus 4.7 adaptive reasoning)"
+                >
+                  <option value="">default</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                  <option value="xhigh">xhigh</option>
+                  <option value="max">max</option>
+                </select>
+              </span>
 
               {/* Max teams (editable) */}
               {limitEdit.isEditing ? (
@@ -1440,6 +1461,23 @@ export function ProjectsPage() {
     [api, fetchProjects],
   );
 
+  const handleSaveEffort = useCallback(
+    async (projectId: number, value: string) => {
+      const normalized = value || null;
+      // Optimistic update
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, effort: normalized } : p)),
+      );
+      try {
+        await api.put(`projects/${projectId}`, { effort: normalized });
+      } catch {
+        // Revert on failure by refetching
+        await fetchProjects();
+      }
+    },
+    [api, fetchProjects],
+  );
+
   // --- Computed: group projects by groupId ---
   const { groupedSections, ungroupedProjects } = useMemo(() => {
     const ungrouped = projects.filter((p) => p.groupId == null);
@@ -1467,6 +1505,7 @@ export function ProjectsPage() {
     reinstallResult,
     onSaveLimit: handleSaveLimit,
     onSaveModel: handleSaveModel,
+    onSaveEffort: handleSaveEffort,
     onReinstall: handleReinstall,
     onCleanup: handleCleanup,
     onDelete: handleDelete,

@@ -297,6 +297,26 @@ describe('cc-spawn', () => {
       expect(args).not.toContain('--model');
     });
 
+    it('includes --effort when provided', () => {
+      const args = buildHeadlessArgs({ worktreeName: 'test-wt', effort: 'max' });
+
+      expect(args).toContain('--effort');
+      const effortIdx = args.indexOf('--effort');
+      expect(args[effortIdx + 1]).toBe('max');
+    });
+
+    it('excludes --effort when not provided', () => {
+      const args = buildHeadlessArgs({ worktreeName: 'test-wt' });
+
+      expect(args).not.toContain('--effort');
+    });
+
+    it('excludes --effort when effort is null', () => {
+      const args = buildHeadlessArgs({ worktreeName: 'test-wt', effort: null });
+
+      expect(args).not.toContain('--effort');
+    });
+
     it('includes --resume when resume is true', () => {
       const args = buildHeadlessArgs({ worktreeName: 'test-wt', resume: true });
 
@@ -368,6 +388,26 @@ describe('cc-spawn', () => {
       const args = buildInteractiveArgs({ worktreeName: 'proj-99', model: null });
 
       expect(args).not.toContain('--model');
+    });
+
+    it('includes --effort when provided', () => {
+      const args = buildInteractiveArgs({ worktreeName: 'proj-99', effort: 'high' });
+
+      expect(args).toContain('--effort');
+      const effortIdx = args.indexOf('--effort');
+      expect(args[effortIdx + 1]).toBe('high');
+    });
+
+    it('excludes --effort when not provided', () => {
+      const args = buildInteractiveArgs({ worktreeName: 'proj-99' });
+
+      expect(args).not.toContain('--effort');
+    });
+
+    it('excludes --effort when effort is null', () => {
+      const args = buildInteractiveArgs({ worktreeName: 'proj-99', effort: null });
+
+      expect(args).not.toContain('--effort');
     });
 
     it('does NOT include stream-json flags (interactive mode)', () => {

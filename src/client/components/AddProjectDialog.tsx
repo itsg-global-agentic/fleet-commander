@@ -34,6 +34,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
   const [githubRepo, setGithubRepo] = useState('');
   const [maxActiveTeams, setMaxActiveTeams] = useState(5);
   const [model, setModel] = useState('');
+  const [effort, setEffort] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,6 +88,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
       setGithubRepo('');
       setMaxActiveTeams(5);
       setModel('');
+      setEffort('');
       setError(null);
       setLoading(false);
       setSuggestions([]);
@@ -282,6 +284,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
         githubRepo: githubRepo.trim() || undefined,
         maxActiveTeams,
         model: model.trim() || undefined,
+        effort: effort || undefined,
         issueProvider,
       };
 
@@ -303,7 +306,7 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
     } finally {
       setLoading(false);
     }
-  }, [name, repoPath, githubRepo, maxActiveTeams, model, issueProvider, jiraBaseUrl, jiraEmail, jiraApiToken, jiraProjectKey, api, onAdded]);
+  }, [name, repoPath, githubRepo, maxActiveTeams, model, effort, issueProvider, jiraBaseUrl, jiraEmail, jiraApiToken, jiraProjectKey, api, onAdded]);
 
   // Keyboard navigation for suggestions + Enter to submit
   const handlePathKeyDown = useCallback(
@@ -659,6 +662,29 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
             />
             <p className="mt-1 text-xs text-dark-muted/60">
               Claude model to use for teams in this project. Empty uses the default model.
+            </p>
+          </div>
+
+          {/* Effort */}
+          <div>
+            <label className="block text-sm text-dark-muted mb-1">
+              Effort Level <span className="text-dark-muted/50">(optional)</span>
+            </label>
+            <select
+              value={effort}
+              onChange={(e) => setEffort(e.target.value)}
+              className="w-full px-3 py-2 text-sm rounded border border-dark-border bg-dark-base text-dark-text focus:outline-none focus:border-dark-accent focus:ring-1 focus:ring-dark-accent/30"
+              disabled={loading}
+            >
+              <option value="">Default (CC decides)</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh (Opus 4.7 default)</option>
+              <option value="max">max (Opus 4.7 only)</option>
+            </select>
+            <p className="mt-1 text-xs text-dark-muted/60">
+              Adaptive-reasoning effort level. xhigh/max apply only to Opus 4.7+; other models silently fall back.
             </p>
           </div>
 

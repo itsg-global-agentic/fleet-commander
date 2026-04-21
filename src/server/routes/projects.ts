@@ -27,6 +27,7 @@ interface CreateProjectBody {
   githubRepo?: string;
   maxActiveTeams?: number;
   model?: string;
+  effort?: string | null;
   issueProvider?: string;
   projectKey?: string;
   providerConfig?: string;
@@ -40,6 +41,7 @@ interface UpdateProjectBody {
   hooksInstalled?: boolean;
   maxActiveTeams?: number;
   model?: string | null;
+  effort?: string | null;
   issueProvider?: string | null;
   projectKey?: string | null;
   providerConfig?: string | null;

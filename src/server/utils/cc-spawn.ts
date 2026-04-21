@@ -117,6 +117,7 @@ export interface HeadlessArgsOptions {
   worktreeName: string;
   resume?: boolean;
   model?: string | null;
+  effort?: string | null;
 }
 
 /**
@@ -128,6 +129,7 @@ export interface HeadlessArgsOptions {
 export interface InteractiveArgsOptions {
   worktreeName: string;
   model?: string | null;
+  effort?: string | null;
 }
 
 /** Options for building query (-p one-shot) CLI args. */
@@ -163,6 +165,10 @@ export function buildHeadlessArgs(options: HeadlessArgsOptions): string[] {
     args.push('--model', options.model);
   }
 
+  if (options.effort) {
+    args.push('--effort', options.effort);
+  }
+
   args.push(
     '--input-format', 'stream-json',
     '--output-format', 'stream-json',
@@ -194,6 +200,10 @@ export function buildInteractiveArgs(options: InteractiveArgsOptions): string[] 
 
   if (options.model) {
     args.push('--model', options.model);
+  }
+
+  if (options.effort) {
+    args.push('--effort', options.effort);
   }
 
   return args;
@@ -238,6 +248,8 @@ export interface HeadlessSpawnOptions {
   resume?: boolean;
   /** Optional model override from project config. */
   model?: string | null;
+  /** Optional adaptive-reasoning effort level (Opus 4.7+). */
+  effort?: string | null;
 }
 
 /**
@@ -270,12 +282,14 @@ export function spawnHeadless(options: HeadlessSpawnOptions): ChildProcess {
     worktreeName: options.worktreeName,
     resume: options.resume,
     model: options.model,
+    effort: options.effort,
   });
   const env = buildEnv(options.fleetContext);
 
   console.log(
     `[cc-spawn] headless: worktree=${options.worktreeName}` +
     ` resume=${!!options.resume} model=${options.model ?? 'default'}` +
+    ` effort=${options.effort ?? 'default'}` +
     ` cwd=${options.cwd}`,
   );
 
@@ -424,6 +438,8 @@ export interface InteractiveSpawnOptions {
   fleetContext: FleetEnvContext;
   /** Optional model override. */
   model?: string | null;
+  /** Optional adaptive-reasoning effort level (Opus 4.7+). */
+  effort?: string | null;
   /**
    * Initial prompt passed to Claude as the last positional argument.
    *
@@ -463,6 +479,7 @@ export async function spawnInteractive(options: InteractiveSpawnOptions): Promis
   const args = buildInteractiveArgs({
     worktreeName: options.worktreeName,
     model: options.model,
+    effort: options.effort,
   });
   const env = buildEnv(options.fleetContext);
 

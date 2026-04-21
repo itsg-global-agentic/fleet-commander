@@ -289,6 +289,73 @@ describe('PUT /api/projects/:id', () => {
 
     expect(res.statusCode).toBe(400);
   });
+
+  it('should accept a valid effort value', async () => {
+    const project = seedProject();
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: { effort: 'high' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().effort).toBe('high');
+
+    // Confirm via GET
+    const getRes = await server.inject({ method: 'GET', url: `/api/projects/${project.id}` });
+    expect(getRes.json().effort).toBe('high');
+  });
+
+  it('should reject invalid effort with 400', async () => {
+    const project = seedProject();
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: { effort: 'extreme' },
+    });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('should coerce empty-string effort to null', async () => {
+    const project = seedProject();
+    // First set it to something non-null
+    await server.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: { effort: 'max' },
+    });
+
+    // Now clear with empty string
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: { effort: '' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().effort).toBeNull();
+  });
+
+  it('should clear effort when explicitly set to null', async () => {
+    const project = seedProject();
+    await server.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: { effort: 'low' },
+    });
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: { effort: null },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().effort).toBeNull();
+  });
 });
 
 // =============================================================================
