@@ -147,6 +147,7 @@ const config = Object.freeze({
   skipPermissions: process.env['FLEET_SKIP_PERMISSIONS'] !== 'false',
   enableAgentTeams: process.env['FLEET_ENABLE_AGENT_TEAMS'] !== 'false',
   promptCache1h: process.env['FLEET_PROMPT_CACHE_1H'] !== 'false',
+  debugRawIssueBody: process.env['FLEET_DEBUG_RAW_ISSUE_BODY'] === 'true',
 
   dbPath: process.env['FLEET_DB_PATH'] || defaultDbPath(),
   hookLogPath: process.env['FLEET_HOOK_LOG'] || defaultHookLogPath(),
