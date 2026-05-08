@@ -124,7 +124,8 @@ const config = Object.freeze({
    * TTL for the cached `auto_merge_enabled` value on each project row.
    * After this many milliseconds, the next launch (and the next github-poller
    * cycle) will refresh the bit via `gh api repos/{slug}`. Default 24h since
-   * org-level auto-merge settings rarely change. Clamped to [60_000, 30 days].
+   * org-level auto-merge settings rarely change. Validated against
+   * [60_000, 30 days]; out-of-range values throw at startup.
    */
   autoMergeRefreshMs: safeParseInt(process.env['FLEET_AUTO_MERGE_REFRESH_MS'] || '86400000', 'FLEET_AUTO_MERGE_REFRESH_MS'),
 

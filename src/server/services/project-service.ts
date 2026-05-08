@@ -243,6 +243,13 @@ export async function refreshAutoMergeForProject(
 
   if (!settings) {
     // gh failed / unreachable — throttle retries by bumping checkedAt only.
+    // Log at warn level so operators can see repeated failures without the
+    // `gh` CLI's bare error log (which has no project context).
+    console.warn(
+      `[ProjectService] Auto-merge gh check failed for project ${projectId} ` +
+      `(${project.githubRepo}); leaving autoMergeEnabled unchanged ` +
+      `(${previousEnabled === null ? 'null' : previousEnabled})`,
+    );
     db.updateProject(projectId, { autoMergeCheckedAt: now });
     return previousEnabled;
   }

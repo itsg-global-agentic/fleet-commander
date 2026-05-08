@@ -238,6 +238,36 @@ describe('refreshAutoMergeForProject', () => {
     expect(Date.now() - newCheckedAtMs).toBeLessThan(60_000);
   });
 
+  it('emits a warn log when gh fails so operators can see repeated failures', async () => {
+    const project = seedGithubProject('owner/repo');
+    mockExecGHAsync.mockResolvedValue(null);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    let messages: string[] = [];
+    try {
+      const result = await refreshAutoMergeForProject(project.id);
+      // sanity: confirm the gh-failure path actually ran
+      expect(result).toBeNull();
+      expect(mockExecGHAsync).toHaveBeenCalled();
+      // Snapshot calls BEFORE mockRestore (which clears the call record).
+      messages = warnSpy.mock.calls.map((args) => args.join(' '));
+    } finally {
+      warnSpy.mockRestore();
+    }
+
+    // The warn must mention the project id and the github repo so logs are
+    // searchable per project, and must indicate the persisted value is left
+    // unchanged.
+    expect(
+      messages.some(
+        (m) =>
+          m.includes('Auto-merge gh check failed') &&
+          m.includes(`project ${project.id}`) &&
+          m.includes('owner/repo'),
+      ),
+    ).toBe(true);
+  });
+
   it('broadcasts project_updated only when the value actually changes', async () => {
     const project = seedGithubProject('owner/repo');
 
