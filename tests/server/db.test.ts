@@ -1618,6 +1618,97 @@ describe('Issue Provider Migration', () => {
   });
 });
 
+// =============================================================================
+// Auto-merge cache columns (issue #710)
+// =============================================================================
+
+describe('Auto-merge cache columns', () => {
+  it('reads autoMergeEnabled and autoMergeCheckedAt as null on a fresh project', () => {
+    const project = db.insertProject({
+      name: 'auto-merge-fresh',
+      repoPath: '/tmp/auto-merge-fresh',
+      githubRepo: 'owner/repo',
+    });
+
+    expect(project.autoMergeEnabled).toBeNull();
+    expect(project.autoMergeCheckedAt).toBeNull();
+
+    const reloaded = db.getProject(project.id);
+    expect(reloaded?.autoMergeEnabled).toBeNull();
+    expect(reloaded?.autoMergeCheckedAt).toBeNull();
+  });
+
+  it('persists autoMergeEnabled = false through updateProject and getProject', () => {
+    const project = db.insertProject({
+      name: 'auto-merge-false',
+      repoPath: '/tmp/auto-merge-false',
+      githubRepo: 'owner/repo',
+    });
+
+    const checkedAt = new Date().toISOString();
+    const updated = db.updateProject(project.id, {
+      autoMergeEnabled: false,
+      autoMergeCheckedAt: checkedAt,
+    });
+
+    expect(updated?.autoMergeEnabled).toBe(false);
+    expect(updated?.autoMergeCheckedAt).toBe(checkedAt);
+
+    // Re-fetch confirms the value round-trips through SQLite
+    const reloaded = db.getProject(project.id);
+    expect(reloaded?.autoMergeEnabled).toBe(false);
+  });
+
+  it('persists autoMergeEnabled = true through updateProject and getProject', () => {
+    const project = db.insertProject({
+      name: 'auto-merge-true',
+      repoPath: '/tmp/auto-merge-true',
+      githubRepo: 'owner/repo',
+    });
+
+    const updated = db.updateProject(project.id, {
+      autoMergeEnabled: true,
+      autoMergeCheckedAt: new Date().toISOString(),
+    });
+
+    expect(updated?.autoMergeEnabled).toBe(true);
+
+    const reloaded = db.getProject(project.id);
+    expect(reloaded?.autoMergeEnabled).toBe(true);
+  });
+
+  it('clears autoMergeEnabled back to null via updateProject', () => {
+    const project = db.insertProject({
+      name: 'auto-merge-clear',
+      repoPath: '/tmp/auto-merge-clear',
+      githubRepo: 'owner/repo',
+    });
+
+    db.updateProject(project.id, { autoMergeEnabled: true });
+    expect(db.getProject(project.id)?.autoMergeEnabled).toBe(true);
+
+    db.updateProject(project.id, { autoMergeEnabled: null });
+    expect(db.getProject(project.id)?.autoMergeEnabled).toBeNull();
+  });
+
+  it('includes auto_merge_enabled and auto_merge_checked_at columns', () => {
+    const cols = db.raw
+      .prepare('PRAGMA table_info(projects)')
+      .all() as Array<{ name: string }>;
+
+    const colNames = cols.map((c) => c.name);
+    expect(colNames).toContain('auto_merge_enabled');
+    expect(colNames).toContain('auto_merge_checked_at');
+  });
+
+  it('includes schema version 20 for the auto-merge migration', () => {
+    const row = db.raw
+      .prepare('SELECT MAX(version) AS version FROM schema_version')
+      .get() as { version: number };
+    expect(row.version).toBeGreaterThanOrEqual(20);
+  });
+});
+
 describe('Connection management', () => {
   it('closes the database', () => {
     db.close();
