@@ -173,6 +173,106 @@ export async function checkRepoSettings(githubRepo: string | null | undefined): 
 }
 
 /**
+ * Refresh the cached `auto_merge_enabled` value on a project row.
+ *
+ * Uses the existing `checkRepoSettings()` infrastructure but persists the
+ * boolean directly on the projects row (auto_merge_enabled / auto_merge_checked_at)
+ * so the team-launch path can synchronously decide whether to inject the
+ * "no-auto-merge" warning into the prompt without a hot `gh` call on every
+ * launch.
+ *
+ * Behavior summary:
+ * - Non-GitHub project (issueProvider !== 'github' or no githubRepo): writes
+ *   autoMergeEnabled = null and bumps autoMergeCheckedAt so we don't keep
+ *   retrying on every launch. Returns null.
+ * - skipIfFresh: true and autoMergeCheckedAt within `config.autoMergeRefreshMs`:
+ *   returns the cached value without a `gh` call.
+ * - Otherwise calls checkRepoSettings(). On success, persists the bit and
+ *   bumps autoMergeCheckedAt. On failure (returns undefined), only updates
+ *   autoMergeCheckedAt (so we throttle retries) but leaves autoMergeEnabled
+ *   unchanged.
+ * - Broadcasts `project_updated` SSE only when the autoMergeEnabled value
+ *   actually changes (to avoid grid spam on every refresh).
+ *
+ * @param projectId - The project ID to refresh
+ * @param options.skipIfFresh - When true, skip the gh call if last check is
+ *   within `config.autoMergeRefreshMs`. Default false.
+ * @returns The up-to-date autoMergeEnabled value (boolean | null), or null
+ *   if the project does not exist.
+ */
+export async function refreshAutoMergeForProject(
+  projectId: number,
+  options?: { skipIfFresh?: boolean },
+): Promise<boolean | null> {
+  const db = getDatabase();
+  const project = db.getProject(projectId);
+  if (!project) return null;
+
+  const previousEnabled = project.autoMergeEnabled;
+  const now = new Date().toISOString();
+
+  // Non-GitHub or no githubRepo: write null and stop retrying.
+  // We bump autoMergeCheckedAt so the poller's stale-check skips this project
+  // until the TTL elapses, but we keep autoMergeEnabled = null.
+  if (project.issueProvider !== 'github' || !project.githubRepo) {
+    db.updateProject(projectId, {
+      autoMergeEnabled: null,
+      autoMergeCheckedAt: now,
+    });
+    if (previousEnabled !== null) {
+      // Value changed (was non-null, now null) — broadcast.
+      sseBroker.broadcast('project_updated', {
+        project_id: projectId,
+        name: project.name,
+        status: project.status,
+      });
+    }
+    return null;
+  }
+
+  // skipIfFresh: short-circuit when the cache is still warm.
+  if (options?.skipIfFresh && project.autoMergeCheckedAt) {
+    const checkedAtMs = new Date(project.autoMergeCheckedAt).getTime();
+    if (!isNaN(checkedAtMs) && Date.now() - checkedAtMs < config.autoMergeRefreshMs) {
+      return previousEnabled;
+    }
+  }
+
+  // Fetch via existing infrastructure.
+  const settings = await checkRepoSettings(project.githubRepo);
+
+  if (!settings) {
+    // gh failed / unreachable — throttle retries by bumping checkedAt only.
+    // Log at warn level so operators can see repeated failures without the
+    // `gh` CLI's bare error log (which has no project context).
+    console.warn(
+      `[ProjectService] Auto-merge gh check failed for project ${projectId} ` +
+      `(${project.githubRepo}); leaving autoMergeEnabled unchanged ` +
+      `(${previousEnabled === null ? 'null' : previousEnabled})`,
+    );
+    db.updateProject(projectId, { autoMergeCheckedAt: now });
+    return previousEnabled;
+  }
+
+  const newEnabled = settings.autoMergeEnabled;
+  db.updateProject(projectId, {
+    autoMergeEnabled: newEnabled,
+    autoMergeCheckedAt: now,
+  });
+
+  // Broadcast only when the bit actually flipped.
+  if (previousEnabled !== newEnabled) {
+    sseBroker.broadcast('project_updated', {
+      project_id: projectId,
+      name: project.name,
+      status: project.status,
+    });
+  }
+
+  return newEnabled;
+}
+
+/**
  * Extract Fleet Commander version stamp from the first few lines of a file.
  * Supports shell scripts (`# fleet-commander vX.Y.Z`), markdown
  * files (`<!-- fleet-commander vX.Y.Z -->`), and YAML frontmatter
@@ -899,6 +999,18 @@ export class ProjectService {
 
     // Re-fetch to get updated hooks_installed
     const finalProject = db.getProject(project.id)!;
+
+    // Detect auto-merge availability so day-one launches can inject the
+    // "no-auto-merge" warning into the prompt when applicable. Non-fatal —
+    // installation must succeed even if `gh api` is offline.
+    try {
+      await refreshAutoMergeForProject(finalProject.id);
+    } catch (err) {
+      console.warn(
+        `[ProjectService] Auto-merge detection failed for project ${finalProject.id} (non-fatal):`,
+        err instanceof Error ? err.message : err,
+      );
+    }
 
     // Ensure the issue fetcher's polling loop is running
     const issueFetcher = getIssueFetcher();

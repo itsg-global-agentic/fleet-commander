@@ -40,6 +40,7 @@ vi.mock('../../src/server/config.js', () => ({
     maxUniqueCiFailures: 3,
     mergeShutdownGraceMs: 120000,
     worktreeDir: '.claude/worktrees',
+    autoMergeRefreshMs: 86_400_000, // 24h, matches the production default
   },
 }));
 
@@ -70,6 +71,15 @@ const mockFetcher = {
 };
 vi.mock('../../src/server/services/issue-fetcher.js', () => ({
   getIssueFetcher: () => mockFetcher,
+}));
+
+// project-service is dynamically imported by the poller's stale-refresh loop
+// (issue #710). We mock the lazy import target so we can assert which
+// projects triggered a refresh in a poll cycle.
+const mockRefreshAutoMergeForProject = vi.fn().mockResolvedValue(null);
+vi.mock('../../src/server/services/project-service.js', () => ({
+  refreshAutoMergeForProject: mockRefreshAutoMergeForProject,
+  checkRepoSettings: vi.fn(),
 }));
 
 // Mock the shared async exec utilities (replaces the old child_process mock)
@@ -2434,5 +2444,80 @@ describe('Fix #692 (A) — branch collision audit warning', () => {
       (call) => call[0] === 'team_warning',
     );
     expect(collisionCall).toBeUndefined();
+  });
+});
+
+// =============================================================================
+// Issue #710 — auto-merge stale-refresh in the poller cycle
+// =============================================================================
+
+describe('Issue #710 — auto-merge stale-refresh', () => {
+  it('refreshes a stale project (autoMergeCheckedAt older than TTL) and skips a fresh one', async () => {
+    const stale = makeProject({
+      id: 100,
+      name: 'stale-project',
+      // 48h ago — older than the 24h TTL in the config mock
+      autoMergeCheckedAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+      autoMergeEnabled: false,
+    });
+    const fresh = makeProject({
+      id: 101,
+      name: 'fresh-project',
+      githubRepo: 'owner/fresh-repo',
+      // 1h ago — well within the 24h TTL
+      autoMergeCheckedAt: new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(),
+      autoMergeEnabled: true,
+    });
+
+    mockDb.getProjects.mockReturnValue([stale, fresh]);
+    mockDb.getActiveTeams.mockReturnValue([]);
+
+    await githubPoller.poll();
+
+    // Stale project must trigger refresh; fresh project must NOT.
+    expect(mockRefreshAutoMergeForProject).toHaveBeenCalledTimes(1);
+    expect(mockRefreshAutoMergeForProject).toHaveBeenCalledWith(
+      stale.id,
+      expect.objectContaining({ skipIfFresh: false }),
+    );
+    // Confirm the fresh project was NOT refreshed
+    const calledIds = mockRefreshAutoMergeForProject.mock.calls.map((c) => c[0]);
+    expect(calledIds).not.toContain(fresh.id);
+  });
+
+  it('refreshes a project that has never been checked (autoMergeCheckedAt = null)', async () => {
+    const neverChecked = makeProject({
+      id: 200,
+      name: 'never-checked',
+      autoMergeCheckedAt: null,
+      autoMergeEnabled: null,
+    });
+
+    mockDb.getProjects.mockReturnValue([neverChecked]);
+    mockDb.getActiveTeams.mockReturnValue([]);
+
+    await githubPoller.poll();
+
+    expect(mockRefreshAutoMergeForProject).toHaveBeenCalledWith(
+      neverChecked.id,
+      expect.objectContaining({ skipIfFresh: false }),
+    );
+  });
+
+  it('handles a thrown refresh error without aborting the poll cycle', async () => {
+    const stale = makeProject({
+      id: 300,
+      name: 'stale-throws',
+      autoMergeCheckedAt: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+    });
+
+    mockDb.getProjects.mockReturnValue([stale]);
+    mockDb.getActiveTeams.mockReturnValue([]);
+
+    mockRefreshAutoMergeForProject.mockRejectedValueOnce(new Error('boom'));
+
+    // Should NOT throw — the poll cycle keeps going
+    await expect(githubPoller.poll()).resolves.toBeUndefined();
+    expect(mockRefreshAutoMergeForProject).toHaveBeenCalled();
   });
 });

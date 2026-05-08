@@ -62,6 +62,16 @@ export interface Project {
   issueProvider: string | null;
   projectKey: string | null;
   providerConfig: string | null;
+  /**
+   * Cached value of the GitHub repo's `allow_auto_merge` setting.
+   * `null` = unknown / not yet detected (or non-GitHub project).
+   * `false` = repo does NOT allow auto-merge — team-launch path injects a
+   * warning paragraph into the prompt instructing the TL to merge manually.
+   * `true` = repo allows auto-merge (existing happy path applies).
+   */
+  autoMergeEnabled: boolean | null;
+  /** ISO timestamp of last `gh api` check used to throttle refreshes. */
+  autoMergeCheckedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -120,6 +120,15 @@ const config = Object.freeze({
   usagePollIntervalMs: safeParseInt(process.env['FLEET_USAGE_POLL_MS'] || '900000', 'FLEET_USAGE_POLL_MS'),
   mapCleanupIntervalMs: safeParseInt(process.env['FLEET_MAP_CLEANUP_MS'] || '3600000', 'FLEET_MAP_CLEANUP_MS'),
 
+  /**
+   * TTL for the cached `auto_merge_enabled` value on each project row.
+   * After this many milliseconds, the next launch (and the next github-poller
+   * cycle) will refresh the bit via `gh api repos/{slug}`. Default 24h since
+   * org-level auto-merge settings rarely change. Validated against
+   * [60_000, 30 days]; out-of-range values throw at startup.
+   */
+  autoMergeRefreshMs: safeParseInt(process.env['FLEET_AUTO_MERGE_REFRESH_MS'] || '86400000', 'FLEET_AUTO_MERGE_REFRESH_MS'),
+
   idleThresholdMin: safeParseInt(process.env['FLEET_IDLE_THRESHOLD_MIN'] || '5', 'FLEET_IDLE_THRESHOLD_MIN'),
   stuckThresholdMin: safeParseInt(process.env['FLEET_STUCK_THRESHOLD_MIN'] || '10', 'FLEET_STUCK_THRESHOLD_MIN'),
   launchTimeoutMin: safeParseInt(process.env['FLEET_LAUNCH_TIMEOUT_MIN'] || '5', 'FLEET_LAUNCH_TIMEOUT_MIN'),
@@ -233,6 +242,21 @@ export function validateConfig(): void {
     if (isNaN(value) || value <= 0) {
       throw new Error(`${name} must be a positive integer, got: ${value}`);
     }
+  }
+
+  // FLEET_AUTO_MERGE_REFRESH_MS is clamped to [60s, 30 days] to prevent
+  // pathological configurations (e.g. refresh every millisecond burns gh quota,
+  // or never-refresh leaves stale values forever).
+  const minAutoMergeMs = 60_000;
+  const maxAutoMergeMs = 30 * 24 * 60 * 60 * 1000; // 30 days
+  if (
+    isNaN(config.autoMergeRefreshMs) ||
+    config.autoMergeRefreshMs < minAutoMergeMs ||
+    config.autoMergeRefreshMs > maxAutoMergeMs
+  ) {
+    throw new Error(
+      `autoMergeRefreshMs must be between ${minAutoMergeMs} and ${maxAutoMergeMs}, got: ${config.autoMergeRefreshMs}`
+    );
   }
 
   const nonNegativeIntegers: Array<[string, number]> = [

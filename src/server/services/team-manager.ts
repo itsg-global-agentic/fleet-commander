@@ -142,6 +142,31 @@ interface TokenCounter {
 }
 
 export class TeamManager {
+  /**
+   * Warning paragraph injected into the launch prompt for projects whose
+   * GitHub repo does not allow auto-merge. Issue #710.
+   *
+   * The Monitor tool (per CC runtime semantics) streams stdout events from a
+   * background bash process started with `Bash run_in_background: true`. We
+   * pair it with `gh pr checks {PR} --watch` so the TL can react to CI
+   * completion without polling. ScheduleWakeup is the documented fallback if
+   * Monitor is unavailable.
+   */
+  private static readonly AUTO_MERGE_WARNING_TEXT = `**Repo does not allow auto-merge.** When you reach Phase 4 and have created the PR, you cannot rely on \`gh pr merge --auto\`. Instead:
+
+1. After \`gh pr create\`, do NOT call \`gh pr merge --auto\`.
+2. Run CI watch as a background process and stream its events with the Monitor tool:
+   \`\`\`
+   Bash(command: "gh pr checks {PR} --watch", run_in_background: true)
+   Monitor(...background bash id...)
+   \`\`\`
+   Each Monitor notification reports a check status update. When all required checks complete:
+   - **All green** -> run \`gh pr merge {PR} --squash --delete-branch\` (no \`--auto\`), then close the issue and shut down.
+   - **Any failing** -> forward failure details to dev, dev fixes and pushes, restart the watch.
+3. If a \`git push --force-with-lease\` happens (rebase), the watch process exits — restart it.
+4. FC will still send \`ci_red\` / \`ci_blocked\` / \`pr_merged\` to your stdin, but \`ci_green_auto_shutdown\` will NOT fire on this repo (auto-merge is disabled). You must perform the merge manually after CI is green.
+5. If \`Monitor\` is unavailable or \`gh pr checks --watch\` fails, fall back to \`ScheduleWakeup(delaySeconds: 270, ...)\` and poll \`gh pr view {PR} --json state,statusCheckRollup\` on each wake.`;
+
   private outputBuffers: Map<number, CircularBuffer<string>> = new Map();
   private childProcesses: Map<number, ChildProcess> = new Map();
   private stdinPipes: Map<number, Writable> = new Map();
@@ -428,7 +453,8 @@ export class TeamManager {
     });
 
     // ── Step 4: Spawn Claude Code process ──
-    const resolvedPrompt = prompt || this.resolvePromptFromFile(project, effectiveIssueKey, issueTitle);
+    const autoMergeWarning = await this.buildAutoMergeWarning(project);
+    const resolvedPrompt = prompt || this.resolvePromptFromFile(project, effectiveIssueKey, issueTitle, autoMergeWarning);
     const isHeadless = headless !== false;
 
     if (!isHeadless && process.platform === 'win32') {
@@ -1400,7 +1426,8 @@ export class TeamManager {
     });
 
     // ── Step 3: Spawn Claude Code ──
-    const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, effectiveIssueKey, team.issueTitle ?? undefined);
+    const autoMergeWarning = await this.buildAutoMergeWarning(project);
+    const resolvedPrompt = team.customPrompt || this.resolvePromptFromFile(project, effectiveIssueKey, team.issueTitle ?? undefined, autoMergeWarning);
     const isHeadless = team.headless;
 
     if (!isHeadless && process.platform === 'win32') {
@@ -1697,15 +1724,56 @@ export class TeamManager {
   }
 
   // -------------------------------------------------------------------------
+  // buildAutoMergeWarning — return the no-auto-merge warning paragraph
+  //                        when the project's repo has it disabled
+  // -------------------------------------------------------------------------
+
+  /**
+   * Resolve the auto-merge warning paragraph for the launch prompt.
+   *
+   * Returns the long warning text only when the project's
+   * `auto_merge_enabled` is exactly `false`. For `null` (unknown / non-GitHub)
+   * or `true`, returns empty string — we deliberately under-warn rather than
+   * over-warn for transiently-unreachable repos.
+   *
+   * Lazy import of `refreshAutoMergeForProject` avoids a circular dependency
+   * (project-service imports team-manager via getTeamManager()).
+   *
+   * Defensive: any thrown error returns '' so a flaky `gh` never breaks a
+   * launch.
+   */
+  private async buildAutoMergeWarning(project: Project): Promise<string> {
+    try {
+      const { refreshAutoMergeForProject } = await import('./project-service.js');
+      const enabled = await refreshAutoMergeForProject(project.id, { skipIfFresh: true });
+      return enabled === false ? TeamManager.AUTO_MERGE_WARNING_TEXT : '';
+    } catch (err) {
+      console.warn(
+        `[TeamManager] buildAutoMergeWarning failed for project ${project.id} (non-fatal):`,
+        err instanceof Error ? err.message : err,
+      );
+      return '';
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // resolvePromptFromFile — read prompt from project's prompt file on disk
   // -------------------------------------------------------------------------
 
   /**
-   * Read prompts/default-prompt.md and replace {{ISSUE_NUMBER}} / {{ISSUE_KEY}} / {{ISSUE_TITLE}} placeholders.
+   * Read prompts/default-prompt.md and replace {{ISSUE_NUMBER}} / {{ISSUE_KEY}} /
+   * {{ISSUE_TITLE}} / {{AUTO_MERGE_WARNING}} placeholders.
    * Accepts issueKey (string) which replaces the placeholder even for non-numeric keys.
+   * `autoMergeWarning` is the substituted warning paragraph (or empty string when
+   * the project's repo allows auto-merge / detection is unknown).
    * Fallback chain: prompts/default-prompt.md > hardcoded default.
    */
-  private resolvePromptFromFile(_project: Project, issueKey: string, issueTitle?: string): string {
+  private resolvePromptFromFile(
+    _project: Project,
+    issueKey: string,
+    issueTitle?: string,
+    autoMergeWarning: string = '',
+  ): string {
     // Always read the shared default-prompt.md
     const defaultPath = path.join(config.fleetCommanderRoot, 'prompts', 'default-prompt.md');
     if (fs.existsSync(defaultPath)) {
@@ -1714,7 +1782,8 @@ export class TeamManager {
         const resolved = template
           .replace(/\{\{ISSUE_NUMBER\}\}/g, issueKey)
           .replace(/\{\{ISSUE_KEY\}\}/g, issueKey)
-          .replace(/\{\{ISSUE_TITLE\}\}/g, issueTitle ?? '');
+          .replace(/\{\{ISSUE_TITLE\}\}/g, issueTitle ?? '')
+          .replace(/\{\{AUTO_MERGE_WARNING\}\}/g, autoMergeWarning);
         console.log(`[TeamManager] Resolved prompt from default: prompts/default-prompt.md`);
         return resolved;
       } catch {
@@ -1723,7 +1792,8 @@ export class TeamManager {
     }
 
     // Hardcoded fallback (should not normally be reached)
-    const fallback = `Read the ENTIRE file .claude/prompts/fleet-workflow.md before taking any actions.\nYou are the TL. There is NO coordinator — you orchestrate the Diamond team directly.\nPhase 0: Spawn fleet-planner. Wait for plan. Phase 1: Spawn fleet-dev WITH the planner's plan. Wait for ready. Phase 2: Spawn fleet-reviewer. Dev and reviewer communicate p2p. Planner stays alive for p2p questions.\nIssue: #${issueKey}`;
+    const baseFallback = `Read the ENTIRE file .claude/prompts/fleet-workflow.md before taking any actions.\nYou are the TL. There is NO coordinator — you orchestrate the Diamond team directly.\nPhase 0: Spawn fleet-planner. Wait for plan. Phase 1: Spawn fleet-dev WITH the planner's plan. Wait for ready. Phase 2: Spawn fleet-reviewer. Dev and reviewer communicate p2p. Planner stays alive for p2p questions.\nIssue: #${issueKey}`;
+    const fallback = autoMergeWarning ? `${baseFallback}\n\n${autoMergeWarning}` : baseFallback;
     console.log(`[TeamManager] Using hardcoded fallback prompt`);
     return fallback;
   }
