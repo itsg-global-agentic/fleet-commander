@@ -164,4 +164,73 @@ describe('CommGraph', () => {
     expect(devNode!.fx).toBeUndefined();
     expect(devNode!.fy).toBeUndefined();
   });
+
+  // ---------------------------------------------------------------------------
+  // Issue #713: onNodeClick + clickableAgents props
+  // ---------------------------------------------------------------------------
+
+  it('forwards onNodeClick prop to ForceGraph and invokes with agent id', () => {
+    const agents = [
+      makeAgent({ name: 'team-lead', role: 'team-lead' }),
+      makeAgent({ name: 'dev', role: 'developer' }),
+    ];
+    const handler = vi.fn();
+
+    render(<CommGraph edges={[]} agents={agents} onNodeClick={handler} />);
+    expect(mockForceGraph).toHaveBeenCalled();
+
+    const call = mockForceGraph.mock.calls[0][0] as { onNodeClick?: (node: { id: string }) => void };
+    expect(typeof call.onNodeClick).toBe('function');
+
+    // Simulate ForceGraph invoking the click handler with a graph node
+    call.onNodeClick?.({ id: 'dev' });
+    expect(handler).toHaveBeenCalledWith('dev');
+  });
+
+  it('passes a noop-style click handler when onNodeClick prop is omitted', () => {
+    const agents = [makeAgent({ name: 'dev' })];
+    render(<CommGraph edges={[]} agents={agents} />);
+    const call = mockForceGraph.mock.calls[0][0] as { onNodeClick?: (node: { id: string }) => void };
+    // Always wired (simplifies ForceGraph), but the inner handler short-circuits.
+    expect(typeof call.onNodeClick).toBe('function');
+    expect(() => call.onNodeClick?.({ id: 'dev' })).not.toThrow();
+  });
+
+  it('forwards a nodeLabel callback that includes a click hint when clickable', () => {
+    const agents = [makeAgent({ name: 'dev', role: 'developer' })];
+    const clickable = new Set<string>(['dev']);
+    const handler = vi.fn();
+
+    render(
+      <CommGraph
+        edges={[]}
+        agents={agents}
+        onNodeClick={handler}
+        clickableAgents={clickable}
+      />,
+    );
+
+    const call = mockForceGraph.mock.calls[0][0] as { nodeLabel?: (n: { id: string; name: string; role: string }) => string };
+    const html = call.nodeLabel?.({ id: 'dev', name: 'dev', role: 'developer' }) ?? '';
+    expect(html).toContain('click for spawn prompts');
+  });
+
+  it('omits the click hint from nodeLabel when the node is not clickable', () => {
+    const agents = [makeAgent({ name: 'dev', role: 'developer' })];
+    const clickable = new Set<string>(); // empty
+    const handler = vi.fn();
+
+    render(
+      <CommGraph
+        edges={[]}
+        agents={agents}
+        onNodeClick={handler}
+        clickableAgents={clickable}
+      />,
+    );
+
+    const call = mockForceGraph.mock.calls[0][0] as { nodeLabel?: (n: { id: string; name: string; role: string }) => string };
+    const html = call.nodeLabel?.({ id: 'dev', name: 'dev', role: 'developer' }) ?? '';
+    expect(html).not.toContain('click for spawn prompts');
+  });
 });

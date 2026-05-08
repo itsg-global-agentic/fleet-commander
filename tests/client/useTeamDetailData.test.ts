@@ -77,6 +77,21 @@ function makeEdges() {
   ];
 }
 
+function makeSpawns() {
+  return [
+    {
+      id: 1,
+      recipient: 'dev',
+      sender: 'team-lead',
+      content: 'do feature X',
+      sessionId: 'sess-1',
+      createdAt: '2026-03-21T10:00:00Z',
+      eventId: 1,
+      terminalStatus: 'running' as const,
+    },
+  ];
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -97,21 +112,24 @@ describe('useTeamDetailData', () => {
     expect(result.current.transitions).toEqual([]);
     expect(result.current.roster).toEqual([]);
     expect(result.current.messageEdges).toEqual([]);
+    expect(result.current.spawnRecords).toEqual([]);
     expect(result.current.loading).toBe(false);
     expect(result.current.error).toBeNull();
   });
 
-  it('fires all 4 fetches in parallel when selectedTeamId is set', async () => {
+  it('fires all 5 fetches in parallel when selectedTeamId is set', async () => {
     const detail = makeDetail();
     const transitions = makeTransitions();
     const rosterData = makeRoster();
     const edges = makeEdges();
+    const spawns = makeSpawns();
 
     mockGet.mockImplementation((path: string) => {
       if (path === 'teams/1') return Promise.resolve(detail);
       if (path === 'teams/1/transitions') return Promise.resolve(transitions);
       if (path === 'teams/1/roster') return Promise.resolve(rosterData);
       if (path === 'teams/1/messages/summary') return Promise.resolve(edges);
+      if (path === 'teams/1/spawns') return Promise.resolve(spawns);
       return Promise.reject(new Error(`Unexpected path: ${path}`));
     });
 
@@ -123,16 +141,18 @@ describe('useTeamDetailData', () => {
       expect(result.current.loading).toBe(false);
     });
 
-    expect(mockGet).toHaveBeenCalledTimes(4);
+    expect(mockGet).toHaveBeenCalledTimes(5);
     expect(mockGet).toHaveBeenCalledWith('teams/1');
     expect(mockGet).toHaveBeenCalledWith('teams/1/transitions');
     expect(mockGet).toHaveBeenCalledWith('teams/1/roster');
     expect(mockGet).toHaveBeenCalledWith('teams/1/messages/summary');
+    expect(mockGet).toHaveBeenCalledWith('teams/1/spawns');
 
     expect(result.current.detail).toEqual(detail);
     expect(result.current.transitions).toEqual(transitions);
     expect(result.current.roster).toEqual(rosterData);
     expect(result.current.messageEdges).toEqual(edges);
+    expect(result.current.spawnRecords).toEqual(spawns);
     expect(result.current.error).toBeNull();
   });
 
@@ -144,6 +164,7 @@ describe('useTeamDetailData', () => {
       if (path === 'teams/1/transitions') return Promise.resolve(transitions);
       if (path === 'teams/1/roster') return Promise.resolve([]);
       if (path === 'teams/1/messages/summary') return Promise.resolve([]);
+      if (path === 'teams/1/spawns') return Promise.resolve([]);
       return Promise.reject(new Error(`Unexpected path: ${path}`));
     });
 
@@ -198,6 +219,7 @@ describe('useTeamDetailData', () => {
     expect(result.current.transitions).toEqual([]);
     expect(result.current.roster).toEqual([]);
     expect(result.current.messageEdges).toEqual([]);
+    expect(result.current.spawnRecords).toEqual([]);
   });
 
   it('refreshDetail re-fetches only detail when caches are fresh', async () => {
@@ -205,12 +227,14 @@ describe('useTeamDetailData', () => {
     const transitions = makeTransitions();
     const rosterData = makeRoster();
     const edges = makeEdges();
+    const spawns = makeSpawns();
 
     mockGet.mockImplementation((path: string) => {
       if (path === 'teams/1') return Promise.resolve(detail);
       if (path === 'teams/1/transitions') return Promise.resolve(transitions);
       if (path === 'teams/1/roster') return Promise.resolve(rosterData);
       if (path === 'teams/1/messages/summary') return Promise.resolve(edges);
+      if (path === 'teams/1/spawns') return Promise.resolve(spawns);
       return Promise.reject(new Error(`Unexpected path: ${path}`));
     });
 
@@ -226,6 +250,7 @@ describe('useTeamDetailData', () => {
       if (path === 'teams/1/transitions') return Promise.resolve(transitions);
       if (path === 'teams/1/roster') return Promise.resolve(rosterData);
       if (path === 'teams/1/messages/summary') return Promise.resolve(edges);
+      if (path === 'teams/1/spawns') return Promise.resolve(spawns);
       return Promise.reject(new Error(`Unexpected path: ${path}`));
     });
 
@@ -275,12 +300,14 @@ describe('useTeamDetailData', () => {
     const transitions = makeTransitions();
     const rosterData = makeRoster();
     const edges = makeEdges();
+    const spawns = makeSpawns();
 
     mockGet.mockImplementation((path: string) => {
       if (path === 'teams/1') return Promise.resolve(detail);
       if (path === 'teams/1/transitions') return Promise.resolve(transitions);
       if (path === 'teams/1/roster') return Promise.resolve(rosterData);
       if (path === 'teams/1/messages/summary') return Promise.resolve(edges);
+      if (path === 'teams/1/spawns') return Promise.resolve(spawns);
       return Promise.reject(new Error(`Unexpected path: ${path}`));
     });
 
@@ -331,6 +358,47 @@ describe('useTeamDetailData', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('exposes spawnRecords from the /spawns endpoint', async () => {
+    const detail = makeDetail();
+    const spawns = makeSpawns();
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'teams/1') return Promise.resolve(detail);
+      if (path === 'teams/1/spawns') return Promise.resolve(spawns);
+      // Other endpoints return empty so test focuses on spawnRecords
+      return Promise.resolve([]);
+    });
+
+    const { result } = renderHook(() => useTeamDetailData(1, null, null));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.spawnRecords).toEqual(spawns);
+  });
+
+  it('falls back to empty spawnRecords when the /spawns endpoint fails', async () => {
+    const detail = makeDetail();
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'teams/1') return Promise.resolve(detail);
+      if (path === 'teams/1/spawns') return Promise.reject(new Error('500'));
+      return Promise.resolve([]);
+    });
+
+    const { result } = renderHook(() => useTeamDetailData(1, null, null));
+
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    expect(result.current.detail).toEqual(detail);
+    expect(result.current.spawnRecords).toEqual([]);
+    // Failure of a non-critical endpoint must NOT set the error state
+    expect(result.current.error).toBeNull();
   });
 
   it('exposes refreshDetail as a stable function', async () => {

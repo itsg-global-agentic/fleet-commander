@@ -64,16 +64,24 @@ export function TeamDetail() {
   // visually highlight clickable nodes in CommGraph and to filter spawns
   // for the side panel. Includes agents that may appear in spawnRecords
   // even if they're not yet in the roster (subagent_start without any
-  // tool_use yet).
+  // tool_use yet). Defensive Array.isArray checks: these inputs come from
+  // useTeamDetailData which already coerces failures to []; defaulting
+  // again here keeps test fixtures that mock everything as the team
+  // detail object (instead of arrays) from blowing up.
   const clickableAgents = useMemo(() => {
     const set = new Set<string>();
-    for (const s of spawnRecords) set.add(s.recipient);
-    for (const a of roster) set.add(a.name);
+    if (Array.isArray(spawnRecords)) {
+      for (const s of spawnRecords) set.add(s.recipient);
+    }
+    if (Array.isArray(roster)) {
+      for (const a of roster) set.add(a.name);
+    }
     return set;
   }, [spawnRecords, roster]);
 
   const filteredSpawns = useMemo(() => {
     if (selectedSpawnAgent == null) return [];
+    if (!Array.isArray(spawnRecords)) return [];
     return spawnRecords.filter((s) => s.recipient === selectedSpawnAgent);
   }, [spawnRecords, selectedSpawnAgent]);
 

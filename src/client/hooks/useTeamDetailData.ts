@@ -157,8 +157,10 @@ export function useTeamDetailData(
         setMessageEdges([]);
       }
 
-      // Spawn records (Issue #713) — non-critical
-      if (spawnsResult.status === 'fulfilled') {
+      // Spawn records (Issue #713) — non-critical. Defensive: only accept
+      // an array; some test mocks return the same detail object for every
+      // endpoint, and a non-array value would break downstream `for...of`.
+      if (spawnsResult.status === 'fulfilled' && Array.isArray(spawnsResult.value)) {
         setSpawnRecords(spawnsResult.value);
         spawnRecordsCacheRef.current = { data: spawnsResult.value, fetchedAt: Date.now() };
       } else {
@@ -253,10 +255,10 @@ export function useTeamDetailData(
         }
       }
 
-      // Spawn records (Issue #713)
+      // Spawn records (Issue #713) — defensive array check (see primary fetch)
       if (spawnsStale) {
         const r = results[idx++];
-        if (r && r.status === 'fulfilled') {
+        if (r && r.status === 'fulfilled' && Array.isArray(r.value)) {
           const data = r.value as SpawnRecord[];
           setSpawnRecords(data);
           spawnRecordsCacheRef.current = { data, fetchedAt: Date.now() };
