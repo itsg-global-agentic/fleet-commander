@@ -549,6 +549,11 @@ export class TeamService {
     // Recent events
     const recentEvents = db.getEventsByTeam(teamId, 20);
 
+    // Handoff file count — drives the Files-tab badge before the user
+    // opens the tab. Lazy fetch of the full file list happens only on
+    // tab open, so we only need the count here.
+    const handoffFileCount = db.getHandoffFileCount(teamId);
+
     // Output tail
     const manager = getTeamManager();
     const outputLines = manager.getOutput(teamId, 50);
@@ -583,6 +588,7 @@ export class TeamService {
       retryCount: team.retryCount,
       pr: prDetail,
       recentEvents,
+      handoffFileCount,
       outputTail,
     };
   }

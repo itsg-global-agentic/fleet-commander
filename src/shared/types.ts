@@ -615,6 +615,9 @@ export interface TeamDetail {
     autoMerge: boolean;
   } | null;
   recentEvents: Event[];
+  /** Number of plan.md/changes.md/review.md captures for this team. Drives
+   *  the Files-tab badge on TeamDetail before the user opens the tab. */
+  handoffFileCount: number;
   outputTail: string | null;
 }
 

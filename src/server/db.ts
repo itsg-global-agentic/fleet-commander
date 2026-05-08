@@ -3382,6 +3382,18 @@ export class FleetDatabase {
     return rows.map((r) => this.mapHandoffFileRow(r));
   }
 
+  /**
+   * Get the number of handoff files captured for a team. Used by
+   * getTeamDetail to surface the Files-tab badge count without requiring
+   * the client to fetch the full file list.
+   */
+  getHandoffFileCount(teamId: number): number {
+    const row = this.stmt(
+      'SELECT COUNT(*) AS c FROM handoff_files WHERE team_id = ?'
+    ).get(teamId) as { c: number } | undefined;
+    return row?.c ?? 0;
+  }
+
   private mapHandoffFileRow(row: Record<string, unknown>): HandoffFile {
     return {
       id: row.id as number,

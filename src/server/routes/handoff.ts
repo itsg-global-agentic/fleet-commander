@@ -7,9 +7,11 @@
 //
 // Endpoint: POST /api/handoff
 // Fields:
-//   - team     (string) — worktree name
-//   - fileType (string) — one of plan.md, changes.md, review.md
-//   - file     (binary) — the file content
+//   - team      (string)  — worktree name
+//   - fileType  (string)  — one of plan.md, changes.md, review.md
+//   - agentName (string?) — optional subagent name (e.g. "planner", "dev",
+//                           "reviewer"). Empty/missing stored as null.
+//   - file      (binary)  — the file content
 // =============================================================================
 
 import type {
@@ -41,6 +43,7 @@ const handoffRoutes: FastifyPluginCallback = (
 
         let team: string | undefined;
         let fileType: string | undefined;
+        let agentName: string | undefined;
         let fileContent: string | undefined;
 
         for await (const part of parts) {
@@ -50,6 +53,8 @@ const handoffRoutes: FastifyPluginCallback = (
               team = String(field.value);
             } else if (field.fieldname === 'fileType') {
               fileType = String(field.value);
+            } else if (field.fieldname === 'agentName') {
+              agentName = String(field.value);
             }
           } else if (part.type === 'file') {
             const file = part as MultipartFile;
@@ -94,12 +99,15 @@ const handoffRoutes: FastifyPluginCallback = (
         }
 
         // Insert handoff file (with dedup — skips if identical content
-        // was captured for the same team + file_type within 5 seconds)
+        // was captured for the same team + file_type within 5 seconds).
+        // agentName is optional; treat empty string as null so the column
+        // stays clean for the legacy "no attribution" case.
+        const trimmedAgent = agentName?.trim();
         const { file: handoffFile, deduplicated } = db.insertHandoffFile({
           teamId: teamRecord.id,
           fileType: fileType as HandoffFileType,
           content: fileContent,
-          agentName: null, // multipart upload doesn't carry agent name
+          agentName: trimmedAgent && trimmedAgent.length > 0 ? trimmedAgent : null,
         });
 
         // Only broadcast SSE when this is a genuinely new capture
