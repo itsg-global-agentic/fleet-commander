@@ -1168,3 +1168,112 @@ describe('TeamService.cancelQueuedTeam', () => {
     }
   });
 });
+
+// =============================================================================
+// Tests: countRecentSubagentStarts
+// =============================================================================
+
+describe('TeamService.countRecentSubagentStarts', () => {
+  /** Insert an event row with a specific created_at (SQLite native format). */
+  function insertEventRaw(
+    teamId: number,
+    eventType: string,
+    createdAt: string,
+  ): void {
+    const db = getDatabase();
+    db.raw
+      .prepare(
+        `INSERT INTO events (team_id, event_type, agent_name, created_at)
+         VALUES (?, ?, 'planner', ?)`,
+      )
+      .run(teamId, eventType, createdAt);
+  }
+
+  /** Convert ms-ago to SQLite native datetime format. */
+  function sqliteAgo(msAgo: number): string {
+    return new Date(Date.now() - msAgo)
+      .toISOString()
+      .replace('T', ' ')
+      .replace(/\.\d{3}Z$/, '');
+  }
+
+  it('should throw VALIDATION for invalid team ID (NaN)', () => {
+    try {
+      service.countRecentSubagentStarts(NaN, new Date().toISOString());
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('VALIDATION');
+    }
+  });
+
+  it('should throw VALIDATION for invalid team ID (0)', () => {
+    try {
+      service.countRecentSubagentStarts(0, new Date().toISOString());
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('VALIDATION');
+    }
+  });
+
+  it('should throw NOT_FOUND for unknown team', () => {
+    try {
+      service.countRecentSubagentStarts(999999, new Date().toISOString());
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('NOT_FOUND');
+    }
+  });
+
+  it('returns 0 when team has no events', () => {
+    const team = seedTeam({ worktreeName: `count-empty-${Date.now()}` });
+    const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+    const count = service.countRecentSubagentStarts(team.id, since);
+    expect(count).toBe(0);
+  });
+
+  it('returns 0 when team has events but none are SubagentStart', () => {
+    const team = seedTeam({ worktreeName: `count-no-start-${Date.now()}` });
+
+    insertEventRaw(team.id, 'ToolUse', sqliteAgo(5 * 60 * 1000));
+    insertEventRaw(team.id, 'SubagentStop', sqliteAgo(5 * 60 * 1000));
+    insertEventRaw(team.id, 'Notification', sqliteAgo(5 * 60 * 1000));
+
+    const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const count = service.countRecentSubagentStarts(team.id, since);
+    expect(count).toBe(0);
+  });
+
+  it('returns the count of SubagentStart events within the since window', () => {
+    const team = seedTeam({ worktreeName: `count-window-${Date.now()}` });
+
+    // Within window (5min, 10min, 25min ago)
+    insertEventRaw(team.id, 'SubagentStart', sqliteAgo(5 * 60 * 1000));
+    insertEventRaw(team.id, 'SubagentStart', sqliteAgo(10 * 60 * 1000));
+    insertEventRaw(team.id, 'SubagentStart', sqliteAgo(25 * 60 * 1000));
+    // Outside window (60min ago)
+    insertEventRaw(team.id, 'SubagentStart', sqliteAgo(60 * 60 * 1000));
+    // Wrong type
+    insertEventRaw(team.id, 'ToolUse', sqliteAgo(5 * 60 * 1000));
+
+    const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const count = service.countRecentSubagentStarts(team.id, since);
+    expect(count).toBe(3);
+  });
+
+  it('does not count events from other teams', () => {
+    const team = seedTeam({ worktreeName: `count-iso-team-a-${Date.now()}` });
+    const otherTeam = seedTeam({ worktreeName: `count-iso-team-b-${Date.now()}` });
+
+    insertEventRaw(team.id, 'SubagentStart', sqliteAgo(5 * 60 * 1000));
+    insertEventRaw(otherTeam.id, 'SubagentStart', sqliteAgo(5 * 60 * 1000));
+    insertEventRaw(otherTeam.id, 'SubagentStart', sqliteAgo(10 * 60 * 1000));
+
+    const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    expect(service.countRecentSubagentStarts(team.id, since)).toBe(1);
+    expect(service.countRecentSubagentStarts(otherTeam.id, since)).toBe(2);
+  });
+});

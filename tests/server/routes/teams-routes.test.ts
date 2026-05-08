@@ -1017,3 +1017,133 @@ describe('NaN guard on :id param', () => {
     expect(res.json().message).toContain('positive integer');
   });
 });
+
+// =============================================================================
+// Tests: GET /api/teams/:id/messages/summary diagnostic warn-log
+// =============================================================================
+// These tests need their own Fastify instance with a spy-able logger so we can
+// assert that the diagnostic log fires (or does not fire) under specific
+// conditions. The shared test server has `logger: false` and produces a noop
+// logger, so request.log.warn() calls there cannot be observed.
+// =============================================================================
+
+describe('GET /api/teams/:id/messages/summary diagnostic warn-log', () => {
+  let warnSpy: ReturnType<typeof vi.fn>;
+  let logServer: FastifyInstance;
+
+  beforeAll(async () => {
+    warnSpy = vi.fn();
+    const stubLogger = {
+      level: 'info',
+      fatal: vi.fn(),
+      error: vi.fn(),
+      warn: warnSpy,
+      info: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      silent: vi.fn(),
+      child: function () { return this; },
+    };
+
+    // Fastify's typings for `loggerInstance` are heavily generic; cast through
+    // unknown for the test stub since we only need a minimal logger surface.
+    logServer = Fastify({ loggerInstance: stubLogger } as unknown as Parameters<typeof Fastify>[0]);
+    await logServer.register(teamsRoutes);
+    await logServer.ready();
+  });
+
+  afterAll(async () => {
+    await logServer.close();
+  });
+
+  beforeEach(() => {
+    warnSpy.mockClear();
+  });
+
+  it('logs warning when summary is empty but recent SubagentStart events exist', async () => {
+    const team = seedTeam({ worktreeName: `warn-empty-${Date.now()}` });
+    const db = getDatabase();
+
+    // Insert a SubagentStart event with a recent created_at (5 minutes ago)
+    // in SQLite's native datetime format `YYYY-MM-DD HH:MM:SS`.
+    const recentTimestamp = new Date(Date.now() - 5 * 60 * 1000)
+      .toISOString()
+      .replace('T', ' ')
+      .replace(/\.\d{3}Z$/, '');
+    db.raw
+      .prepare(
+        `INSERT INTO events (team_id, event_type, agent_name, created_at)
+         VALUES (?, 'SubagentStart', 'planner', ?)`,
+      )
+      .run(team.id, recentTimestamp);
+
+    // Do NOT insert any agent_messages — getMessageSummary should return []
+
+    const res = await logServer.inject({
+      method: 'GET',
+      url: `/api/teams/${team.id}/messages/summary`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+
+    const [payload, message] = warnSpy.mock.calls[0] as [
+      { teamId: number; recentSubagentStarts: number; since: string },
+      string,
+    ];
+    expect(payload).toMatchObject({
+      teamId: team.id,
+      recentSubagentStarts: 1,
+    });
+    expect(typeof payload.since).toBe('string');
+    expect(message).toContain('Empty agent_messages/summary');
+  });
+
+  it('does NOT log warning when team has no recent SubagentStart events', async () => {
+    const team = seedTeam({ worktreeName: `warn-quiet-${Date.now()}` });
+
+    // No events inserted, no agent_messages inserted -> empty response, no warn
+
+    const res = await logServer.inject({
+      method: 'GET',
+      url: `/api/teams/${team.id}/messages/summary`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([]);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('does NOT log warning when summary is non-empty', async () => {
+    const team = seedTeam({ worktreeName: `warn-nonempty-${Date.now()}` });
+    const db = getDatabase();
+
+    // Insert a recent SubagentStart event AND a real agent_message so the
+    // summary response is non-empty. The diagnostic guard short-circuits
+    // before counting subagent starts.
+    db.raw
+      .prepare(
+        `INSERT INTO events (team_id, event_type, agent_name)
+         VALUES (?, 'SubagentStart', 'planner')`,
+      )
+      .run(team.id);
+    db.raw
+      .prepare(
+        `INSERT INTO agent_messages (team_id, sender, recipient, summary)
+         VALUES (?, 'team-lead', 'planner', 'do the work')`,
+      )
+      .run(team.id);
+
+    const res = await logServer.inject({
+      method: 'GET',
+      url: `/api/teams/${team.id}/messages/summary`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBeGreaterThan(0);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+});

@@ -1166,6 +1166,48 @@ export class TeamService {
   }
 
   /**
+   * Count `SubagentStart` events for a team since a given ISO timestamp.
+   *
+   * Used by the messages/summary route to emit a diagnostic warning when the
+   * team has recently spawned subagents but the message-summary response is
+   * empty — a strong signal that something has gone wrong in the inter-agent
+   * message capture pipeline.
+   *
+   * @param teamId - The team ID
+   * @param sinceIso - ISO 8601 timestamp; only events with `created_at >= sinceIso` are counted
+   * @returns Integer count of matching events
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  countRecentSubagentStarts(teamId: number, sinceIso: string): number {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    // SQLite stores `events.created_at` in `YYYY-MM-DD HH:MM:SS` format
+    // (from `datetime('now')`), but the route hands us an ISO 8601 string
+    // like `2026-05-08T11:00:00.000Z`. The comparison `created_at >= @since`
+    // is a plain string compare, so we must normalize the ISO string to
+    // SQLite's native format before delegating, otherwise zero rows ever
+    // match.
+    const sinceSqlite = sinceIso.includes('T')
+      ? sinceIso.replace('T', ' ').replace(/\.\d{3}Z?$/, '').replace(/Z$/, '')
+      : sinceIso;
+
+    return db.getAllEventsCount({
+      teamId,
+      eventType: 'SubagentStart',
+      since: sinceSqlite,
+    });
+  }
+
+  /**
    * Get tasks for a team.
    *
    * @param teamId - The team ID
