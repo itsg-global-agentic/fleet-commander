@@ -15,7 +15,7 @@
  *   Non-tool_use events are NEVER throttled.
  */
 
-import type { TeamStatus, TeamPhase, HandoffFile, HandoffFileType } from '../../shared/types.js';
+import type { TeamStatus, TeamPhase } from '../../shared/types.js';
 import { TERMINAL_STATUSES } from '../../shared/types.js';
 import type { SSEEventType, SSEEventPayloads } from './sse-broker.js';
 import config from '../config.js';
@@ -103,12 +103,6 @@ export interface EventCollectorDb {
     status: string;
     owner: string;
   }): { id: number; teamId: number; taskId: string; subject: string; status: string; owner: string };
-  insertHandoffFile?(data: {
-    teamId: number;
-    fileType: HandoffFileType;
-    content: string;
-    agentName?: string | null;
-  }): { file: HandoffFile; deduplicated: boolean };
 }
 
 /** SSE broker interface for broadcasting events */
@@ -313,7 +307,6 @@ function normalizeEventType(raw: string): string {
     'worktree_create': 'WorktreeCreate',
     'worktree_remove': 'WorktreeRemove',
     'task_created': 'TaskCreated',
-    'handoff_file': 'HandoffFile',
   };
   return map[raw.toLowerCase()] || raw;
 }
@@ -712,53 +705,6 @@ export function processEvent(
       }, teamId);
     } catch {
       // Non-critical — task extraction failure should not break event processing
-    }
-  }
-
-  // ── Handoff file capture from HandoffFile events ────────────────
-  // Parse HandoffFile events sent by on_post_tool_use.sh when agents
-  // Write/Edit plan.md, changes.md, or review.md. Content is stored
-  // in a dedicated handoff_files table for display in TeamDetail.
-  if (eventType === 'HandoffFile' && db.insertHandoffFile) {
-    try {
-      let fileType: string | undefined;
-      let content: string | undefined;
-
-      // Parse cc_stdin for handoff file fields
-      let ccData: Record<string, unknown> = {};
-      if (payload.cc_stdin) {
-        try {
-          ccData = JSON.parse(payload.cc_stdin) as Record<string, unknown>;
-        } catch {
-          // Malformed cc_stdin — try direct payload fields
-        }
-      }
-
-      fileType = (ccData.file_type ?? payload.message) as string | undefined;
-      content = (ccData.content as string | undefined);
-
-      // Validate: require both file_type and content
-      const validTypes = new Set(['plan.md', 'changes.md', 'review.md']);
-      if (fileType && validTypes.has(fileType) && content && content.length > 0) {
-        const { file: handoffFile, deduplicated } = db.insertHandoffFile({
-          teamId,
-          fileType: fileType as HandoffFileType,
-          content: content.slice(0, 51200), // 50KB cap
-          agentName: agentName !== 'team-lead' ? agentName : null,
-        });
-
-        // Only broadcast SSE when this is a genuinely new capture
-        if (!deduplicated) {
-          sse.broadcast('team_handoff_file', {
-            team_id: teamId,
-            file_type: handoffFile.fileType,
-            agent_name: handoffFile.agentName,
-            captured_at: handoffFile.capturedAt,
-          }, teamId);
-        }
-      }
-    } catch {
-      // Non-critical — handoff file capture failure should not break event processing
     }
   }
 
