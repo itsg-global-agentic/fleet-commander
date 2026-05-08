@@ -88,7 +88,9 @@ beforeAll(async () => {
 
   server = Fastify({ logger: false });
   await server.register(multipart, {
-    limits: { fileSize: 51200, fields: 3, files: 1 },
+    // fields:4 matches src/server/index.ts — team, fileType,
+    // agentName (optional), file
+    limits: { fileSize: 51200, fields: 4, files: 1 },
   });
   await server.register(handoffRoutes);
   await server.ready();
@@ -490,5 +492,53 @@ describe('POST /api/handoff', () => {
     // plan.md: 1 (second was deduped), changes.md: 1
     expect(planFiles).toHaveLength(1);
     expect(changesFiles).toHaveLength(1);
+  });
+
+  // ── agentName field tests ────────────────────────────────────────
+
+  it('should accept and persist optional agentName field', async () => {
+    const team = seedTeam({ worktreeName: `handoff-agent-${Date.now()}` });
+    const { body, contentType } = buildMultipart(
+      {
+        team: team.worktreeName,
+        fileType: 'plan.md',
+        agentName: 'fleet-planner',
+      },
+      { name: 'plan.md', content: '# Plan from planner' },
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': contentType },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const db = getDatabase();
+    const files = db.getHandoffFiles(team.id);
+    expect(files).toHaveLength(1);
+    expect(files[0].agentName).toBe('fleet-planner');
+  });
+
+  it('should default agentName to null when omitted', async () => {
+    const team = seedTeam({ worktreeName: `handoff-noagent-${Date.now()}` });
+    const { body, contentType } = buildMultipart(
+      { team: team.worktreeName, fileType: 'changes.md' },
+      { name: 'changes.md', content: '# Changes from TL' },
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': contentType },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const db = getDatabase();
+    const files = db.getHandoffFiles(team.id);
+    expect(files).toHaveLength(1);
+    expect(files[0].agentName).toBeNull();
   });
 });
