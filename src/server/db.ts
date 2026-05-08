@@ -247,6 +247,8 @@ export interface ProjectUpdate {
   issueProvider?: string | null;
   projectKey?: string | null;
   providerConfig?: string | null;
+  autoMergeEnabled?: boolean | null;
+  autoMergeCheckedAt?: string | null;
 }
 
 export interface ProjectGroupInsert {
@@ -428,6 +430,9 @@ export class FleetDatabase {
 
     // Add effort column to projects (v19 migration — adaptive-reasoning effort level)
     this.addEffortColumn();
+
+    // Add auto_merge_enabled / auto_merge_checked_at columns to projects (v20 migration)
+    this.addAutoMergeColumns();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1219,6 +1224,44 @@ export class FleetDatabase {
   }
 
   /**
+   * Add auto_merge_enabled and auto_merge_checked_at columns to projects table
+   * if they don't exist (v20 migration). These columns cache whether the
+   * project's GitHub repo allows auto-merge so the team-launch path can
+   * conditionally inject a warning paragraph into the launch prompt for repos
+   * where `gh pr merge --auto` does not work.
+   *
+   * - auto_merge_enabled  INTEGER (nullable): 0|1|NULL. NULL = unknown / not
+   *   yet detected, or non-GitHub project.
+   * - auto_merge_checked_at TEXT (nullable): ISO timestamp of last check,
+   *   used to throttle refreshes (default 24h TTL via FLEET_AUTO_MERGE_REFRESH_MS).
+   *
+   * Fresh databases get the columns via schema.sql; upgraded databases use
+   * this migration. Idempotent across restarts.
+   */
+  private addAutoMergeColumns(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+      // Fresh DB: projects table doesn't exist yet — schema.sql will create it
+      // with both columns already present. Nothing to migrate.
+      if (cols.length === 0) return;
+      const hasEnabled = cols.some((c) => c.name === 'auto_merge_enabled');
+      const hasCheckedAt = cols.some((c) => c.name === 'auto_merge_checked_at');
+      if (!hasEnabled) {
+        this.db.exec('ALTER TABLE projects ADD COLUMN auto_merge_enabled INTEGER');
+        console.log('[DB] v20 migration: added auto_merge_enabled column to projects');
+      }
+      if (!hasCheckedAt) {
+        this.db.exec('ALTER TABLE projects ADD COLUMN auto_merge_checked_at TEXT');
+        console.log('[DB] v20 migration: added auto_merge_checked_at column to projects');
+      }
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (20)');
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v20 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Migrate branch_behind and branch_behind_resolved message templates
    * from hardcoded 'main' to use {{BASE_BRANCH}} placeholder.
    * Only updates templates that exactly match the old defaults (user edits are preserved).
@@ -1403,6 +1446,15 @@ export class FleetDatabase {
     if (fields.providerConfig !== undefined) {
       setClauses.push('provider_config = @providerConfig');
       params.providerConfig = fields.providerConfig ? encrypt(fields.providerConfig) : fields.providerConfig;
+    }
+    if (fields.autoMergeEnabled !== undefined) {
+      setClauses.push('auto_merge_enabled = @autoMergeEnabled');
+      params.autoMergeEnabled =
+        fields.autoMergeEnabled === null ? null : (fields.autoMergeEnabled ? 1 : 0);
+    }
+    if (fields.autoMergeCheckedAt !== undefined) {
+      setClauses.push('auto_merge_checked_at = @autoMergeCheckedAt');
+      params.autoMergeCheckedAt = fields.autoMergeCheckedAt;
     }
 
     if (setClauses.length === 0) return this.getProject(id);
@@ -2962,6 +3014,12 @@ export class FleetDatabase {
       }
     }
 
+    const rawAutoMerge = row.auto_merge_enabled;
+    const autoMergeEnabled =
+      rawAutoMerge === null || rawAutoMerge === undefined
+        ? null
+        : (rawAutoMerge as number) === 1;
+
     return {
       id: row.id as number,
       name: row.name as string,
@@ -2977,6 +3035,8 @@ export class FleetDatabase {
       issueProvider: (row.issue_provider as string | null) ?? 'github',
       projectKey: (row.project_key as string | null) ?? null,
       providerConfig,
+      autoMergeEnabled,
+      autoMergeCheckedAt: (row.auto_merge_checked_at as string | null) ?? null,
       createdAt: utcify(row.created_at as string),
       updatedAt: utcify(row.updated_at as string),
     };

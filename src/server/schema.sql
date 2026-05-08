@@ -37,6 +37,8 @@ CREATE TABLE IF NOT EXISTS projects (
   issue_provider  TEXT DEFAULT 'github',              -- issue provider: github | jira | linear
   project_key     TEXT,                               -- provider-specific project key (e.g. Jira project key)
   provider_config TEXT,                               -- JSON blob of provider-specific configuration
+  auto_merge_enabled INTEGER,                         -- 0|1|NULL (NULL = unknown / not yet detected; non-GitHub projects stay NULL)
+  auto_merge_checked_at TEXT,                         -- ISO timestamp of last gh check, or NULL
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -388,4 +390,4 @@ CREATE TABLE IF NOT EXISTS provider_state (
 );
 
 -- Insert schema version (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (19);
+INSERT OR IGNORE INTO schema_version (version) VALUES (20);
