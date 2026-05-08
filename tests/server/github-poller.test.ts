@@ -84,6 +84,7 @@ vi.mock('../../src/server/services/project-service.js', () => ({
 
 // Mock the shared async exec utilities (replaces the old child_process mock)
 const mockExecGHAsync = vi.fn().mockResolvedValue(null);
+const mockExecGHResult = vi.fn().mockResolvedValue({ ok: true, stdout: '' });
 const mockExecGitAsync = vi.fn().mockResolvedValue(null);
 
 // Import the real validators — they are pure functions with no side effects
@@ -93,6 +94,7 @@ const { isValidGithubRepo, isValidBranchName } = await import(
 
 vi.mock('../../src/server/utils/exec-gh.js', () => ({
   execGHAsync: (...args: unknown[]) => mockExecGHAsync(...args),
+  execGHResult: (...args: unknown[]) => mockExecGHResult(...args),
   execGitAsync: (...args: unknown[]) => mockExecGitAsync(...args),
   isValidGithubRepo: (repo: string) => /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(repo),
   isValidBranchName: (branch: string) => /^[a-zA-Z0-9._/\-]+$/.test(branch),
@@ -1638,11 +1640,12 @@ describe('Surgical cache update on PR merge', () => {
 });
 
 
-// CI green + auto-merge early shutdown
+// Merge-when-ready (issue #723) — the poller is the primary merger.
+// Auto-merge on the PR is just a safety net.
 // =============================================================================
 
-describe('CI green + auto-merge early shutdown', () => {
-  it('triggers early shutdown when CI turns green with auto-merge and clean merge state', async () => {
+describe('Merge-when-ready (issue #723)', () => {
+  it('directly merges when CI is passing and merge state is clean (auto-merge ON)', async () => {
     const project = makeProject();
     const team = makeTeam({ prNumber: 42, status: 'running', projectId: 1 });
     mockDb.getProjects.mockReturnValue([project]);
@@ -1657,7 +1660,6 @@ describe('CI green + auto-merge early shutdown', () => {
     });
     mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
 
-    // CI turns green, auto-merge enabled, merge state clean
     mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         state: 'OPEN',
@@ -1666,45 +1668,84 @@ describe('CI green + auto-merge early shutdown', () => {
         autoMergeRequest: { enabledAt: '2025-01-01T00:00:00Z' },
       }),
     );
+    mockExecGHResult.mockResolvedValue({ ok: true, stdout: 'merged' });
 
-    // resolveMessage returns a non-null message so sendMessage fires
-    (mockResolveMessage as ReturnType<typeof vi.fn>).mockReturnValue('CI green auto shutdown msg');
+    (mockResolveMessage as ReturnType<typeof vi.fn>).mockReturnValue('CI green shutdown msg');
 
     await githubPoller.poll();
 
-    // Team should be transitioned to done
+    // gh pr merge --squash --delete-branch should have been issued
+    expect(mockExecGHResult).toHaveBeenCalledWith(
+      expect.stringContaining('gh pr merge 42 --squash --delete-branch --repo owner/repo'),
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    );
+
+    // Team should be transitioned to done by the direct merge path
     expect(mockDb.insertTransition).toHaveBeenCalledWith(
       expect.objectContaining({
         teamId: 1,
         toStatus: 'done',
         trigger: 'poller',
-        reason: expect.stringContaining('early shutdown'),
+        reason: expect.stringContaining('Poller merged PR #42 directly'),
       }),
     );
     expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
       1,
-      expect.objectContaining({
-        status: 'done',
-        phase: 'done',
-      }),
+      expect.objectContaining({ status: 'done', phase: 'done' }),
     );
-
-    // Graceful shutdown should be initiated
     expect(mockManager.gracefulShutdown).toHaveBeenCalledWith(1, 42, 120000);
-
-    // Queue should be processed immediately
     expect(mockManager.processQueue).toHaveBeenCalledWith(1);
-
-    // ci_green_auto_shutdown message should be sent
     expect(mockManager.sendMessage).toHaveBeenCalledWith(
       1,
-      'CI green auto shutdown msg',
+      'CI green shutdown msg',
       'fc',
       'ci_green_auto_shutdown',
     );
   });
 
-  it('does NOT trigger early shutdown when merge state is dirty', async () => {
+  it('directly merges when CI is passing and merge state is clean (auto-merge OFF)', async () => {
+    // The whole point of issue #723: poller must not depend on --auto being
+    // armed. Auto-merge is just a safety net for poller failures.
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 99, status: 'running', projectId: 1 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 99,
+      state: 'open',
+      ciStatus: 'pending',
+      mergeStatus: 'clean',
+      autoMerge: false,
+      ciFailCount: 0,
+    });
+    mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        state: 'OPEN',
+        mergeStateStatus: 'CLEAN',
+        statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS' }],
+        autoMergeRequest: null,
+      }),
+    );
+    mockExecGHResult.mockResolvedValue({ ok: true, stdout: 'merged' });
+
+    await githubPoller.poll();
+
+    expect(mockExecGHResult).toHaveBeenCalledWith(
+      expect.stringContaining('gh pr merge 99 --squash --delete-branch --repo owner/repo'),
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    );
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toStatus: 'done',
+        reason: expect.stringContaining('Poller merged PR #99 directly'),
+      }),
+    );
+    expect(mockManager.gracefulShutdown).toHaveBeenCalledWith(1, 99, 120000);
+  });
+
+  it('does NOT attempt merge when merge state is dirty', async () => {
     const project = makeProject();
     const team = makeTeam({ prNumber: 42, status: 'running', projectId: 1 });
     mockDb.getProjects.mockReturnValue([project]);
@@ -1719,7 +1760,6 @@ describe('CI green + auto-merge early shutdown', () => {
     });
     mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
 
-    // CI turns green, auto-merge enabled, but merge state is dirty
     mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         state: 'OPEN',
@@ -1729,22 +1769,14 @@ describe('CI green + auto-merge early shutdown', () => {
       }),
     );
 
-    (mockResolveMessage as ReturnType<typeof vi.fn>).mockReturnValue('some msg');
-
     await githubPoller.poll();
 
-    // Should NOT have transitioned to done via early shutdown
-    const transitionCalls = mockDb.insertTransition.mock.calls;
-    const earlyShutdownTransition = transitionCalls.find(
-      (call: unknown[]) => {
-        const arg = call[0] as { reason?: string };
-        return arg.reason?.includes('early shutdown');
-      },
-    );
-    expect(earlyShutdownTransition).toBeUndefined();
+    // No merge call, no shutdown
+    expect(mockExecGHResult).not.toHaveBeenCalled();
+    expect(mockManager.gracefulShutdown).not.toHaveBeenCalled();
   });
 
-  it('does NOT trigger early shutdown when merge state is behind (base branch advanced)', async () => {
+  it('does NOT attempt merge when merge state is behind (base branch advanced)', async () => {
     const project = makeProject();
     const team = makeTeam({ prNumber: 42, status: 'running', projectId: 1 });
     mockDb.getProjects.mockReturnValue([project]);
@@ -1759,9 +1791,6 @@ describe('CI green + auto-merge early shutdown', () => {
     });
     mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
 
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    // CI turns green, auto-merge enabled, but branch is behind base
     mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         state: 'OPEN',
@@ -1771,32 +1800,16 @@ describe('CI green + auto-merge early shutdown', () => {
       }),
     );
 
-    (mockResolveMessage as ReturnType<typeof vi.fn>).mockReturnValue('some msg');
-
     await githubPoller.poll();
 
-    // Should NOT have called gracefulShutdown
+    expect(mockExecGHResult).not.toHaveBeenCalled();
     expect(mockManager.gracefulShutdown).not.toHaveBeenCalled();
-
-    // Should NOT have transitioned to done via early shutdown
-    const earlyShutdownTransition = mockDb.insertTransition.mock.calls.find(
-      (call: unknown[]) => {
-        const arg = call[0] as { reason?: string };
-        return arg.reason?.includes('early shutdown');
-      },
-    );
-    expect(earlyShutdownTransition).toBeUndefined();
-
-    // Skip log line should be emitted
-    const skipLogged = logSpy.mock.calls.some((call) =>
-      String(call[0] ?? '').includes('NOT early-shutting-down'),
-    );
-    expect(skipLogged).toBe(true);
-
-    logSpy.mockRestore();
   });
 
-  it('does NOT trigger early shutdown when merge state is blocked by conflict (dirty)', async () => {
+  it('does NOT attempt merge when merge state is unknown', async () => {
+    // Be conservative: if GitHub hasn't computed mergeability yet, wait for
+    // the next poll. Auto-merge stays armed as a safety net if the TL set
+    // it; otherwise the next clean poll will trigger the direct merge.
     const project = makeProject();
     const team = makeTeam({ prNumber: 42, status: 'running', projectId: 1 });
     mockDb.getProjects.mockReturnValue([project]);
@@ -1811,56 +1824,6 @@ describe('CI green + auto-merge early shutdown', () => {
     });
     mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
 
-    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-
-    // CI turns green, auto-merge enabled, but PR has merge conflict
-    mockExecGHAsync.mockResolvedValue(
-      makeGHPRViewResult({
-        state: 'OPEN',
-        mergeStateStatus: 'DIRTY',
-        statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS' }],
-        autoMergeRequest: { enabledAt: '2025-01-01T00:00:00Z' },
-      }),
-    );
-
-    (mockResolveMessage as ReturnType<typeof vi.fn>).mockReturnValue('some msg');
-
-    await githubPoller.poll();
-
-    expect(mockManager.gracefulShutdown).not.toHaveBeenCalled();
-
-    const earlyShutdownTransition = mockDb.insertTransition.mock.calls.find(
-      (call: unknown[]) => {
-        const arg = call[0] as { reason?: string };
-        return arg.reason?.includes('early shutdown');
-      },
-    );
-    expect(earlyShutdownTransition).toBeUndefined();
-
-    const skipLogged = logSpy.mock.calls.some((call) =>
-      String(call[0] ?? '').includes('NOT early-shutting-down'),
-    );
-    expect(skipLogged).toBe(true);
-
-    logSpy.mockRestore();
-  });
-
-  it('still triggers early shutdown when merge state is unknown (common first-poll case)', async () => {
-    const project = makeProject();
-    const team = makeTeam({ prNumber: 42, status: 'running', projectId: 1 });
-    mockDb.getProjects.mockReturnValue([project]);
-    mockDb.getActiveTeams.mockReturnValue([team]);
-    mockDb.getPullRequest.mockReturnValue({
-      prNumber: 42,
-      state: 'open',
-      ciStatus: 'pending',
-      mergeStatus: 'unknown',
-      autoMerge: true,
-      ciFailCount: 0,
-    });
-    mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
-
-    // CI turns green, auto-merge enabled, GitHub hasn't computed mergeability
     mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         state: 'OPEN',
@@ -1870,37 +1833,77 @@ describe('CI green + auto-merge early shutdown', () => {
       }),
     );
 
-    (mockResolveMessage as ReturnType<typeof vi.fn>).mockReturnValue('msg');
-
     await githubPoller.poll();
 
-    // Should have fired gracefulShutdown — we don't want to stall on
-    // missing/unknown data from GitHub
-    expect(mockManager.gracefulShutdown).toHaveBeenCalledWith(1, 42, 120000);
-    expect(mockDb.insertTransition).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toStatus: 'done',
-        reason: expect.stringContaining('early shutdown'),
-      }),
+    expect(mockExecGHResult).not.toHaveBeenCalled();
+    expect(mockManager.gracefulShutdown).not.toHaveBeenCalled();
+    // No transition either — we keep polling
+    const doneTransition = mockDb.insertTransition.mock.calls.find(
+      (call: unknown[]) => (call[0] as { toStatus?: string }).toStatus === 'done',
     );
+    expect(doneTransition).toBeUndefined();
   });
 
-  it('does NOT trigger early shutdown when auto-merge is NOT enabled', async () => {
+  it('leaves the team alive when the direct merge call fails (auto-merge backup remains)', async () => {
     const project = makeProject();
-    const team = makeTeam({ prNumber: 42, status: 'running', projectId: 1 });
+    const team = makeTeam({ prNumber: 7, status: 'running', projectId: 1 });
     mockDb.getProjects.mockReturnValue([project]);
     mockDb.getActiveTeams.mockReturnValue([team]);
     mockDb.getPullRequest.mockReturnValue({
-      prNumber: 42,
+      prNumber: 7,
       state: 'open',
       ciStatus: 'pending',
+      mergeStatus: 'clean',
+      autoMerge: true,
+      ciFailCount: 0,
+    });
+    mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
+
+    mockExecGHAsync.mockResolvedValue(
+      makeGHPRViewResult({
+        state: 'OPEN',
+        mergeStateStatus: 'CLEAN',
+        statusCheckRollup: [{ name: 'build', conclusion: 'SUCCESS' }],
+        autoMergeRequest: { enabledAt: '2025-01-01T00:00:00Z' },
+      }),
+    );
+    mockExecGHResult.mockResolvedValue({ ok: false, error: 'permission denied' });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await githubPoller.poll();
+
+    // Merge was attempted
+    expect(mockExecGHResult).toHaveBeenCalled();
+    // But team was NOT transitioned to done
+    const doneTransition = mockDb.insertTransition.mock.calls.find(
+      (call: unknown[]) => (call[0] as { toStatus?: string }).toStatus === 'done',
+    );
+    expect(doneTransition).toBeUndefined();
+    expect(mockManager.gracefulShutdown).not.toHaveBeenCalled();
+    // And we logged a warning so the operator can see why
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Direct merge failed'),
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it('does not retry-storm: second poll within the throttle window does not re-attempt merge after a failure', async () => {
+    const project = makeProject();
+    const team = makeTeam({ prNumber: 8, status: 'running', projectId: 1 });
+    mockDb.getProjects.mockReturnValue([project]);
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 8,
+      state: 'open',
+      ciStatus: 'passing',
       mergeStatus: 'clean',
       autoMerge: false,
       ciFailCount: 0,
     });
     mockDb.getTeam.mockReturnValue({ ...team, status: 'running' });
 
-    // CI turns green, merge state clean, but auto-merge NOT enabled
     mockExecGHAsync.mockResolvedValue(
       makeGHPRViewResult({
         state: 'OPEN',
@@ -1909,20 +1912,18 @@ describe('CI green + auto-merge early shutdown', () => {
         autoMergeRequest: null,
       }),
     );
+    mockExecGHResult.mockResolvedValue({ ok: false, error: 'transient gh failure' });
 
-    (mockResolveMessage as ReturnType<typeof vi.fn>).mockReturnValue('some msg');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     await githubPoller.poll();
+    await githubPoller.poll();
 
-    // Should NOT have transitioned to done via early shutdown
-    const transitionCalls = mockDb.insertTransition.mock.calls;
-    const earlyShutdownTransition = transitionCalls.find(
-      (call: unknown[]) => {
-        const arg = call[0] as { reason?: string };
-        return arg.reason?.includes('early shutdown');
-      },
+    // The throttle should ensure exactly one merge attempt within the window
+    const mergeCalls = mockExecGHResult.mock.calls.filter((call: unknown[]) =>
+      String(call[0] ?? '').includes('gh pr merge'),
     );
-    expect(earlyShutdownTransition).toBeUndefined();
+    expect(mergeCalls.length).toBe(1);
   });
 });
 
