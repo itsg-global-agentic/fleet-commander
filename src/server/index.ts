@@ -68,7 +68,7 @@ async function main() {
   await server.register(multipart, {
     limits: {
       fileSize: 51200, // 50KB cap — matches hook-side head -c 51200
-      fields: 3,       // team, fileType, file
+      fields: 4,       // team, fileType, agentName (optional), file
       files: 1,
     },
   });
