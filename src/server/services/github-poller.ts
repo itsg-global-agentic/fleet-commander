@@ -18,7 +18,7 @@ import { getDatabase } from '../db.js';
 import config from '../config.js';
 import { sseBroker } from './sse-broker.js';
 import { resolveMessage } from '../utils/resolve-message.js';
-import { execGHAsync, execGitAsync, isValidGithubRepo, isValidBranchName } from '../utils/exec-gh.js';
+import { execGHAsync, execGHResult, execGitAsync, isValidGithubRepo, isValidBranchName } from '../utils/exec-gh.js';
 import type { PRState, CIStatus, MergeStatus } from '../../shared/types.js';
 
 // ---------------------------------------------------------------------------
@@ -88,6 +88,17 @@ class GitHubPoller {
   private warnedCollisions = new Set<string>();
 
   /**
+   * In-memory throttle for direct PR merge attempts.
+   * Maps teamId -> last attempt timestamp (ms). Prevents the poller from
+   * retry-storming `gh pr merge` while the merge call is in flight or
+   * after a recent failure. Cleared when the team transitions to done.
+   */
+  private mergeAttempts = new Map<number, number>();
+
+  /** Minimum interval between direct merge attempts per team (ms). */
+  private static readonly MERGE_RETRY_THROTTLE_MS = 60_000;
+
+  /**
    * Start the polling loop. Uses adaptive intervals:
    * - Normal: config.githubPollIntervalMs (default 30s)
    * - Fast: 10s when teams are awaiting PR detection or have pending CI
@@ -147,6 +158,9 @@ class GitHubPoller {
       this.interval = null;
       console.log('[GitHubPoller] Stopped');
     }
+    // Drop in-memory state so a subsequent start() begins from a clean slate
+    // (also important for tests that share a singleton across cases).
+    this.mergeAttempts.clear();
   }
 
   /**
@@ -536,95 +550,6 @@ class GitHubPoller {
 
         // Merge notification is now handled by gracefulShutdown below
         // (sends pr_merged_shutdown instead of pr_merged to avoid duplicates)
-
-        // ── Early shutdown on CI green + auto-merge happy path ────────
-        // When CI turns green, auto-merge is enabled, the PR is still open,
-        // and merge state is clean/unknown, the team can shut down
-        // immediately — GitHub will handle the actual merge. This avoids
-        // the grace period wait that normally follows pr_merged detection.
-        //
-        // We only fire when mergeStatus is one of {clean, unknown} — any
-        // "blocked_*", "behind", or "dirty" state means the PR cannot
-        // actually be merged yet and we'd be racing against active rebase
-        // / CI / review work. In those cases we leave the team alive and
-        // keep polling so the TL can unblock the PR.
-        const earlyShutdownEligibleMergeState =
-          mergeState === 'clean' || mergeState === 'unknown';
-        if (
-          existing.ciStatus !== ciStatus &&
-          ciStatus === 'passing' &&
-          autoMerge &&
-          state !== 'merged' &&
-          earlyShutdownEligibleMergeState
-        ) {
-          const team = db.getTeam(teamId);
-          if (team && team.status !== 'done') {
-            try {
-              const { getTeamManager } = await import('./team-manager.js');
-              const manager = getTeamManager();
-
-              // Send the early shutdown message
-              const shutdownMsg = resolveMessage('ci_green_auto_shutdown', {
-                PR_NUMBER: String(prNumber),
-              });
-              if (shutdownMsg) manager.sendMessage(teamId, shutdownMsg, 'fc', 'ci_green_auto_shutdown');
-
-              // Transition team to done
-              const previousStatus = team.status;
-              db.insertTransition({
-                teamId,
-                fromStatus: previousStatus,
-                toStatus: 'done',
-                trigger: 'poller',
-                reason: `CI green + auto-merge on PR #${prNumber} — early shutdown`,
-              });
-              db.updateTeamSilent(teamId, { status: 'done', phase: 'done', stoppedAt: new Date().toISOString() });
-
-              sseBroker.broadcast(
-                'team_status_changed',
-                {
-                  team_id: teamId,
-                  status: 'done',
-                  previous_status: previousStatus,
-                },
-                teamId,
-              );
-
-              console.log(
-                `[GitHubPoller] Team ${teamId} early shutdown — CI green + auto-merge on PR #${prNumber}`,
-              );
-
-              // Initiate graceful shutdown (notify TL, grace period, then kill)
-              manager.gracefulShutdown(teamId, prNumber, config.mergeShutdownGraceMs);
-
-              // Advance the queue immediately — the slot is free
-              if (team.projectId) {
-                manager.processQueue(team.projectId).catch((err) => {
-                  console.error(
-                    `[GitHubPoller] processQueue error after early shutdown for team ${teamId}:`,
-                    err instanceof Error ? err.message : err,
-                  );
-                });
-              }
-            } catch (err) {
-              console.error(`[GitHubPoller] Failed to initiate early shutdown for team ${teamId}:`, err);
-            }
-
-            return { ciStatus, state };
-          }
-        } else if (
-          existing.ciStatus !== ciStatus &&
-          ciStatus === 'passing' &&
-          autoMerge &&
-          state !== 'merged'
-        ) {
-          // Early-shutdown trigger conditions met (CI just turned green,
-          // auto-merge on) but merge state is not eligible — keep the team
-          // alive and let the poller keep watching.
-          console.log(
-            `[GitHubPoller] Team ${teamId} NOT early-shutting-down — mergeStatus=${mergeState} (PR #${prNumber})`,
-          );
-        }
       }
     } else {
       // First time we see this PR — insert it
@@ -664,6 +589,24 @@ class GitHubPoller {
           console.error(`[GitHubPoller] Failed to send initial merge_conflict to team ${teamId}:`, err);
         }
       }
+    }
+
+    // ── Merge-when-ready (issue #723) ────────────────────────────
+    // The poller's primary job is to merge PRs that are ready, regardless
+    // of whether GitHub auto-merge is armed on the PR. This runs on every
+    // poll cycle (not just on CI transitions) so PRs that were already
+    // ready when the poller booted, or teams that got stuck after CI
+    // turned green, still progress to merge.
+    //
+    // Auto-merge on the PR remains a safety net: if our direct merge call
+    // fails for some reason, GitHub will pick the PR up if --auto was set.
+    if (state === 'open' && ciStatus === 'passing' && mergeState === 'clean') {
+      await this.attemptMergeReadyPR({
+        teamId,
+        prNumber,
+        githubRepo,
+        autoMerge,
+      });
     }
 
     // If the PR was merged, update the team status to 'done'
@@ -799,6 +742,135 @@ class GitHubPoller {
     }
 
     return { ciStatus, state };
+  }
+
+  // -------------------------------------------------------------------------
+  // Private: attempt to merge a PR that polling has determined is ready
+  // -------------------------------------------------------------------------
+
+  /**
+   * Attempt to merge a PR that the poller has determined is ready
+   * (state=open, CI=passing, mergeStatus=clean). Throttled per team so
+   * a failed call does not retry-storm. On success, transitions the team
+   * to `done`, sends the shutdown message to the TL, kicks off
+   * `gracefulShutdown`, and advances the project queue. On failure, logs
+   * and leaves the team alone — the next poll cycle (after the throttle
+   * window) retries, and PR-level auto-merge (if armed) remains as a
+   * safety net.
+   *
+   * Issue #723.
+   */
+  private async attemptMergeReadyPR(args: {
+    teamId: number;
+    prNumber: number;
+    githubRepo: string;
+    autoMerge: boolean;
+  }): Promise<void> {
+    const { teamId, prNumber, githubRepo, autoMerge } = args;
+    const db = getDatabase();
+
+    // Skip teams that are already terminal — nothing to shut down.
+    const team = db.getTeam(teamId);
+    if (!team) return;
+    if (team.status === 'done' || team.status === 'failed') {
+      // Cleanup throttle entry since no further attempts are needed
+      this.mergeAttempts.delete(teamId);
+      return;
+    }
+
+    // Throttle so a transient failure cannot retry-storm `gh pr merge`.
+    const now = Date.now();
+    const lastAttempt = this.mergeAttempts.get(teamId) ?? 0;
+    if (now - lastAttempt < GitHubPoller.MERGE_RETRY_THROTTLE_MS) {
+      return;
+    }
+    this.mergeAttempts.set(teamId, now);
+
+    if (!isValidGithubRepo(githubRepo)) {
+      console.error(
+        `[GitHubPoller] Invalid github repo "${githubRepo}" for team ${teamId} — skipping direct merge`,
+      );
+      return;
+    }
+
+    const mergeCmd = `gh pr merge ${prNumber} --squash --delete-branch --repo ${githubRepo}`;
+    const result = await execGHResult(mergeCmd, { timeout: 30_000 });
+
+    if (!result.ok) {
+      // Don't escalate — auto-merge (if armed) is the safety net, and the
+      // throttle window will let us retry on the next eligible poll cycle.
+      console.warn(
+        `[GitHubPoller] Direct merge failed for PR #${prNumber} (team ${teamId}, autoMerge=${autoMerge}): ${result.error?.slice(0, 200) ?? 'unknown'}`,
+      );
+      return;
+    }
+
+    console.log(
+      `[GitHubPoller] Team ${teamId} merged PR #${prNumber} directly via poller`,
+    );
+
+    // Transition the team to done. We deliberately do NOT wait for the
+    // next poll cycle to detect state=merged on GitHub — we already know
+    // the merge succeeded.
+    const previousStatus = team.status;
+    db.insertTransition({
+      teamId,
+      fromStatus: previousStatus,
+      toStatus: 'done',
+      trigger: 'poller',
+      reason: `Poller merged PR #${prNumber} directly`,
+    });
+    db.updateTeamSilent(teamId, {
+      status: 'done',
+      phase: 'done',
+      stoppedAt: new Date().toISOString(),
+    });
+    db.updatePullRequest(prNumber, {
+      state: 'merged' as PRState,
+      mergedAt: new Date().toISOString(),
+    });
+
+    sseBroker.broadcast(
+      'team_status_changed',
+      {
+        team_id: teamId,
+        status: 'done',
+        previous_status: previousStatus,
+      },
+      teamId,
+    );
+
+    // Notify the TL and start graceful shutdown.
+    try {
+      const { getTeamManager } = await import('./team-manager.js');
+      const manager = getTeamManager();
+
+      const shutdownMsg = resolveMessage('ci_green_auto_shutdown', {
+        PR_NUMBER: String(prNumber),
+      });
+      if (shutdownMsg) {
+        manager.sendMessage(teamId, shutdownMsg, 'fc', 'ci_green_auto_shutdown');
+      }
+
+      manager.gracefulShutdown(teamId, prNumber, config.mergeShutdownGraceMs);
+
+      if (team.projectId) {
+        manager.processQueue(team.projectId).catch((err) => {
+          console.error(
+            `[GitHubPoller] processQueue error after direct merge for team ${teamId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        });
+      }
+    } catch (err) {
+      console.error(
+        `[GitHubPoller] Failed to initiate graceful shutdown after direct merge for team ${teamId}:`,
+        err,
+      );
+    }
+
+    // Done with this team — drop the throttle entry.
+    this.mergeAttempts.delete(teamId);
   }
 
   // -------------------------------------------------------------------------
