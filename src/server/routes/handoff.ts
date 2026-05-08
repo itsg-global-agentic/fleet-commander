@@ -7,9 +7,14 @@
 //
 // Endpoint: POST /api/handoff
 // Fields:
-//   - team     (string) — worktree name
-//   - fileType (string) — one of plan.md, changes.md, review.md
-//   - file     (binary) — the file content
+//   - team      (string) — worktree name
+//   - fileType  (string) — one of plan.md, changes.md, review.md
+//   - agentName (string, optional) — subagent that produced the file
+//                                    (e.g. "fleet-planner", "fleet-dev",
+//                                    "fleet-reviewer"). Persisted on the
+//                                    handoff_files row; defaults to null
+//                                    when omitted (e.g. TL-authored files).
+//   - file      (binary) — the file content
 // =============================================================================
 
 import type {
@@ -41,6 +46,7 @@ const handoffRoutes: FastifyPluginCallback = (
 
         let team: string | undefined;
         let fileType: string | undefined;
+        let agentName: string | undefined;
         let fileContent: string | undefined;
 
         for await (const part of parts) {
@@ -50,6 +56,9 @@ const handoffRoutes: FastifyPluginCallback = (
               team = String(field.value);
             } else if (field.fieldname === 'fileType') {
               fileType = String(field.value);
+            } else if (field.fieldname === 'agentName') {
+              const v = String(field.value);
+              agentName = v.length > 0 ? v : undefined;
             }
           } else if (part.type === 'file') {
             const file = part as MultipartFile;
@@ -94,12 +103,15 @@ const handoffRoutes: FastifyPluginCallback = (
         }
 
         // Insert handoff file (with dedup — skips if identical content
-        // was captured for the same team + file_type within 5 seconds)
+        // was captured for the same team + file_type within 5 seconds).
+        // agentName is optional: hooks/send_handoff.sh forwards the
+        // subagent type (planner/dev/reviewer) when known; TL-authored
+        // files have no agent and are stored with null.
         const { file: handoffFile, deduplicated } = db.insertHandoffFile({
           teamId: teamRecord.id,
           fileType: fileType as HandoffFileType,
           content: fileContent,
-          agentName: null, // multipart upload doesn't carry agent name
+          agentName: agentName ?? null,
         });
 
         // Only broadcast SSE when this is a genuinely new capture
