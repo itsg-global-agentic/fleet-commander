@@ -1065,6 +1065,382 @@ describe('Agent Messages CRUD', () => {
 
     expect(msg.createdAt).toMatch(/T.*Z$/);
   });
+
+  it('getAgentMessages includes content only when includeContent=true', () => {
+    db.insertAgentMessage({
+      teamId: 1,
+      eventId: 1,
+      sender: 'coordinator',
+      recipient: 'dev-ts',
+      summary: 'Task assigned',
+      content: 'Full message content with the actual prompt',
+    });
+
+    const without = db.getAgentMessages(1);
+    expect(without).toHaveLength(1);
+    expect(without[0].content).toBeNull();
+
+    const withContent = db.getAgentMessages(1, undefined, true);
+    expect(withContent).toHaveLength(1);
+    expect(withContent[0].content).toBe('Full message content with the actual prompt');
+  });
+});
+
+// =============================================================================
+// Spawn Records (Issue #713) — back-fill + getSpawnRecords
+// =============================================================================
+
+describe('Spawn Records (Issue #713)', () => {
+  beforeEach(() => {
+    db.insertTeam({ issueNumber: 100, worktreeName: 'kea-100', status: 'running', phase: 'implementing' });
+    // Two seed events used as event_id foreign keys in spawn rows
+    db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'fleet-dev' });
+    db.insertEvent({ teamId: 1, eventType: 'SubagentStart', agentName: 'fleet-reviewer' });
+  });
+
+  describe('backfillSpawnPromptForTask', () => {
+    it('updates the OLDEST unfilled matching spawn row', () => {
+      const a = db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: null,
+      });
+      // Different recipient, should NOT be touched
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 2,
+        sender: 'team-lead',
+        recipient: 'reviewer',
+        summary: 'spawned agent',
+        content: null,
+      });
+
+      const ok = db.backfillSpawnPromptForTask({
+        teamId: 1,
+        taskSubagentType: 'dev',
+        prompt: 'do thing',
+      });
+
+      expect(ok).toBe(true);
+      const all = db.getAgentMessages(1, undefined, true);
+      const dev = all.find((m) => m.id === a.id);
+      const rev = all.find((m) => m.recipient === 'reviewer');
+      expect(dev?.content).toBe('do thing');
+      expect(rev?.content).toBeNull();
+    });
+
+    it('back-fills the OLDEST unfilled row when two same-recipient spawns exist', () => {
+      const first = db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: null,
+      });
+      const second = db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: null,
+      });
+
+      const ok = db.backfillSpawnPromptForTask({
+        teamId: 1,
+        taskSubagentType: 'dev',
+        prompt: 'first prompt',
+      });
+
+      expect(ok).toBe(true);
+      const all = db.getAgentMessages(1, undefined, true);
+      const firstRow = all.find((m) => m.id === first.id);
+      const secondRow = all.find((m) => m.id === second.id);
+      expect(firstRow?.content).toBe('first prompt');
+      expect(secondRow?.content).toBeNull();
+    });
+
+    it('returns false when no matching unfilled spawn exists', () => {
+      // No spawn rows inserted at all
+      const ok = db.backfillSpawnPromptForTask({
+        teamId: 1,
+        taskSubagentType: 'dev',
+        prompt: 'no match',
+      });
+      expect(ok).toBe(false);
+    });
+
+    it('skips rows where content is already populated', () => {
+      const a = db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'already set',
+      });
+
+      const ok = db.backfillSpawnPromptForTask({
+        teamId: 1,
+        taskSubagentType: 'dev',
+        prompt: 'replacement',
+      });
+
+      expect(ok).toBe(false);
+      const all = db.getAgentMessages(1, undefined, true);
+      expect(all.find((m) => m.id === a.id)?.content).toBe('already set');
+    });
+
+    it('normalizes taskSubagentType with fleet- prefix', () => {
+      const a = db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: null,
+      });
+      const ok = db.backfillSpawnPromptForTask({
+        teamId: 1,
+        taskSubagentType: 'fleet-dev',
+        prompt: 'normalized',
+      });
+      expect(ok).toBe(true);
+      expect(db.getAgentMessages(1, undefined, true).find((m) => m.id === a.id)?.content).toBe(
+        'normalized',
+      );
+    });
+
+    it('normalizes taskSubagentType with namespace colon prefix', () => {
+      const a = db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: null,
+      });
+      const ok = db.backfillSpawnPromptForTask({
+        teamId: 1,
+        taskSubagentType: 'feature-dev:dev',
+        prompt: 'with-colon',
+      });
+      expect(ok).toBe(true);
+      expect(db.getAgentMessages(1, undefined, true).find((m) => m.id === a.id)?.content).toBe(
+        'with-colon',
+      );
+    });
+
+    it('caps prompt content at 50KB', () => {
+      const a = db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: null,
+      });
+      const big = 'x'.repeat(60_000);
+      const ok = db.backfillSpawnPromptForTask({
+        teamId: 1,
+        taskSubagentType: 'dev',
+        prompt: big,
+      });
+      expect(ok).toBe(true);
+      const got = db.getAgentMessages(1, undefined, true).find((m) => m.id === a.id);
+      expect(got?.content?.length).toBe(51200);
+    });
+
+    it('returns false when taskSubagentType is null or empty', () => {
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: null,
+      });
+      expect(
+        db.backfillSpawnPromptForTask({ teamId: 1, taskSubagentType: null, prompt: 'p' }),
+      ).toBe(false);
+      expect(
+        db.backfillSpawnPromptForTask({ teamId: 1, taskSubagentType: '', prompt: 'p' }),
+      ).toBe(false);
+    });
+
+    it('returns false when prompt is empty', () => {
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: null,
+      });
+      expect(
+        db.backfillSpawnPromptForTask({ teamId: 1, taskSubagentType: 'dev', prompt: '' }),
+      ).toBe(false);
+    });
+  });
+
+  describe('getSpawnRecords', () => {
+    it('returns terminalStatus=running when no SubagentStop exists', () => {
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'do X',
+      });
+      const records = db.getSpawnRecords(1);
+      expect(records).toHaveLength(1);
+      expect(records[0].recipient).toBe('dev');
+      expect(records[0].terminalStatus).toBe('running');
+      expect(records[0].content).toBe('do X');
+    });
+
+    it('returns terminalStatus=done when SubagentStop exists after spawn', () => {
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'do X',
+      });
+      // Insert a SubagentStop event for the same recipient AFTER the spawn.
+      // SQLite created_at uses datetime('now') so this is always later than the spawn.
+      db.insertEvent({ teamId: 1, eventType: 'SubagentStop', agentName: 'fleet-dev' });
+
+      const records = db.getSpawnRecords(1);
+      expect(records).toHaveLength(1);
+      expect(records[0].terminalStatus).toBe('done');
+    });
+
+    it('returns multiple spawns of the same recipient in chronological order', () => {
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'first',
+      });
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'second',
+      });
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'third',
+      });
+
+      const records = db.getSpawnRecords(1);
+      expect(records.map((r) => r.content)).toEqual(['first', 'second', 'third']);
+    });
+
+    it('returns the captured prompt as content (or null when not captured)', () => {
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'with prompt',
+      });
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 2,
+        sender: 'team-lead',
+        recipient: 'reviewer',
+        summary: 'spawned agent',
+        content: null,
+      });
+
+      const records = db.getSpawnRecords(1);
+      expect(records).toHaveLength(2);
+      expect(records[0].content).toBe('with prompt');
+      expect(records[1].content).toBeNull();
+    });
+
+    it('excludes non-spawn agent_messages rows', () => {
+      // SendMessage routing rows should not appear in spawn records
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'dev',
+        recipient: 'reviewer',
+        summary: 'review me',
+        content: 'please review',
+      });
+      // Plus one actual spawn row
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'do X',
+      });
+
+      const records = db.getSpawnRecords(1);
+      expect(records).toHaveLength(1);
+      expect(records[0].recipient).toBe('dev');
+    });
+
+    it('excludes spawns from other teams', () => {
+      db.insertTeam({ issueNumber: 200, worktreeName: 'kea-200', status: 'running', phase: 'implementing' });
+      db.insertEvent({ teamId: 2, eventType: 'SubagentStart', agentName: 'fleet-dev' });
+
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'team1',
+      });
+      db.insertAgentMessage({
+        teamId: 2,
+        eventId: 3,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'team2',
+      });
+
+      expect(db.getSpawnRecords(1)).toHaveLength(1);
+      expect(db.getSpawnRecords(1)[0].content).toBe('team1');
+      expect(db.getSpawnRecords(2)).toHaveLength(1);
+      expect(db.getSpawnRecords(2)[0].content).toBe('team2');
+    });
+
+    it('returns ISO 8601 createdAt with trailing Z', () => {
+      db.insertAgentMessage({
+        teamId: 1,
+        eventId: 1,
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: null,
+      });
+      const records = db.getSpawnRecords(1);
+      expect(records[0].createdAt).toMatch(/T.*Z$/);
+    });
+  });
 });
 
 // =============================================================================

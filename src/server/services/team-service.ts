@@ -1125,11 +1125,15 @@ export class TeamService {
    *
    * @param teamId - The team ID
    * @param limit - Optional max messages to return
+   * @param includeContent - Optional flag; when true the message `content`
+   *                         column is included in the result (capped at
+   *                         50KB per row). Defaults to false to keep
+   *                         message-list responses small.
    * @returns Array of agent messages
    * @throws ServiceError with code VALIDATION if teamId is invalid
    * @throws ServiceError with code NOT_FOUND if team doesn't exist
    */
-  getMessages(teamId: number, limit?: number): unknown[] {
+  getMessages(teamId: number, limit?: number, includeContent?: boolean): unknown[] {
     if (isNaN(teamId) || teamId < 1) {
       throw validationError('Invalid team ID');
     }
@@ -1140,7 +1144,31 @@ export class TeamService {
       throw notFoundError(`Team ${teamId} not found`);
     }
 
-    return db.getAgentMessages(teamId, limit);
+    return db.getAgentMessages(teamId, limit, includeContent);
+  }
+
+  /**
+   * Get all TL->subagent spawn records for a team in chronological order.
+   * Each record includes the captured spawn prompt (or null if it was not
+   * captured) plus the spawn's terminal status.
+   *
+   * @param teamId - The team ID
+   * @returns Array of SpawnRecord ordered by created_at ASC
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getSpawnRecords(teamId: number): unknown[] {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    return db.getSpawnRecords(teamId);
   }
 
   /**

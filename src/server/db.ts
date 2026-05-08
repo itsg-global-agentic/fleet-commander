@@ -31,6 +31,8 @@ import type {
   TeamTask,
   HandoffFile,
   HandoffFileType,
+  SpawnRecord,
+  SpawnTerminalStatus,
 } from '../shared/types.js';
 import { encrypt, decrypt, isEncrypted, decryptWithKey } from './utils/crypto.js';
 import config from './config.js';
@@ -2264,8 +2266,18 @@ export class FleetDatabase {
     return this.mapAgentMessageRow(row);
   }
 
-  getAgentMessages(teamId: number, limit?: number): AgentMessage[] {
-    const cols = 'id, team_id, event_id, sender, recipient, summary, session_id, created_at';
+  /**
+   * Fetch agent messages for a team, ordered newest-first.
+   *
+   * The `content` column is excluded by default to keep response payloads
+   * small for the message-list use case. Pass `includeContent=true` to opt
+   * into receiving the (potentially large) message bodies — used by the
+   * spawn-prompt panel to display captured TL->subagent prompts.
+   */
+  getAgentMessages(teamId: number, limit?: number, includeContent = false): AgentMessage[] {
+    const cols = includeContent
+      ? 'id, team_id, event_id, sender, recipient, summary, content, session_id, created_at'
+      : 'id, team_id, event_id, sender, recipient, summary, session_id, created_at';
     const sql = limit
       ? `SELECT ${cols} FROM agent_messages WHERE team_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`
       : `SELECT ${cols} FROM agent_messages WHERE team_id = ? ORDER BY created_at DESC, id DESC`;
@@ -2318,6 +2330,159 @@ export class FleetDatabase {
       count: r.count,
       lastSummary: r.last_summary ?? null,
     }));
+  }
+
+  // -------------------------------------------------------------------------
+  // Spawn Records (Issue #713)
+  // -------------------------------------------------------------------------
+  //
+  // The `agent_messages` table doubles as the carrier for TL->subagent spawn
+  // records. Rows where `summary='spawned agent'` have `content` populated
+  // with the TL's spawn prompt (capped at 50KB). The prompt is captured at
+  // insert time (from SubagentStart's tool_input.prompt when present) OR
+  // back-filled from the subsequent PostToolUse(Task) event.
+
+  /** 50KB cap (in bytes) for spawn prompt content. */
+  private static readonly SPAWN_PROMPT_MAX_BYTES = 51200;
+
+  /**
+   * Normalize a Task tool's `subagent_type` value to match the recipient
+   * stored in `agent_messages`. CC may emit values like:
+   *   - `dev`                                  (already normalized)
+   *   - `fleet-dev`                            (with the fleet- prefix)
+   *   - `feature-dev:code-explorer`            (with a plugin namespace prefix)
+   *   - `fleet-feature-dev:code-explorer`      (both)
+   *
+   * The recipient stored on the SubagentStart row is the result of
+   * `normalizeAgentName(payload.teammate_name)` which strips the `fleet-`
+   * prefix only. To match a namespaced value like `feature-dev:dev` against
+   * a recipient like `dev`, we also strip everything up to and including
+   * the last colon.
+   */
+  private static normalizeSubagentType(raw: string): string {
+    let name = raw.trim();
+    if (name.startsWith('fleet-')) name = name.slice(6);
+    const colonIdx = name.lastIndexOf(':');
+    if (colonIdx !== -1 && colonIdx < name.length - 1) {
+      name = name.slice(colonIdx + 1);
+    }
+    return name;
+  }
+
+  /**
+   * Back-fill the spawn prompt onto the OLDEST unfilled `agent_messages`
+   * row matching `summary='spawned agent'`, `content IS NULL`, and the
+   * normalized recipient. Used when `PostToolUse(Task)` carries the prompt
+   * the TL passed to the Task tool, but the preceding `SubagentStart`
+   * didn't.
+   *
+   * Edge case: when two consecutive spawns of the same agent type fire
+   * before either Task PostToolUse arrives, both rows have `content=NULL`.
+   * We back-fill the OLDEST first (`id = MIN(id) WHERE …`) so the prompts
+   * line up with the spawn order.
+   *
+   * Returns true on update, false otherwise (no match, empty taskSubagentType,
+   * or empty prompt).
+   */
+  backfillSpawnPromptForTask(data: {
+    teamId: number;
+    taskSubagentType: string | null;
+    prompt: string;
+  }): boolean {
+    if (!data.taskSubagentType || data.taskSubagentType.trim() === '') return false;
+    if (!data.prompt || data.prompt.length === 0) return false;
+
+    const normalized = FleetDatabase.normalizeSubagentType(data.taskSubagentType);
+    if (!normalized) return false;
+
+    const cappedPrompt = data.prompt.slice(0, FleetDatabase.SPAWN_PROMPT_MAX_BYTES);
+
+    // Try exact match on the normalized recipient first; fall back to a
+    // suffix LIKE match if no exact row exists. Within each match attempt
+    // we update only the OLDEST unfilled row (MIN(id)).
+    const updateExact = this.stmt(`
+      UPDATE agent_messages
+         SET content = @content
+       WHERE id = (
+         SELECT MIN(id) FROM agent_messages
+          WHERE team_id = @teamId
+            AND summary = 'spawned agent'
+            AND content IS NULL
+            AND recipient = @recipient
+       )
+    `);
+    const exactInfo = updateExact.run({
+      teamId: data.teamId,
+      recipient: normalized,
+      content: cappedPrompt,
+    });
+    if (exactInfo.changes > 0) return true;
+
+    // Fall-back: looser match for historical recipients that may have been
+    // stored with the `fleet-` prefix (pre-normalization data).
+    const updateLike = this.stmt(`
+      UPDATE agent_messages
+         SET content = @content
+       WHERE id = (
+         SELECT MIN(id) FROM agent_messages
+          WHERE team_id = @teamId
+            AND summary = 'spawned agent'
+            AND content IS NULL
+            AND (recipient = @recipient OR recipient LIKE @likePattern)
+       )
+    `);
+    const likeInfo = updateLike.run({
+      teamId: data.teamId,
+      recipient: normalized,
+      likePattern: `%${normalized}`,
+      content: cappedPrompt,
+    });
+    return likeInfo.changes > 0;
+  }
+
+  /**
+   * Fetch all spawn records for a team in chronological order (oldest first).
+   *
+   * Each row corresponds to one `SubagentStart` hook event. The
+   * `terminalStatus` is computed at query time by checking whether a
+   * `SubagentStop` event for the same recipient was recorded at or after
+   * the spawn's `created_at`. A `'crashed'` status is intentionally NOT
+   * surfaced from the DB in v1 — see `SpawnTerminalStatus` doc.
+   */
+  getSpawnRecords(teamId: number): SpawnRecord[] {
+    // Per-row correlated subquery counts SubagentStop events for the same
+    // normalized recipient since the spawn timestamp. This is bounded by
+    // typical team size (< 50 spawns) and uses the existing
+    // idx_events_team_id_created_at index. The OUTER ORDER BY uses
+    // (created_at ASC, id ASC) so spawns are returned chronologically.
+    const sql = `
+      SELECT
+        am.id           AS id,
+        am.recipient    AS recipient,
+        am.sender       AS sender,
+        am.content      AS content,
+        am.session_id   AS session_id,
+        am.created_at   AS created_at,
+        am.event_id     AS event_id,
+        (
+          SELECT COUNT(*) FROM events e
+           WHERE e.team_id = am.team_id
+             AND e.event_type = 'SubagentStop'
+             AND (
+               CASE
+                 WHEN e.agent_name LIKE 'fleet-%' THEN SUBSTR(e.agent_name, 7)
+                 ELSE e.agent_name
+               END
+             ) = am.recipient
+             AND e.created_at >= am.created_at
+        ) AS stop_count
+      FROM agent_messages am
+      WHERE am.team_id = ?
+        AND am.summary = 'spawned agent'
+      ORDER BY am.created_at ASC, am.id ASC
+    `;
+    const rows = this.stmt(sql).all(teamId) as Record<string, unknown>[];
+    return rows.map((r) => this.mapSpawnRecordRow(r));
   }
 
   // -------------------------------------------------------------------------
@@ -3216,6 +3381,25 @@ export class FleetDatabase {
       content: (row.content as string | null) ?? null,
       sessionId: (row.session_id as string | null) ?? null,
       createdAt: utcify(row.created_at as string),
+    };
+  }
+
+  /**
+   * Map a row from `getSpawnRecords` to a SpawnRecord. Computes the
+   * `terminalStatus` from the per-row `stop_count` correlated subquery.
+   */
+  private mapSpawnRecordRow(row: Record<string, unknown>): SpawnRecord {
+    const stopCount = (row.stop_count as number | null) ?? 0;
+    const terminalStatus: SpawnTerminalStatus = stopCount > 0 ? 'done' : 'running';
+    return {
+      id: row.id as number,
+      recipient: row.recipient as string,
+      sender: row.sender as string,
+      content: (row.content as string | null) ?? null,
+      sessionId: (row.session_id as string | null) ?? null,
+      createdAt: utcify(row.created_at as string),
+      eventId: (row.event_id as number | null) ?? null,
+      terminalStatus,
     };
   }
 

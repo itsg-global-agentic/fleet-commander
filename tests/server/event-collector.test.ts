@@ -16,6 +16,7 @@ import {
   shouldAdvancePhase,
   PHASE_ORDER,
   EventCollectorError,
+  extractSpawnPrompt,
   type EventPayload,
   type EventCollectorDb,
   type SseBroker,
@@ -1264,6 +1265,229 @@ describe('Subagent spawn message recording', () => {
 
     // insertAgentMessage should NOT have been called (no SendMessage tool_name either)
     expect(db.insertAgentMessage).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// Spawn prompt capture & back-fill (Issue #713)
+// =============================================================================
+
+describe('Spawn prompt capture (Issue #713)', () => {
+  it('extractSpawnPrompt returns prompt when tool_input has prompt field', () => {
+    const payload = makePayload({
+      tool_input: JSON.stringify({ subagent_type: 'dev', prompt: 'do X' }),
+    });
+    expect(extractSpawnPrompt(payload)).toBe('do X');
+  });
+
+  it('extractSpawnPrompt returns null when tool_input is missing', () => {
+    const payload = makePayload({ tool_input: undefined });
+    expect(extractSpawnPrompt(payload)).toBeNull();
+  });
+
+  it('extractSpawnPrompt returns null when tool_input is malformed JSON', () => {
+    const payload = makePayload({ tool_input: 'not json' });
+    expect(extractSpawnPrompt(payload)).toBeNull();
+  });
+
+  it('extractSpawnPrompt returns null when prompt field is missing', () => {
+    const payload = makePayload({
+      tool_input: JSON.stringify({ subagent_type: 'dev' }),
+    });
+    expect(extractSpawnPrompt(payload)).toBeNull();
+  });
+
+  it('extractSpawnPrompt caps prompt content at 50KB (51200 bytes)', () => {
+    const big = 'x'.repeat(60_000);
+    const payload = makePayload({
+      tool_input: JSON.stringify({ subagent_type: 'dev', prompt: big }),
+    });
+    const result = extractSpawnPrompt(payload);
+    expect(result).not.toBeNull();
+    expect(result!.length).toBe(51200);
+  });
+
+  it('captures prompt from tool_input on subagent_start when present', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({
+        event: 'subagent_start',
+        teammate_name: 'fleet-dev',
+        agent_type: 'coordinator',
+        tool_input: JSON.stringify({ subagent_type: 'dev', prompt: 'implement feature' }),
+      }),
+      db,
+      sse,
+    );
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: 'team-lead',
+        recipient: 'dev',
+        summary: 'spawned agent',
+        content: 'implement feature',
+      }),
+    );
+  });
+
+  it('handles missing tool_input gracefully on subagent_start (content=null)', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({
+        event: 'subagent_start',
+        teammate_name: 'fleet-dev',
+        agent_type: 'coordinator',
+        tool_input: undefined,
+      }),
+      db,
+      sse,
+    );
+
+    expect(db.insertAgentMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        summary: 'spawned agent',
+        content: null,
+      }),
+    );
+  });
+
+  it('handles malformed tool_input JSON on subagent_start (content=null, no throw)', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    const result = processEvent(
+      makePayload({
+        event: 'subagent_start',
+        teammate_name: 'fleet-dev',
+        agent_type: 'coordinator',
+        tool_input: 'not-json{',
+      }),
+      db,
+      sse,
+    );
+
+    expect(result.processed).toBe(true);
+    expect(db.insertAgentMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        summary: 'spawned agent',
+        content: null,
+      }),
+    );
+  });
+
+  it('caps prompt content at 50KB on subagent_start', () => {
+    const db = createMockDb();
+    const sse = createMockSse();
+    const big = 'x'.repeat(60_000);
+
+    processEvent(
+      makePayload({
+        event: 'subagent_start',
+        teammate_name: 'fleet-dev',
+        agent_type: 'coordinator',
+        tool_input: JSON.stringify({ subagent_type: 'dev', prompt: big }),
+      }),
+      db,
+      sse,
+    );
+
+    const call = (db.insertAgentMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(call.content).toBeDefined();
+    expect((call.content as string).length).toBe(51200);
+  });
+
+  it('back-fills spawn prompt from PostToolUse(Task)', () => {
+    const backfillSpawnPromptForTask = vi.fn().mockReturnValue(true);
+    const db = createMockDb({ backfillSpawnPromptForTask });
+    const sse = createMockSse();
+
+    // Simulate the Task tool's PostToolUse event
+    processEvent(
+      makePayload({
+        event: 'tool_use',
+        tool_name: 'Task',
+        agent_type: 'coordinator',
+        tool_input: JSON.stringify({
+          subagent_type: 'dev',
+          description: 'Implement feature',
+          prompt: 'back-filled prompt',
+        }),
+      }),
+      db,
+      sse,
+    );
+
+    expect(backfillSpawnPromptForTask).toHaveBeenCalledWith({
+      teamId: 1,
+      taskSubagentType: 'dev',
+      prompt: 'back-filled prompt',
+    });
+  });
+
+  it('does not call backfillSpawnPromptForTask for non-Task tool_use events', () => {
+    const backfillSpawnPromptForTask = vi.fn().mockReturnValue(true);
+    const db = createMockDb({ backfillSpawnPromptForTask });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({
+        event: 'tool_use',
+        tool_name: 'Bash',
+        agent_type: 'coordinator',
+        tool_input: JSON.stringify({ command: 'ls' }),
+      }),
+      db,
+      sse,
+    );
+
+    expect(backfillSpawnPromptForTask).not.toHaveBeenCalled();
+  });
+
+  it('back-fill is best-effort: throw inside backfillSpawnPromptForTask does not break event processing', () => {
+    const backfillSpawnPromptForTask = vi.fn().mockImplementation(() => {
+      throw new Error('DB error');
+    });
+    const db = createMockDb({ backfillSpawnPromptForTask });
+    const sse = createMockSse();
+    const consoleSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = processEvent(
+      makePayload({
+        event: 'tool_use',
+        tool_name: 'Task',
+        agent_type: 'coordinator',
+        tool_input: JSON.stringify({ subagent_type: 'dev', prompt: 'p' }),
+      }),
+      db,
+      sse,
+    );
+
+    expect(result.processed).toBe(true);
+    expect(consoleSpy).toHaveBeenCalled();
+    consoleSpy.mockRestore();
+  });
+
+  it('does not call backfillSpawnPromptForTask when Task tool_input has no prompt', () => {
+    const backfillSpawnPromptForTask = vi.fn().mockReturnValue(true);
+    const db = createMockDb({ backfillSpawnPromptForTask });
+    const sse = createMockSse();
+
+    processEvent(
+      makePayload({
+        event: 'tool_use',
+        tool_name: 'Task',
+        agent_type: 'coordinator',
+        tool_input: JSON.stringify({ subagent_type: 'dev', description: 'no prompt here' }),
+      }),
+      db,
+      sse,
+    );
+
+    expect(backfillSpawnPromptForTask).not.toHaveBeenCalled();
   });
 });
 

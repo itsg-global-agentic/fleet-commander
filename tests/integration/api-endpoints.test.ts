@@ -144,6 +144,49 @@ beforeAll(async () => {
     },
   );
 
+  // GET /api/teams/:id/messages — manual registration mirroring teamsRoutes
+  // (avoids pulling in team-manager dependencies). Issue #713: ?include_content=true
+  server.get<{ Params: { id: string }; Querystring: { limit?: string; include_content?: string } }>(
+    '/api/teams/:id/messages',
+    async (req, reply) => {
+      const teamId = parseInt(req.params.id, 10);
+      if (isNaN(teamId) || teamId < 1) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'Invalid team ID' });
+      }
+      const db = getDatabase();
+      const team = db.getTeam(teamId);
+      if (!team) {
+        return reply.code(404).send({ error: 'Not Found', message: `Team ${teamId} not found` });
+      }
+      const rawLimit = req.query.limit ? parseInt(req.query.limit, 10) : undefined;
+      if (rawLimit !== undefined && (isNaN(rawLimit) || rawLimit < 1)) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'limit must be a positive integer' });
+      }
+      const limit = rawLimit !== undefined ? Math.min(rawLimit, 1000) : undefined;
+      const includeContent = req.query.include_content === 'true' || req.query.include_content === '1';
+      const messages = db.getAgentMessages(teamId, limit, includeContent);
+      return reply.code(200).send(messages);
+    },
+  );
+
+  // GET /api/teams/:id/spawns — Issue #713
+  server.get<{ Params: { id: string } }>(
+    '/api/teams/:id/spawns',
+    async (req, reply) => {
+      const teamId = parseInt(req.params.id, 10);
+      if (isNaN(teamId) || teamId < 1) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'Invalid team ID' });
+      }
+      const db = getDatabase();
+      const team = db.getTeam(teamId);
+      if (!team) {
+        return reply.code(404).send({ error: 'Not Found', message: `Team ${teamId} not found` });
+      }
+      const records = db.getSpawnRecords(teamId);
+      return reply.code(200).send(records);
+    },
+  );
+
   // Register GET /api/prs manually to avoid gh CLI usage in POST routes
   server.get('/api/prs', async (_req, reply) => {
     const db = getDatabase();
@@ -465,6 +508,155 @@ describe('Teams API (read-only)', () => {
   it('GET /api/teams/:id returns 400 for non-numeric ID', async () => {
     const res = await server.inject({ method: 'GET', url: '/api/teams/abc' });
 
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+// =============================================================================
+// Issue #713: Messages content opt-in + Spawn records endpoint
+// =============================================================================
+
+describe('Spawn prompt API (Issue #713)', () => {
+  let spawnTeamId: number;
+
+  beforeAll(() => {
+    // Seed a fresh team in this group's namespace; reuse later
+    const team = seedTeam({ issueNumber: 713, worktreeName: 'kea-713' });
+    spawnTeamId = team.id;
+  });
+
+  beforeEach(() => {
+    const db = getDatabase();
+    // Clear any spawn rows for our team between tests so each case is independent
+    db.raw.prepare('DELETE FROM agent_messages WHERE team_id = ?').run(spawnTeamId);
+  });
+
+  function seedSpawn(recipient: string, content: string | null = null): { id: number } {
+    const db = getDatabase();
+    const eventInfo = db.insertEvent({
+      teamId: spawnTeamId,
+      eventType: 'SubagentStart',
+      agentName: `fleet-${recipient}`,
+    });
+    return db.insertAgentMessage({
+      teamId: spawnTeamId,
+      eventId: eventInfo.id,
+      sender: 'team-lead',
+      recipient,
+      summary: 'spawned agent',
+      content,
+    });
+  }
+
+  it('GET /api/teams/:id/messages excludes content by default', async () => {
+    seedSpawn('dev', 'secret prompt');
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/teams/${spawnTeamId}/messages`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body).toHaveLength(1);
+    expect(body[0].content).toBeNull();
+    expect(body[0].summary).toBe('spawned agent');
+  });
+
+  it('GET /api/teams/:id/messages includes content when include_content=true', async () => {
+    seedSpawn('dev', 'real prompt content');
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/teams/${spawnTeamId}/messages?include_content=true`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body).toHaveLength(1);
+    expect(body[0].content).toBe('real prompt content');
+  });
+
+  it('GET /api/teams/:id/messages accepts include_content=1 alias', async () => {
+    seedSpawn('dev', 'alias');
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/teams/${spawnTeamId}/messages?include_content=1`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body[0].content).toBe('alias');
+  });
+
+  it('GET /api/teams/:id/spawns returns SpawnRecord[] in chronological order', async () => {
+    seedSpawn('dev', 'first');
+    seedSpawn('reviewer', 'second');
+    seedSpawn('dev', 'third');
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/teams/${spawnTeamId}/spawns`,
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(Array.isArray(body)).toBe(true);
+    expect(body).toHaveLength(3);
+    // Each entry must carry the expected SpawnRecord shape
+    for (const r of body) {
+      expect(r).toHaveProperty('id');
+      expect(r).toHaveProperty('recipient');
+      expect(r).toHaveProperty('sender');
+      expect(r).toHaveProperty('content');
+      expect(r).toHaveProperty('createdAt');
+      expect(r).toHaveProperty('terminalStatus');
+      expect(['running', 'done']).toContain(r.terminalStatus);
+    }
+    // Chronological ordering preserved
+    expect(body.map((r: { content: string }) => r.content)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('GET /api/teams/:id/spawns returns terminalStatus=running when no SubagentStop', async () => {
+    seedSpawn('dev', 'running');
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/teams/${spawnTeamId}/spawns`,
+    });
+
+    const body = res.json();
+    expect(body[0].terminalStatus).toBe('running');
+  });
+
+  it('GET /api/teams/:id/spawns returns null content when prompt was not captured', async () => {
+    seedSpawn('dev', null);
+
+    const res = await server.inject({
+      method: 'GET',
+      url: `/api/teams/${spawnTeamId}/spawns`,
+    });
+
+    const body = res.json();
+    expect(body).toHaveLength(1);
+    expect(body[0].content).toBeNull();
+  });
+
+  it('GET /api/teams/:id/spawns returns 404 for unknown team', async () => {
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/teams/9999/spawns',
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('GET /api/teams/:id/spawns returns 400 for invalid team ID', async () => {
+    const res = await server.inject({
+      method: 'GET',
+      url: '/api/teams/abc/spawns',
+    });
     expect(res.statusCode).toBe(400);
   });
 });

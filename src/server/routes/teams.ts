@@ -839,23 +839,31 @@ const teamsRoutes: FastifyPluginCallback = (
   // -------------------------------------------------------------------------
   // GET /api/teams/:id/messages — agent messages for this team
   // -------------------------------------------------------------------------
+  // Query params:
+  //   - limit:           positive integer, capped at 1000 (default: unbounded)
+  //   - include_content: "true"/"1" to include the message `content` column in
+  //                      the response. Defaults to false so existing callers
+  //                      see no payload bloat. Used by the spawn-prompt panel
+  //                      to display captured TL->subagent prompts (issue #713).
   fastify.get(
     '/api/teams/:id/messages',
     async (
-      request: FastifyRequest<{ Params: TeamIdParams; Querystring: { limit?: string } }>,
+      request: FastifyRequest<{ Params: TeamIdParams; Querystring: { limit?: string; include_content?: string } }>,
       reply: FastifyReply,
     ) => {
       try {
         const teamId = parseIdParam(request.params.id, 'id');
-        const limitParam = (request.query as { limit?: string }).limit;
-        const rawLimit = limitParam ? parseInt(limitParam, 10) : undefined;
+        const query = request.query as { limit?: string; include_content?: string };
+        const rawLimit = query.limit ? parseInt(query.limit, 10) : undefined;
         if (rawLimit !== undefined && (isNaN(rawLimit) || rawLimit < 1)) {
           return reply.code(400).send({ error: 'Bad Request', message: 'limit must be a positive integer' });
         }
         const limit = rawLimit !== undefined ? Math.min(rawLimit, 1000) : undefined;
 
+        const includeContent = query.include_content === 'true' || query.include_content === '1';
+
         const service = getTeamService();
-        const messages = service.getMessages(teamId, limit);
+        const messages = service.getMessages(teamId, limit, includeContent);
         return reply.code(200).send(messages);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
@@ -905,6 +913,38 @@ const teamsRoutes: FastifyPluginCallback = (
           return reply.code(err.statusCode).send({ error: err.code, message: err.message });
         }
         request.log.error(err, 'Failed to get agent message summary');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
+  // GET /api/teams/:id/spawns — TL->subagent spawn records for this team
+  // -------------------------------------------------------------------------
+  // Returns a chronological list of `SpawnRecord` entries — one per
+  // SubagentStart hook event — with the captured spawn prompt (or null when
+  // the prompt was not captured) and a terminal status of `running` or
+  // `done`. Used by the Team tab to display the original TL prompts when
+  // a subagent node is clicked (issue #713).
+  fastify.get(
+    '/api/teams/:id/spawns',
+    async (
+      request: FastifyRequest<{ Params: TeamIdParams }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const teamId = parseIdParam(request.params.id, 'id');
+        const service = getTeamService();
+        const records = service.getSpawnRecords(teamId);
+        return reply.code(200).send(records);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        request.log.error(err, 'Failed to get spawn records');
         return reply.code(500).send({
           error: 'Internal Server Error',
           message: err instanceof Error ? err.message : String(err),

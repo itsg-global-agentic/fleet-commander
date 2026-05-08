@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useApi } from './useApi';
-import type { TeamDetail as TeamDetailType, TeamTransition, TeamMember, MessageEdge } from '../../shared/types';
+import type { TeamDetail as TeamDetailType, TeamTransition, TeamMember, MessageEdge, SpawnRecord } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -16,6 +16,7 @@ interface UseTeamDetailDataResult {
   transitions: TeamTransition[];
   roster: TeamMember[];
   messageEdges: MessageEdge[];
+  spawnRecords: SpawnRecord[];
   loading: boolean;
   error: string | null;
   refreshDetail: () => void;
@@ -70,6 +71,7 @@ export function useTeamDetailData(
   const [transitions, setTransitions] = useState<TeamTransition[]>([]);
   const [roster, setRoster] = useState<TeamMember[]>([]);
   const [messageEdges, setMessageEdges] = useState<MessageEdge[]>([]);
+  const [spawnRecords, setSpawnRecords] = useState<SpawnRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -81,6 +83,7 @@ export function useTeamDetailData(
   const transitionsCacheRef = useRef<CacheEntry<TeamTransition[]> | null>(null);
   const rosterCacheRef = useRef<CacheEntry<TeamMember[]> | null>(null);
   const edgesCacheRef = useRef<CacheEntry<MessageEdge[]> | null>(null);
+  const spawnRecordsCacheRef = useRef<CacheEntry<SpawnRecord[]> | null>(null);
 
   // Keep ref in sync for use in async callbacks
   useEffect(() => {
@@ -96,9 +99,11 @@ export function useTeamDetailData(
       setTransitions([]);
       setRoster([]);
       setMessageEdges([]);
+      setSpawnRecords([]);
       transitionsCacheRef.current = null;
       rosterCacheRef.current = null;
       edgesCacheRef.current = null;
+      spawnRecordsCacheRef.current = null;
       return;
     }
 
@@ -108,12 +113,13 @@ export function useTeamDetailData(
       setLoading(true);
       setError(null);
 
-      const [detailResult, transResult, rosterResult, edgesResult] =
+      const [detailResult, transResult, rosterResult, edgesResult, spawnsResult] =
         await Promise.allSettled([
           api.get<TeamDetailType>(`teams/${selectedTeamId}`),
           api.get<TeamTransition[]>(`teams/${selectedTeamId}/transitions`),
           api.get<TeamMember[]>(`teams/${selectedTeamId}/roster`),
           api.get<MessageEdge[]>(`teams/${selectedTeamId}/messages/summary`),
+          api.get<SpawnRecord[]>(`teams/${selectedTeamId}/spawns`),
         ]);
 
       if (cancelled) return;
@@ -151,6 +157,16 @@ export function useTeamDetailData(
         setMessageEdges([]);
       }
 
+      // Spawn records (Issue #713) — non-critical. Defensive: only accept
+      // an array; some test mocks return the same detail object for every
+      // endpoint, and a non-array value would break downstream `for...of`.
+      if (spawnsResult.status === 'fulfilled' && Array.isArray(spawnsResult.value)) {
+        setSpawnRecords(spawnsResult.value);
+        spawnRecordsCacheRef.current = { data: spawnsResult.value, fetchedAt: Date.now() };
+      } else {
+        setSpawnRecords([]);
+      }
+
       setLoading(false);
     }
 
@@ -182,6 +198,8 @@ export function useTeamDetailData(
       now - rosterCacheRef.current.fetchedAt >= CACHE_TTL;
     const edgesStale = !edgesCacheRef.current ||
       now - edgesCacheRef.current.fetchedAt >= CACHE_TTL;
+    const spawnsStale = !spawnRecordsCacheRef.current ||
+      now - spawnRecordsCacheRef.current.fetchedAt >= CACHE_TTL;
 
     if (transStale) {
       staleCalls.push(api.get<TeamTransition[]>(`teams/${teamId}/transitions`));
@@ -191,6 +209,9 @@ export function useTeamDetailData(
     }
     if (edgesStale) {
       staleCalls.push(api.get<MessageEdge[]>(`teams/${teamId}/messages/summary`));
+    }
+    if (spawnsStale) {
+      staleCalls.push(api.get<SpawnRecord[]>(`teams/${teamId}/spawns`));
     }
 
     Promise.allSettled(staleCalls).then((results) => {
@@ -231,6 +252,16 @@ export function useTeamDetailData(
           const data = r.value as MessageEdge[];
           setMessageEdges(data);
           edgesCacheRef.current = { data, fetchedAt: Date.now() };
+        }
+      }
+
+      // Spawn records (Issue #713) — defensive array check (see primary fetch)
+      if (spawnsStale) {
+        const r = results[idx++];
+        if (r && r.status === 'fulfilled' && Array.isArray(r.value)) {
+          const data = r.value as SpawnRecord[];
+          setSpawnRecords(data);
+          spawnRecordsCacheRef.current = { data, fetchedAt: Date.now() };
         }
       }
     });
@@ -278,5 +309,5 @@ export function useTeamDetailData(
     };
   }, [selectedTeamId, refreshDetail]);
 
-  return { detail, transitions, roster, messageEdges, loading, error, refreshDetail };
+  return { detail, transitions, roster, messageEdges, spawnRecords, loading, error, refreshDetail };
 }

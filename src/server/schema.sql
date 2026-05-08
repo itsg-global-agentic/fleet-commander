@@ -334,6 +334,22 @@ CREATE INDEX IF NOT EXISTS idx_team_transitions_team ON team_transitions(team_id
 -- ---------------------------------------------------------------------------
 -- AGENT MESSAGES — inter-agent message routing captured from SendMessage
 -- ---------------------------------------------------------------------------
+-- This table doubles as the carrier for two different kinds of records:
+--
+--   1. SendMessage routing (sender, recipient, summary, content) — the
+--      original use of this table. `summary` is the message subject and
+--      `content` is the message body.
+--
+--   2. TL->subagent spawn records (issue #713) — rows where
+--      `summary='spawned agent'`. These rows are inserted on every
+--      `SubagentStart` hook event with `sender='team-lead'` and
+--      `recipient` set to the normalized subagent name. For these rows,
+--      `content` carries the TL's spawn prompt (extracted from the Task
+--      tool's `tool_input.prompt`), capped at 50KB at insert time. The
+--      prompt may be captured directly from `SubagentStart` (CC version-
+--      dependent) or back-filled from the subsequent
+--      `PostToolUse(Task)` event. When neither path captures it, content
+--      stays NULL and the UI renders a "no prompt recorded" placeholder.
 CREATE TABLE IF NOT EXISTS agent_messages (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   team_id         INTEGER NOT NULL REFERENCES teams(id),

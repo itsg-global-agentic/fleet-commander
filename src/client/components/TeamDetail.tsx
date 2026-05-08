@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useSelection, useConnection, useThinking } from '../context/FleetContext';
 import { useApi } from '../hooks/useApi';
 import { useFleetSSE } from '../hooks/useFleetSSE';
@@ -9,6 +9,7 @@ import { UnifiedTimeline } from './UnifiedTimeline';
 import { CommandInput } from './CommandInput';
 import { CommGraph } from './CommGraph';
 import { HandoffFileCard } from './HandoffFileCard';
+import { SpawnPromptPanel } from './SpawnPromptPanel';
 import { STATUS_COLORS } from '../utils/constants';
 import { getMergeStatusLabel } from '../utils/merge-status';
 import { formatIssueKey } from '../../shared/issue-provider';
@@ -39,7 +40,7 @@ export function TeamDetail() {
   const api = useApi();
 
   // Parallelized data fetching with caching (extracted hook)
-  const { detail, transitions, roster, messageEdges, loading, error, refreshDetail } =
+  const { detail, transitions, roster, messageEdges, spawnRecords, loading, error, refreshDetail } =
     useTeamDetailData(selectedTeamId, lastEvent, lastEventTeamId);
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -52,10 +53,37 @@ export function TeamDetail() {
   const [handoffFilesLoading, setHandoffFilesLoading] = useState(false);
   const [metadataCollapsed, setMetadataCollapsed] = useState(false);
   const [agentFilters, setAgentFilters] = useState<Set<string>>(new Set());
+  // Issue #713: which agent's spawn prompts are open in the side panel.
+  const [selectedSpawnAgent, setSelectedSpawnAgent] = useState<string | null>(null);
   const templateCacheRef = useRef<{ data: Array<{ id: string; template: string; enabled: boolean }>; fetchedAt: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const selectedTeamIdRef = useRef(selectedTeamId);
   const activeTabRef = useRef(activeTab);
+
+  // Issue #713: agent names that have at least one spawn record. Used to
+  // visually highlight clickable nodes in CommGraph and to filter spawns
+  // for the side panel. Includes agents that may appear in spawnRecords
+  // even if they're not yet in the roster (subagent_start without any
+  // tool_use yet). Defensive Array.isArray checks: these inputs come from
+  // useTeamDetailData which already coerces failures to []; defaulting
+  // again here keeps test fixtures that mock everything as the team
+  // detail object (instead of arrays) from blowing up.
+  const clickableAgents = useMemo(() => {
+    const set = new Set<string>();
+    if (Array.isArray(spawnRecords)) {
+      for (const s of spawnRecords) set.add(s.recipient);
+    }
+    if (Array.isArray(roster)) {
+      for (const a of roster) set.add(a.name);
+    }
+    return set;
+  }, [spawnRecords, roster]);
+
+  const filteredSpawns = useMemo(() => {
+    if (selectedSpawnAgent == null) return [];
+    if (!Array.isArray(spawnRecords)) return [];
+    return spawnRecords.filter((s) => s.recipient === selectedSpawnAgent);
+  }, [spawnRecords, selectedSpawnAgent]);
 
   const isOpen = selectedTeamId !== null;
 
@@ -75,7 +103,16 @@ export function TeamDetail() {
     setMetadataCollapsed(false);
     // Reset agent filters to "All" for new team
     setAgentFilters(new Set());
+    // Issue #713: close any open spawn prompt panel on team change
+    setSelectedSpawnAgent(null);
   }, [selectedTeamId]);
+
+  // Issue #713: close the spawn prompt panel when the user switches tabs
+  useEffect(() => {
+    if (activeTab !== 'team') {
+      setSelectedSpawnAgent(null);
+    }
+  }, [activeTab]);
 
   // Auto-collapse metadata when team transitions to terminal state
   useEffect(() => {
@@ -731,8 +768,20 @@ export function TeamDetail() {
                 )}
 
                 {activeTab === 'team' && (
-                  <div className="flex-1 min-h-0 px-5 py-3">
-                    <CommGraph edges={messageEdges} agents={roster} />
+                  <div className="flex-1 min-h-0 px-5 py-3 relative">
+                    <CommGraph
+                      edges={messageEdges}
+                      agents={roster}
+                      onNodeClick={setSelectedSpawnAgent}
+                      clickableAgents={clickableAgents}
+                    />
+                    {selectedSpawnAgent !== null && (
+                      <SpawnPromptPanel
+                        agentName={selectedSpawnAgent}
+                        spawns={filteredSpawns}
+                        onClose={() => setSelectedSpawnAgent(null)}
+                      />
+                    )}
                   </div>
                 )}
               </div>
