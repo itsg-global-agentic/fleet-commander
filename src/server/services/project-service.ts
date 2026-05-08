@@ -283,12 +283,15 @@ export async function refreshAutoMergeForProject(
  * @param filePath - Absolute path to the installed file
  * @returns The version string (e.g. "0.0.6") or undefined if not found
  */
-function extractVersionStamp(filePath: string): string | undefined {
+export function extractVersionStamp(filePath: string): string | undefined {
   try {
-    // Read first 512 bytes — the stamp is within the first few lines
-    const buf = Buffer.alloc(512);
+    // Read first 4096 bytes — covers shell-script line 2 stamps and
+    // markdown YAML frontmatter even when the frontmatter is long
+    // (e.g. fleet-reviewer.md has a multi-line description + comments
+    // that push _fleetCommanderVersion past byte 512). See issue #720.
+    const buf = Buffer.alloc(4096);
     const fd = fs.openSync(filePath, 'r');
-    const bytesRead = fs.readSync(fd, buf, 0, 512, 0);
+    const bytesRead = fs.readSync(fd, buf, 0, 4096, 0);
     fs.closeSync(fd);
     const header = buf.subarray(0, bytesRead).toString('utf-8');
     // Try HTML comment / shell comment format first
