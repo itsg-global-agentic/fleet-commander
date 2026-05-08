@@ -10,7 +10,7 @@
 //   - generateIssueContextMarkdown() from shared/issue-context.ts for rendering
 // =============================================================================
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -45,9 +45,11 @@ vi.mock('../../../src/server/providers/index.js', () => ({
 }));
 
 const mockWriteFileSync = vi.hoisted(() => vi.fn());
+const mockMkdirSync = vi.hoisted(() => vi.fn());
 vi.mock('fs', () => ({
-  default: { writeFileSync: mockWriteFileSync },
+  default: { writeFileSync: mockWriteFileSync, mkdirSync: mockMkdirSync },
   writeFileSync: mockWriteFileSync,
+  mkdirSync: mockMkdirSync,
 }));
 
 const mockGenerateIssueContextMarkdown = vi.hoisted(() => vi.fn().mockReturnValue('# Mocked markdown'));
@@ -355,5 +357,137 @@ describe('generateIssueContext', () => {
     const passedData = mockGenerateIssueContextMarkdown.mock.calls[0][0] as IssueContextData;
     expect(passedData.title).toBe('No repo');
     expect(passedData.state).toBe('unknown');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Image-reference parity logging (issue #711)
+// ---------------------------------------------------------------------------
+
+describe('generateIssueContext — image-ref parity logging', () => {
+  let consoleLogSpy: ReturnType<typeof vi.spyOn>;
+  let consoleWarnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleLogSpy.mockRestore();
+    consoleWarnSpy.mockRestore();
+  });
+
+  it('should log parity-success line when the body image survives in the prompt', async () => {
+    const url = 'https://user-images.githubusercontent.com/1/abc.png';
+    const contextData = makeSampleIssueContextData({
+      body: `Bug report\n\n![screenshot](${url})`,
+    });
+
+    const mockProvider = new GitHubIssueProvider();
+    mockGetIssueProvider.mockReturnValue(mockProvider);
+    mockFetchFullIssueContext.mockResolvedValue(contextData);
+    // The render echoes the URL — image survives.
+    mockGenerateIssueContextMarkdown.mockReturnValue(
+      `# Issue\n\n## Description\n\n![screenshot](${url})\n`,
+    );
+
+    await generateIssueContext({
+      worktreeAbsPath: '/tmp/worktree',
+      issueKey: '42',
+      issueNumber: 42,
+      issueTitle: 'Add feature X',
+      issueProvider: 'github',
+      project: makeProject(),
+    });
+
+    // Exactly one parity log line, prefixed and with both counts at 1.
+    const parityLogs = consoleLogSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => s.includes('Image-ref parity'));
+    expect(parityLogs).toHaveLength(1);
+    expect(parityLogs[0]).toMatch(/Image-ref parity for issue 42:/);
+    expect(parityLogs[0]).toMatch(/images_in_body=1 images_in_prompt=1/);
+
+    // No parity warning emitted.
+    const parityWarns = consoleWarnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => s.includes('Image-ref parity') || s.includes('missing_in_prompt'));
+    expect(parityWarns).toHaveLength(0);
+  });
+
+  it('should warn with missing_in_prompt when the renderer drops a body image', async () => {
+    // Realistic failure: the body has an image but the renderer truncates
+    // past it (e.g. >16KB cap or hardTruncateToBytes cutting mid-URL). The
+    // parity check must surface the dropped URL.
+    const url = 'https://user-images.githubusercontent.com/1/abc.png';
+    const contextData = makeSampleIssueContextData({
+      body: `Bug report\n\n![screenshot](${url})`,
+    });
+
+    const mockProvider = new GitHubIssueProvider();
+    mockGetIssueProvider.mockReturnValue(mockProvider);
+    mockFetchFullIssueContext.mockResolvedValue(contextData);
+    // The render drops the image entirely.
+    mockGenerateIssueContextMarkdown.mockReturnValue(
+      '# Issue\n\n## Description\n\nBug report\n\n[... body truncated ...]\n',
+    );
+
+    await generateIssueContext({
+      worktreeAbsPath: '/tmp/worktree',
+      issueKey: '42',
+      issueNumber: 42,
+      issueTitle: 'Add feature X',
+      issueProvider: 'github',
+      project: makeProject(),
+    });
+
+    // No parity-success log line.
+    const parityLogs = consoleLogSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => s.includes('Image-ref parity'));
+    expect(parityLogs).toHaveLength(0);
+
+    // One parity warn with the count mismatch and the missing URL.
+    const parityWarns = consoleWarnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => s.includes('Image-ref parity'));
+    expect(parityWarns).toHaveLength(1);
+    expect(parityWarns[0]).toMatch(/images_in_body=1 images_in_prompt=0/);
+    expect(parityWarns[0]).toContain(`missing_in_prompt=[${url}]`);
+  });
+
+  it('should report zero counts and not warn for a body with no images', async () => {
+    const contextData = makeSampleIssueContextData({
+      body: 'Just plain text, no images.',
+    });
+
+    const mockProvider = new GitHubIssueProvider();
+    mockGetIssueProvider.mockReturnValue(mockProvider);
+    mockFetchFullIssueContext.mockResolvedValue(contextData);
+    mockGenerateIssueContextMarkdown.mockReturnValue(
+      '# Issue\n\n## Description\n\nJust plain text, no images.\n',
+    );
+
+    await generateIssueContext({
+      worktreeAbsPath: '/tmp/worktree',
+      issueKey: '42',
+      issueNumber: 42,
+      issueTitle: 'No images',
+      issueProvider: 'github',
+      project: makeProject(),
+    });
+
+    const parityLogs = consoleLogSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => s.includes('Image-ref parity'));
+    expect(parityLogs).toHaveLength(1);
+    expect(parityLogs[0]).toMatch(/images_in_body=0 images_in_prompt=0/);
+
+    const parityWarns = consoleWarnSpy.mock.calls
+      .map((c) => String(c[0]))
+      .filter((s) => s.includes('Image-ref parity'));
+    expect(parityWarns).toHaveLength(0);
   });
 });

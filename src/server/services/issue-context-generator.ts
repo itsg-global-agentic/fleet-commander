@@ -25,12 +25,21 @@ import { GitHubIssueProvider, parseRepo } from '../providers/github-issue-provid
 import { generateIssueContextMarkdown } from '../../shared/issue-context.js';
 import type { IssueContextData } from '../../shared/issue-context.js';
 import type { Project } from '../../shared/types.js';
+import { imageRefDelta } from '../../shared/image-refs.js';
+import config from '../config.js';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 export const CONTEXT_FILENAME = '.fleet-issue-context.md';
+
+/**
+ * Filename of the optional raw-body dump written next to CONTEXT_FILENAME
+ * when `FLEET_DEBUG_RAW_ISSUE_BODY=true`. Used for offline diff against the
+ * rendered context file — primarily to debug image-preservation issues.
+ */
+export const RAW_BODY_FILENAME = '.fleet-issue-body-raw.md';
 
 // ---------------------------------------------------------------------------
 // Jira Issue Fetching
@@ -177,8 +186,51 @@ export async function generateIssueContext(params: GenerateIssueContextParams): 
     }
 
     const markdown = generateIssueContextMarkdown(contextData);
+
+    // Image-reference parity check: compare images in the raw issue body vs
+    // the rendered prompt. Logs a single summary line per launch; warns if
+    // any URL was lost (typically due to body truncation in the renderer).
+    // This is observability only and MUST NOT block context generation.
+    try {
+      const delta = imageRefDelta(contextData.body || '', markdown);
+      const summary =
+        `[IssueContextGenerator] Image-ref parity for issue ${issueKey}: ` +
+        `images_in_body=${delta.bodyCount.unique.size} ` +
+        `images_in_prompt=${delta.promptCount.unique.size} ` +
+        `markdown=${delta.bodyCount.markdown.length}/${delta.promptCount.markdown.length} ` +
+        `html=${delta.bodyCount.html.length}/${delta.promptCount.html.length} ` +
+        `bare=${delta.bodyCount.bare.length}/${delta.promptCount.bare.length}`;
+      if (delta.ok) {
+        console.log(summary);
+      } else {
+        console.warn(`${summary} missing_in_prompt=[${delta.missing.join(', ')}]`);
+      }
+    } catch (parityErr) {
+      console.warn(
+        `[IssueContextGenerator] Image-ref parity check failed for issue ${issueKey}:`,
+        parityErr instanceof Error ? parityErr.message : parityErr,
+      );
+    }
+
     const filePath = path.join(worktreeAbsPath, CONTEXT_FILENAME);
     fs.writeFileSync(filePath, markdown, 'utf-8');
+
+    // Optional debug: dump the raw issue body alongside the converted file
+    // for offline diffing. Gated behind FLEET_DEBUG_RAW_ISSUE_BODY=true.
+    if (config.debugRawIssueBody) {
+      try {
+        const rawPath = path.join(worktreeAbsPath, RAW_BODY_FILENAME);
+        fs.writeFileSync(rawPath, contextData.body || '', 'utf-8');
+        console.log(
+          `[IssueContextGenerator] Wrote ${RAW_BODY_FILENAME} (debug flag enabled)`,
+        );
+      } catch (rawErr) {
+        console.warn(
+          `[IssueContextGenerator] Failed to write ${RAW_BODY_FILENAME} for issue ${issueKey}:`,
+          rawErr instanceof Error ? rawErr.message : rawErr,
+        );
+      }
+    }
 
     console.log(`[IssueContextGenerator] Wrote ${CONTEXT_FILENAME} to ${worktreeAbsPath}`);
   } catch (err) {
