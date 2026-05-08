@@ -51,7 +51,7 @@ export function useSSE(options: UseSSEOptions = {}): UseSSEResult {
       'usage_updated', 'project_added', 'project_updated', 'project_removed',
       'project_cleanup', 'dependency_resolved', 'heartbeat',
       'team_thinking_start', 'team_thinking_stop', 'task_updated',
-      'usage_override_changed',
+      'usage_override_changed', 'team_handoff_file',
     ];
 
     const handleSSEMessage = (event: MessageEvent) => {

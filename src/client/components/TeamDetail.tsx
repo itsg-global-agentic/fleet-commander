@@ -590,11 +590,20 @@ export function TeamDetail() {
                     }`}
                   >
                     Files
-                    {handoffFiles.length > 0 && (
-                      <span className="ml-1.5 text-xs text-dark-muted">
-                        ({handoffFiles.length})
-                      </span>
-                    )}
+                    {(() => {
+                      // Prefer the loaded list once present (it is the source
+                      // of truth after the user opens the tab), otherwise
+                      // fall back to the server-side count from getTeamDetail
+                      // so the badge is visible BEFORE the tab is opened.
+                      const handoffCount = handoffFiles.length > 0
+                        ? handoffFiles.length
+                        : (detail?.handoffFileCount ?? 0);
+                      return handoffCount > 0 ? (
+                        <span className="ml-1.5 text-xs text-dark-muted">
+                          ({handoffCount})
+                        </span>
+                      ) : null;
+                    })()}
                   </button>
                   <button
                     onClick={() => setActiveTab('team')}
