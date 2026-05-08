@@ -905,6 +905,7 @@ export function IssueTreeView() {
                 onRelationChanged={handleRelationChanged}
                 onRefreshProject={handleRefreshProject}
                 refreshingProjects={refreshingProjects}
+                globalRefreshing={refreshing}
               />
             ))}
           </div>
@@ -928,6 +929,7 @@ export function IssueTreeView() {
                 onRelationChanged={handleRelationChanged}
                 onRefreshProject={handleRefreshProject}
                 isRefreshing={refreshingProjects.has(group.projectId)}
+                globalRefreshing={refreshing}
               />
             ))}
           </div>
@@ -950,6 +952,7 @@ export function IssueTreeView() {
             onRelationChanged={handleRelationChanged}
             onRefreshProject={handleRefreshProject}
             isRefreshing={launchProjectId !== null && refreshingProjects.has(launchProjectId)}
+            globalRefreshing={refreshing}
           />
         )}
       </div>
@@ -1414,9 +1417,11 @@ interface ProjectGroupSectionProps {
   onRefreshProject?: (projectId: number) => Promise<void>;
   /** Set of project IDs whose per-project refresh is currently in flight. */
   refreshingProjects?: Set<number>;
+  /** True while the all-projects refresh is in flight. Disables per-project buttons. */
+  globalRefreshing?: boolean;
 }
 
-function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged, onRefreshProject, refreshingProjects }: ProjectGroupSectionProps) {
+function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged, onRefreshProject, refreshingProjects, globalRefreshing }: ProjectGroupSectionProps) {
   const expanded = !collapsedNodes.has(bucket.key);
   const totalIssueCount = (bucket.projects ?? []).reduce((sum, p) => sum + countNodes(p.tree), 0);
 
@@ -1470,6 +1475,7 @@ function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, 
                 onRelationChanged={onRelationChanged}
                 onRefreshProject={onRefreshProject}
                 isRefreshing={refreshingProjects?.has(group.projectId) ?? false}
+                globalRefreshing={globalRefreshing}
               />
             ))}
           </div>
@@ -1500,9 +1506,11 @@ interface ProjectGroupProps {
   onRefreshProject?: (projectId: number) => Promise<void>;
   /** True while this project's refresh is in flight (spinner). */
   isRefreshing?: boolean;
+  /** True while the all-projects refresh is in flight. Disables this button. */
+  globalRefreshing?: boolean;
 }
 
-function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged, onRefreshProject, isRefreshing = false }: ProjectGroupProps) {
+function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged, onRefreshProject, isRefreshing = false, globalRefreshing = false }: ProjectGroupProps) {
   const api = useApi();
   const projectNodeId = `project-${group.projectId}`;
   const expanded = !collapsedNodes.has(projectNodeId);
@@ -1616,10 +1624,10 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
               e.stopPropagation();
               void onRefreshProject(group.projectId);
             }}
-            disabled={isRefreshing}
+            disabled={isRefreshing || globalRefreshing}
             data-testid={`project-refresh-${group.projectId}`}
             className="inline-flex items-center justify-center w-7 h-7 rounded border border-dark-border text-dark-muted hover:text-dark-accent hover:border-dark-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title={`Refresh ${group.projectName}`}
+            title={isRefreshing ? `Refreshing ${group.projectName}…` : `Refresh ${group.projectName}`}
             aria-label={`Refresh ${group.projectName}`}
           >
             <svg
@@ -1957,9 +1965,11 @@ interface SingleProjectTreeProps {
   onRefreshProject?: (projectId: number) => Promise<void>;
   /** True while this project's refresh is in flight (spinner). */
   isRefreshing?: boolean;
+  /** True while the all-projects refresh is in flight. Disables this button. */
+  globalRefreshing?: boolean;
 }
 
-function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged, onRefreshProject, isRefreshing = false }: SingleProjectTreeProps) {
+function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged, onRefreshProject, isRefreshing = false, globalRefreshing = false }: SingleProjectTreeProps) {
   const api = useApi();
   const prioritization = usePrioritization();
   const selection = useIssueSelection();
@@ -1990,10 +2000,10 @@ function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIs
               e.stopPropagation();
               void onRefreshProject(projectId);
             }}
-            disabled={isRefreshing}
+            disabled={isRefreshing || globalRefreshing}
             data-testid={`project-refresh-${projectId}`}
             className="inline-flex items-center justify-center w-7 h-7 rounded border border-dark-border text-dark-muted hover:text-dark-accent hover:border-dark-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title={`Refresh ${projectName ?? 'this project'}`}
+            title={isRefreshing ? `Refreshing ${projectName ?? 'this project'}…` : `Refresh ${projectName ?? 'this project'}`}
             aria-label={`Refresh ${projectName ?? 'this project'}`}
           >
             <svg
