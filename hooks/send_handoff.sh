@@ -3,11 +3,16 @@
 # Fleet Commander: Sends a handoff file (plan.md, changes.md, review.md)
 # to the Fleet Commander server via multipart form upload.
 #
-# Usage: send_handoff.sh <file_type> <file_path> [<cc_stdin_json>]
+# Usage: send_handoff.sh <file_type> <file_path> [<cc_stdin_json>] [<agent_name>]
 #
 # Called from on_post_tool_use.sh and on_subagent_stop.sh in background
 # (fire-and-forget). Reads the file content (capped at 50KB) and POSTs
 # it as a multipart form to /api/handoff.
+#
+# Snapshot mode: when FLEET_HANDOFF_SNAPSHOT=1, $FILE_PATH is treated as
+# a temporary snapshot copy (already produced by the caller) and is
+# unlinked after upload. This eliminates the deletion race between TL
+# cleanup and the backgrounded upload.
 #
 # Design principles:
 #   - NEVER block Claude Code. Timeout is 10 seconds, errors are swallowed.
@@ -25,6 +30,7 @@ FLEET_URL="${FLEET_URL}/api/handoff"
 FILE_TYPE="${1:-}"
 FILE_PATH="${2:-}"
 # $3 (cc_stdin_json) is accepted for backward compat but no longer used.
+AGENT_NAME="${4:-}"
 
 # Logging
 _LOG="${FLEET_HOOK_LOG:-/tmp/fleet-hooks.log}"
@@ -105,25 +111,44 @@ echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HOOK  | hando
 
 # ── Fire and forget (multipart form upload) ──────────────────────
 if command -v curl >/dev/null 2>&1; then
-    curl -s -S --max-time 10 --connect-timeout 2 \
-        -X POST \
-        -F "team=${TEAM_NAME}" \
-        -F "fileType=${FILE_TYPE}" \
-        -F "file=@${UPLOAD_PATH}" \
-        "$FLEET_URL" >/dev/null 2>&1
+    if [ -n "$AGENT_NAME" ]; then
+        curl -s -S --max-time 10 --connect-timeout 2 \
+            -X POST \
+            -F "team=${TEAM_NAME}" \
+            -F "fileType=${FILE_TYPE}" \
+            -F "agentName=${AGENT_NAME}" \
+            -F "file=@${UPLOAD_PATH}" \
+            "$FLEET_URL" >/dev/null 2>&1
+    else
+        curl -s -S --max-time 10 --connect-timeout 2 \
+            -X POST \
+            -F "team=${TEAM_NAME}" \
+            -F "fileType=${FILE_TYPE}" \
+            -F "file=@${UPLOAD_PATH}" \
+            "$FLEET_URL" >/dev/null 2>&1
+    fi
     CURL_RESULT=$?
     if [ "$CURL_RESULT" -eq 0 ]; then
-        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | SEND  | handoff_file | $TEAM_NAME | type=$FILE_TYPE curl=ok" >> "$_LOG" 2>/dev/null || true
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | SEND  | handoff_file | $TEAM_NAME | type=$FILE_TYPE agent=${AGENT_NAME:-?} curl=ok" >> "$_LOG" 2>/dev/null || true
     else
-        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | SEND  | handoff_file | $TEAM_NAME | type=$FILE_TYPE curl=fail($CURL_RESULT)" >> "$_LOG" 2>/dev/null || true
+        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | SEND  | handoff_file | $TEAM_NAME | type=$FILE_TYPE agent=${AGENT_NAME:-?} curl=fail($CURL_RESULT)" >> "$_LOG" 2>/dev/null || true
     fi
 else
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | SEND  | handoff_file | $TEAM_NAME | type=$FILE_TYPE curl=missing" >> "$_LOG" 2>/dev/null || true
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | SEND  | handoff_file | $TEAM_NAME | type=$FILE_TYPE agent=${AGENT_NAME:-?} curl=missing" >> "$_LOG" 2>/dev/null || true
 fi
 
-# Clean up temp file if created
+# Clean up temp file if created (50KB cap path)
 if [ -n "$TMPFILE" ] && [ -f "$TMPFILE" ]; then
     rm -f "$TMPFILE" 2>/dev/null || true
+fi
+
+# Clean up snapshot file when caller used snapshot mode. The snapshot is a
+# temp copy produced synchronously by the parent hook to defeat the deletion
+# race (TL deletes plan.md/changes.md/review.md before the backgrounded
+# upload reads it). Once the upload is done (or has timed out), the snapshot
+# is no longer needed.
+if [ "${FLEET_HANDOFF_SNAPSHOT:-0}" = "1" ] && [ -n "$FILE_PATH" ] && [ -f "$FILE_PATH" ]; then
+    rm -f "$FILE_PATH" 2>/dev/null || true
 fi
 
 # Always exit 0 — hooks must never fail

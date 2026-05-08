@@ -40,7 +40,21 @@ if [ -n "$HANDOFF_FILE" ]; then
     FILE_EXISTS=$([ -f "$FULL_PATH" ] && echo yes || echo no)
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HAND  | subagent_stop | ${FLEET_TEAM_ID:-?} | file=$HANDOFF_FILE exists=$FILE_EXISTS cwd=$WORKTREE_ROOT" >> "$_LOG" 2>/dev/null || true
     if [ "$FILE_EXISTS" = "yes" ]; then
-        "$HOOK_DIR/send_handoff.sh" "$HANDOFF_FILE" "$FULL_PATH" "$input" &
+        # Snapshot synchronously (see on_post_tool_use.sh for rationale) so the
+        # TL deleting plan.md/changes.md/review.md before the backgrounded
+        # upload reads it does not silently drop the capture.
+        SNAPSHOT=""
+        SNAPSHOT=$(mktemp 2>/dev/null || echo "/tmp/fleet-handoff-snapshot-$$-$HANDOFF_FILE")
+        if head -c 51200 "$FULL_PATH" > "$SNAPSHOT" 2>/dev/null; then
+            SNAP_SIZE=$(wc -c < "$SNAPSHOT" 2>/dev/null || echo 0)
+            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HAND  | subagent_stop | ${FLEET_TEAM_ID:-?} | file=$HANDOFF_FILE snapshot=$SNAPSHOT size=${SNAP_SIZE}b" >> "$_LOG" 2>/dev/null || true
+            FLEET_HANDOFF_SNAPSHOT=1 "$HOOK_DIR/send_handoff.sh" "$HANDOFF_FILE" "$SNAPSHOT" "$input" "$AGENT_NAME" &
+        else
+            # Snapshot failed — fall back to direct-path upload.
+            rm -f "$SNAPSHOT" 2>/dev/null || true
+            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HAND  | subagent_stop | ${FLEET_TEAM_ID:-?} | file=$HANDOFF_FILE snapshot=fallback" >> "$_LOG" 2>/dev/null || true
+            "$HOOK_DIR/send_handoff.sh" "$HANDOFF_FILE" "$FULL_PATH" "$input" "$AGENT_NAME" &
+        fi
     fi
 else
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HAND  | subagent_stop | ${FLEET_TEAM_ID:-?} | no handoff match for agent_name=$AGENT_NAME" >> "$_LOG" 2>/dev/null || true
