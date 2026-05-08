@@ -799,6 +799,36 @@ describe('TeamService.getTeamDetail', () => {
     expect(durationMin).toBeGreaterThanOrEqual(29);
     expect(durationMin).toBeLessThanOrEqual(31);
   });
+
+  it('should return handoffFileCount equal to the number of captures', () => {
+    const team = seedTeam({ worktreeName: `svc-handoff-count-${Date.now()}` });
+    mockGetOutput.mockReturnValue([]);
+
+    const db = getDatabase();
+    db.insertHandoffFile({
+      teamId: team.id,
+      fileType: 'plan.md',
+      content: '# Plan v1',
+      agentName: 'planner',
+    });
+    db.insertHandoffFile({
+      teamId: team.id,
+      fileType: 'changes.md',
+      content: '# Changes v1',
+      agentName: 'dev',
+    });
+
+    const detail = service.getTeamDetail(team.id) as Record<string, unknown>;
+    expect(detail.handoffFileCount).toBe(2);
+  });
+
+  it('should return handoffFileCount of 0 when no handoff files exist', () => {
+    const team = seedTeam({ worktreeName: `svc-handoff-none-${Date.now()}` });
+    mockGetOutput.mockReturnValue([]);
+
+    const detail = service.getTeamDetail(team.id) as Record<string, unknown>;
+    expect(detail.handoffFileCount).toBe(0);
+  });
 });
 
 // =============================================================================

@@ -1709,6 +1709,56 @@ describe('Auto-merge cache columns', () => {
   });
 });
 
+// =============================================================================
+// Handoff files (issue #708)
+// =============================================================================
+
+describe('Handoff files', () => {
+  it('getHandoffFileCount returns the number of inserted files for the team', () => {
+    const team = db.insertTeam({ issueNumber: 708001, worktreeName: 'handoff-count-multi' });
+
+    db.insertHandoffFile({
+      teamId: team.id,
+      fileType: 'plan.md',
+      content: '# Plan content',
+      agentName: 'planner',
+    });
+    db.insertHandoffFile({
+      teamId: team.id,
+      fileType: 'changes.md',
+      content: '# Changes content',
+      agentName: 'dev',
+    });
+    db.insertHandoffFile({
+      teamId: team.id,
+      fileType: 'review.md',
+      content: '# Review content',
+      agentName: 'reviewer',
+    });
+
+    expect(db.getHandoffFileCount(team.id)).toBe(3);
+  });
+
+  it('getHandoffFileCount returns 0 for a team with no handoff files', () => {
+    const team = db.insertTeam({ issueNumber: 708002, worktreeName: 'handoff-count-zero' });
+    expect(db.getHandoffFileCount(team.id)).toBe(0);
+  });
+
+  it('getHandoffFileCount is scoped per team', () => {
+    const teamA = db.insertTeam({ issueNumber: 708003, worktreeName: 'handoff-count-A' });
+    const teamB = db.insertTeam({ issueNumber: 708004, worktreeName: 'handoff-count-B' });
+
+    db.insertHandoffFile({
+      teamId: teamA.id,
+      fileType: 'plan.md',
+      content: '# Plan A',
+    });
+
+    expect(db.getHandoffFileCount(teamA.id)).toBe(1);
+    expect(db.getHandoffFileCount(teamB.id)).toBe(0);
+  });
+});
+
 describe('Connection management', () => {
   it('closes the database', () => {
     db.close();

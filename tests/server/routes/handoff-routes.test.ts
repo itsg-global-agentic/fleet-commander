@@ -88,7 +88,7 @@ beforeAll(async () => {
 
   server = Fastify({ logger: false });
   await server.register(multipart, {
-    limits: { fileSize: 51200, fields: 3, files: 1 },
+    limits: { fileSize: 51200, fields: 4, files: 1 },
   });
   await server.register(handoffRoutes);
   await server.ready();
@@ -490,5 +490,70 @@ describe('POST /api/handoff', () => {
     // plan.md: 1 (second was deduped), changes.md: 1
     expect(planFiles).toHaveLength(1);
     expect(changesFiles).toHaveLength(1);
+  });
+
+  // ── agentName field ─────────────────────────────────────────────
+
+  it('should persist agentName when provided', async () => {
+    const team = seedTeam({ worktreeName: `handoff-agent-set-${Date.now()}` });
+    const { body, contentType } = buildMultipart(
+      { team: team.worktreeName, fileType: 'plan.md', agentName: 'planner' },
+      { name: 'plan.md', content: '# Plan with agent attribution' },
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': contentType },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const db = getDatabase();
+    const files = db.getHandoffFiles(team.id);
+    expect(files).toHaveLength(1);
+    expect(files[0].agentName).toBe('planner');
+  });
+
+  it('should treat missing agentName as null (back-compat)', async () => {
+    const team = seedTeam({ worktreeName: `handoff-agent-missing-${Date.now()}` });
+    const { body, contentType } = buildMultipart(
+      { team: team.worktreeName, fileType: 'changes.md' },
+      { name: 'changes.md', content: '# Changes (no agent field)' },
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': contentType },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const db = getDatabase();
+    const files = db.getHandoffFiles(team.id);
+    expect(files).toHaveLength(1);
+    expect(files[0].agentName).toBeNull();
+  });
+
+  it('should treat empty-string agentName as null', async () => {
+    const team = seedTeam({ worktreeName: `handoff-agent-empty-${Date.now()}` });
+    const { body, contentType } = buildMultipart(
+      { team: team.worktreeName, fileType: 'review.md', agentName: '' },
+      { name: 'review.md', content: '# Review with empty agent' },
+    );
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': contentType },
+      payload: body,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const db = getDatabase();
+    const files = db.getHandoffFiles(team.id);
+    expect(files).toHaveLength(1);
+    expect(files[0].agentName).toBeNull();
   });
 });
