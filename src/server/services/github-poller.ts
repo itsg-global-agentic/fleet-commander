@@ -183,6 +183,31 @@ class GitHubPoller {
         }
       }
 
+      // Refresh auto_merge_enabled for projects whose check is stale.
+      // The cached bit feeds the team-launch path (issue #710) so the
+      // "no-auto-merge" warning paragraph can be injected into the prompt
+      // without a hot `gh` call on every launch.
+      // Lazy import to avoid a circular dependency through services.
+      for (const project of projects) {
+        const checkedAtMs = project.autoMergeCheckedAt
+          ? new Date(project.autoMergeCheckedAt).getTime()
+          : 0;
+        if (
+          isNaN(checkedAtMs) ||
+          Date.now() - checkedAtMs > config.autoMergeRefreshMs
+        ) {
+          try {
+            const { refreshAutoMergeForProject } = await import('./project-service.js');
+            await refreshAutoMergeForProject(project.id, { skipIfFresh: false });
+          } catch (err) {
+            console.warn(
+              `[GitHubPoller] auto-merge refresh failed for project ${project.id}:`,
+              err instanceof Error ? err.message : err,
+            );
+          }
+        }
+      }
+
       const teams = db.getActiveTeams();
       let wantFast = false;
 
