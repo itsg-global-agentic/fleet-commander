@@ -49,6 +49,18 @@ interface GraphLink {
 interface CommGraphProps {
   edges: MessageEdge[];
   agents: TeamMember[];
+  /**
+   * Optional click handler invoked with the agent name (id) when the user
+   * clicks a node. Issue #713: used by TeamDetail to open the spawn-prompt
+   * panel. When undefined, click is a no-op (preserving prior behavior).
+   */
+  onNodeClick?: (agentName: string) => void;
+  /**
+   * Optional set of agent names that have spawn records and should be
+   * visually highlighted as clickable. When undefined, no ring is drawn
+   * (preserving prior behavior). Issue #713.
+   */
+  clickableAgents?: Set<string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +76,7 @@ const FONT_SIZE_LABEL = 10;
 // Component
 // ---------------------------------------------------------------------------
 
-export function CommGraph({ edges, agents }: CommGraphProps) {
+export function CommGraph({ edges, agents, onNodeClick, clickableAgents }: CommGraphProps) {
   const graphRef = useRef<ForceGraphMethods<GraphNode, GraphLink>>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dimensions, setDimensions] = useState({ width: 500, height: 380 });
@@ -226,6 +238,17 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
       const fontSize = FONT_SIZE_INITIAL / globalScale;
       const labelFontSize = FONT_SIZE_LABEL / globalScale;
 
+      // Clickable ring (Issue #713): subtle outer ring drawn at r+4 in the
+      // agent's color when this node has spawn records to inspect. Drawn
+      // first so the regular node renders on top.
+      if (clickableAgents && clickableAgents.has(node.id)) {
+        ctx.beginPath();
+        ctx.arc(x, y, r + 4, 0, 2 * Math.PI);
+        ctx.strokeStyle = node.color;
+        ctx.lineWidth = 2 / globalScale;
+        ctx.stroke();
+      }
+
       // Node circle fill
       ctx.beginPath();
       ctx.arc(x, y, r, 0, 2 * Math.PI);
@@ -268,7 +291,7 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
         ctx.fillText(node.role, x, y + r + 20 / globalScale);
       }
     },
-    [],
+    [clickableAgents],
   );
 
   // Node pointer area for hover/click detection
@@ -282,6 +305,27 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
       ctx.fill();
     },
     [],
+  );
+
+  // Handle node click — issue #713. Stable callback referencing the prop.
+  const handleNodeClick = useCallback(
+    (node: GraphNode) => {
+      if (onNodeClick) onNodeClick(node.id);
+    },
+    [onNodeClick],
+  );
+
+  // Hover tooltip on a node — show agent name + clickable hint when applicable.
+  const nodeLabel = useCallback(
+    (node: GraphNode) => {
+      const hint = onNodeClick && clickableAgents && clickableAgents.has(node.id)
+        ? '<br/><span style="color:#8B949E;font-size:10px;">click for spawn prompts</span>'
+        : '';
+      return `<div style="padding:4px 8px;background:#161B22;border:1px solid #30363D;border-radius:4px;font-size:11px;color:#E6EDF3;">
+        <b>${node.name}</b>${node.role ? ` <span style="color:#8B949E;">(${node.role})</span>` : ''}${hint}
+      </div>`;
+    },
+    [onNodeClick, clickableAgents],
   );
 
   // Link width based on message count
@@ -344,6 +388,8 @@ export function CommGraph({ edges, agents }: CommGraphProps) {
         nodeCanvasObject={nodeCanvasObject}
         nodeCanvasObjectMode={() => 'replace'}
         nodePointerAreaPaint={nodePointerAreaPaint}
+        nodeLabel={nodeLabel}
+        onNodeClick={handleNodeClick}
         linkWidth={linkWidth}
         linkColor={linkColor}
         linkLineDash={linkLineDash}

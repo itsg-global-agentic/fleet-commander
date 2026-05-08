@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { HandoffFile } from '../../shared/types';
+import { formatRelativeTime } from '../utils/format-time';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -11,19 +12,6 @@ const FILE_TYPE_META: Record<string, { label: string; color: string }> = {
   'changes.md': { label: 'Changes', color: '#3FB950' },
   'review.md': { label: 'Review', color: '#D29922' },
 };
-
-/** Format ISO timestamp to a readable relative or absolute time */
-function formatTimestamp(iso: string): string {
-  const d = new Date(iso);
-  const now = new Date();
-  const diffMs = now.getTime() - d.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return 'just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHours = Math.floor(diffMin / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
 
 // ---------------------------------------------------------------------------
 // Component
@@ -88,7 +76,7 @@ export function HandoffFileCard({ file, defaultExpanded = false }: HandoffFileCa
 
         {/* Timestamp */}
         <span className="text-xs text-dark-muted">
-          {formatTimestamp(file.capturedAt)}
+          {formatRelativeTime(file.capturedAt)}
         </span>
       </button>
 
