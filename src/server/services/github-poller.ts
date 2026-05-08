@@ -90,7 +90,7 @@ class GitHubPoller {
   /**
    * Start the polling loop. Uses adaptive intervals:
    * - Normal: config.githubPollIntervalMs (default 30s)
-   * - Fast: 10s when teams are awaiting PR detection or have pending CI
+   * - Fast: 20s when teams are awaiting PR detection or have pending CI
    */
   start(): void {
     if (this.interval) {
@@ -110,7 +110,7 @@ class GitHubPoller {
     }
 
     console.log(
-      `[GitHubPoller] Started — base interval ${config.githubPollIntervalMs}ms, fast 10s when PRs pending`
+      `[GitHubPoller] Started — base interval ${config.githubPollIntervalMs}ms, fast 20s when PRs pending`
     );
   }
 
@@ -120,7 +120,7 @@ class GitHubPoller {
       clearTimeout(this.interval);
     }
     const delay = this.needsFastPoll
-      ? Math.min(10_000, config.githubPollIntervalMs)
+      ? Math.min(20_000, config.githubPollIntervalMs)
       : config.githubPollIntervalMs;
     this.interval = setTimeout(() => {
       this.poll().finally(() => this.scheduleNextPoll());
