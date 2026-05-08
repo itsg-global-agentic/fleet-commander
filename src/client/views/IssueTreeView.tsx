@@ -76,6 +76,9 @@ export function IssueTreeView() {
   const [tree, setTree] = useState<IssueNode[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  // Tracks per-project refreshes that are in flight. Each ProjectGroup /
+  // SingleProjectTree shows a spinner only when its own ID is in this set.
+  const [refreshingProjects, setRefreshingProjects] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [cachedAt, setCachedAt] = useState<string | null>(null);
   const [issueCount, setIssueCount] = useState(0);
@@ -187,6 +190,10 @@ export function IssueTreeView() {
 
   const handleRefresh = useCallback(async () => {
     if (refreshing) return;
+    // Avoid running the all-projects refresh while a per-project refresh is
+    // still in flight — the two share the same fetcher singleton on the
+    // server and racing them would produce inconsistent UI state.
+    if (refreshingProjects.size > 0) return;
     setRefreshing(true);
     try {
       setError(null);
@@ -199,7 +206,41 @@ export function IssueTreeView() {
     } finally {
       setRefreshing(false);
     }
-  }, [api, refreshing, fetchTree]);
+  }, [api, refreshing, refreshingProjects, fetchTree]);
+
+  // -------------------------------------------------------------------------
+  // Per-project refresh — invoked from a project group header
+  // -------------------------------------------------------------------------
+
+  const handleRefreshProject = useCallback(async (projectId: number) => {
+    // Already refreshing this project, or a global refresh is in flight: noop.
+    if (refreshingProjects.has(projectId)) return;
+    if (refreshing) return;
+
+    setRefreshingProjects((prev) => {
+      const next = new Set(prev);
+      next.add(projectId);
+      return next;
+    });
+
+    try {
+      setError(null);
+      await api.post<IssueRefreshResponse>('issues/refresh', { projectId });
+      // Re-fetch the full tree so this group's `cachedAt` and counts update.
+      // Other groups still serve from their cache (no GitHub round-trip).
+      await fetchTree();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+    } finally {
+      setRefreshingProjects((prev) => {
+        if (!prev.has(projectId)) return prev;
+        const next = new Set(prev);
+        next.delete(projectId);
+        return next;
+      });
+    }
+  }, [api, refreshing, refreshingProjects, fetchTree]);
 
   // -------------------------------------------------------------------------
   // Relations panel toggle + relation change handler
@@ -784,7 +825,8 @@ export function IssueTreeView() {
 
         <button
           onClick={handleRefresh}
-          disabled={refreshing}
+          disabled={refreshing || refreshingProjects.size > 0}
+          title="Refresh all projects"
           className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded border border-dark-border text-dark-muted hover:text-dark-text hover:border-dark-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <svg
@@ -861,6 +903,8 @@ export function IssueTreeView() {
                 onToggleRelations={handleToggleRelations}
                 relationsMap={relationsMap}
                 onRelationChanged={handleRelationChanged}
+                onRefreshProject={handleRefreshProject}
+                refreshingProjects={refreshingProjects}
               />
             ))}
           </div>
@@ -882,6 +926,8 @@ export function IssueTreeView() {
                 onToggleRelations={handleToggleRelations}
                 relationsMap={relationsMap}
                 onRelationChanged={handleRelationChanged}
+                onRefreshProject={handleRefreshProject}
+                isRefreshing={refreshingProjects.has(group.projectId)}
               />
             ))}
           </div>
@@ -902,6 +948,8 @@ export function IssueTreeView() {
             onToggleRelations={handleToggleRelations}
             relationsMap={relationsMap}
             onRelationChanged={handleRelationChanged}
+            onRefreshProject={handleRefreshProject}
+            isRefreshing={launchProjectId !== null && refreshingProjects.has(launchProjectId)}
           />
         )}
       </div>
@@ -1362,9 +1410,13 @@ interface ProjectGroupSectionProps {
   onToggleRelations?: (issueKey: string) => void;
   relationsMap?: Map<string, IssueRelations>;
   onRelationChanged?: (issueKey: string) => void;
+  /** Trigger a per-project cache refresh for a single project. */
+  onRefreshProject?: (projectId: number) => Promise<void>;
+  /** Set of project IDs whose per-project refresh is currently in flight. */
+  refreshingProjects?: Set<number>;
 }
 
-function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: ProjectGroupSectionProps) {
+function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged, onRefreshProject, refreshingProjects }: ProjectGroupSectionProps) {
   const expanded = !collapsedNodes.has(bucket.key);
   const totalIssueCount = (bucket.projects ?? []).reduce((sum, p) => sum + countNodes(p.tree), 0);
 
@@ -1416,6 +1468,8 @@ function ProjectGroupSection({ bucket, onLaunch, launchingIssues, launchErrors, 
                 onToggleRelations={onToggleRelations}
                 relationsMap={relationsMap}
                 onRelationChanged={onRelationChanged}
+                onRefreshProject={onRefreshProject}
+                isRefreshing={refreshingProjects?.has(group.projectId) ?? false}
               />
             ))}
           </div>
@@ -1442,9 +1496,13 @@ interface ProjectGroupProps {
   onToggleRelations?: (issueKey: string) => void;
   relationsMap?: Map<string, IssueRelations>;
   onRelationChanged?: (issueKey: string) => void;
+  /** Trigger a per-project cache refresh for this group's project. */
+  onRefreshProject?: (projectId: number) => Promise<void>;
+  /** True while this project's refresh is in flight (spinner). */
+  isRefreshing?: boolean;
 }
 
-function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: ProjectGroupProps) {
+function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged, onRefreshProject, isRefreshing = false }: ProjectGroupProps) {
   const api = useApi();
   const projectNodeId = `project-${group.projectId}`;
   const expanded = !collapsedNodes.has(projectNodeId);
@@ -1551,6 +1609,28 @@ function ProjectGroup({ group, onLaunch, launchingIssues, launchErrors, forceExp
             {headerCountText}
           </span>
         </button>
+
+        {onRefreshProject && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void onRefreshProject(group.projectId);
+            }}
+            disabled={isRefreshing}
+            data-testid={`project-refresh-${group.projectId}`}
+            className="inline-flex items-center justify-center w-7 h-7 rounded border border-dark-border text-dark-muted hover:text-dark-accent hover:border-dark-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title={`Refresh ${group.projectName}`}
+            aria-label={`Refresh ${group.projectName}`}
+          >
+            <svg
+              className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
+              viewBox="0 0 16 16"
+              fill="currentColor"
+            >
+              <path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z" />
+            </svg>
+          </button>
+        )}
 
         <button
           onClick={() => setShowDepGraph(true)}
@@ -1873,9 +1953,13 @@ interface SingleProjectTreeProps {
   onToggleRelations?: (issueKey: string) => void;
   relationsMap?: Map<string, IssueRelations>;
   onRelationChanged?: (issueKey: string) => void;
+  /** Trigger a per-project cache refresh. Hidden when projectId is null. */
+  onRefreshProject?: (projectId: number) => Promise<void>;
+  /** True while this project's refresh is in flight (spinner). */
+  isRefreshing?: boolean;
 }
 
-function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged }: SingleProjectTreeProps) {
+function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIssues, launchErrors, forceExpand, fetchTree, collapsedNodes, onToggleCollapse, relationsOpenKeys, onToggleRelations, relationsMap, onRelationChanged, onRefreshProject, isRefreshing = false }: SingleProjectTreeProps) {
   const api = useApi();
   const prioritization = usePrioritization();
   const selection = useIssueSelection();
@@ -1900,6 +1984,28 @@ function SingleProjectTree({ tree, projectId, projectName, onLaunch, launchingIs
     <div className="flex flex-col h-full">
       {/* Prioritize controls */}
       <div className="flex items-center gap-2 px-2 pb-2 shrink-0">
+        {projectId !== null && onRefreshProject && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void onRefreshProject(projectId);
+            }}
+            disabled={isRefreshing}
+            data-testid={`project-refresh-${projectId}`}
+            className="inline-flex items-center justify-center w-7 h-7 rounded border border-dark-border text-dark-muted hover:text-dark-accent hover:border-dark-accent/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            title={`Refresh ${projectName ?? 'this project'}`}
+            aria-label={`Refresh ${projectName ?? 'this project'}`}
+          >
+            <svg
+              className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`}
+              viewBox="0 0 16 16"
+              fill="currentColor"
+            >
+              <path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7.002 7.002 0 0 1 1.05 8.84a.75.75 0 0 1 .656-.834ZM8 2.5a5.487 5.487 0 0 0-4.131 1.869l1.204 1.204A.25.25 0 0 1 4.896 6H1.25A.25.25 0 0 1 1 5.75V2.104a.25.25 0 0 1 .427-.177l1.38 1.38A7.002 7.002 0 0 1 14.95 7.16a.75.75 0 0 1-1.49.178A5.5 5.5 0 0 0 8 2.5Z" />
+            </svg>
+          </button>
+        )}
+
         <button
           onClick={() => setShowDepGraph(true)}
           className="inline-flex items-center justify-center w-7 h-7 rounded border border-dark-border text-dark-muted hover:text-dark-accent hover:border-dark-accent/50 transition-colors"

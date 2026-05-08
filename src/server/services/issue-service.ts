@@ -379,22 +379,45 @@ export class IssueService {
   }
 
   /**
-   * Force re-fetch from GitHub. Clears the cache and re-fetches the full hierarchy.
+   * Force re-fetch from the issue provider. Clears the cache and re-fetches
+   * the issue hierarchy.
    *
+   * When `projectId` is provided, only that project's cache is refreshed and
+   * the returned `tree` / `issueCount` / `refreshedAt` are scoped to it. When
+   * `projectId` is omitted, all projects are refreshed and the response covers
+   * the merged hierarchy across all of them (legacy behaviour).
+   *
+   * @param projectId - Optional project ID to scope the refresh to a single project
    * @returns Refreshed issue tree with metadata
+   * @throws ServiceError with code VALIDATION if projectId is invalid
+   * @throws ServiceError with code NOT_FOUND if projectId is provided but the project doesn't exist
    */
-  async refresh(): Promise<{
+  async refresh(projectId?: number): Promise<{
     refreshedAt: string | null;
     issueCount: number;
     tree: IssueNode[];
   }> {
-    const fetcher = getIssueFetcher();
-    const issues = await fetcher.refresh();
+    if (projectId !== undefined) {
+      if (isNaN(projectId) || projectId < 1) {
+        throw validationError('projectId must be a positive integer');
+      }
 
-    const enriched = fetcher.enrichWithTeamInfo(issues);
+      // Verify the project exists; otherwise `fetcher.refresh(projectId)` would
+      // silently return [] for unknown IDs, which is a confusing 200-success.
+      const db = getDatabase();
+      const project = db.getProject(projectId);
+      if (!project) {
+        throw notFoundError(`Project ${projectId} not found`);
+      }
+    }
+
+    const fetcher = getIssueFetcher();
+    const issues = await fetcher.refresh(projectId);
+
+    const enriched = fetcher.enrichWithTeamInfo(issues, projectId);
 
     return {
-      refreshedAt: fetcher.getCachedAt(),
+      refreshedAt: fetcher.getCachedAt(projectId),
       issueCount: countIssues(enriched),
       tree: enriched,
     };

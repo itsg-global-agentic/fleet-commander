@@ -551,4 +551,45 @@ describe('IssueService.refresh', () => {
     expect(Array.isArray(result.tree)).toBe(true);
     expect(mockRefresh).toHaveBeenCalled();
   });
+
+  it('should refresh all projects when projectId is undefined', async () => {
+    await service.refresh();
+
+    expect(mockRefresh).toHaveBeenCalledWith(undefined);
+    expect(mockEnrichWithTeamInfo).toHaveBeenCalledWith(mockIssueTree, undefined);
+    expect(mockGetCachedAt).toHaveBeenCalledWith(undefined);
+  });
+
+  it('should pass projectId to fetcher when provided', async () => {
+    const project = seedProject();
+    const result = await service.refresh(project.id);
+
+    expect(mockRefresh).toHaveBeenCalledWith(project.id);
+    expect(mockEnrichWithTeamInfo).toHaveBeenCalledWith(mockIssueTree, project.id);
+    expect(mockGetCachedAt).toHaveBeenCalledWith(project.id);
+    expect(result).toHaveProperty('refreshedAt');
+    expect(result).toHaveProperty('issueCount');
+    expect(result).toHaveProperty('tree');
+    expect(Array.isArray(result.tree)).toBe(true);
+  });
+
+  it('should throw VALIDATION for invalid projectId', async () => {
+    try {
+      await service.refresh(0);
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('VALIDATION');
+    }
+  });
+
+  it('should throw NOT_FOUND when projectId references an unknown project', async () => {
+    try {
+      await service.refresh(99999);
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServiceError);
+      expect((err as ServiceError).code).toBe('NOT_FOUND');
+    }
+  });
 });
