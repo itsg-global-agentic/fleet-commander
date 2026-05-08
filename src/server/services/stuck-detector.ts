@@ -24,6 +24,13 @@ class StuckDetector {
   private interval: NodeJS.Timeout | null = null;
 
   /**
+   * Dedup keys for `subagent_stuck` warnings so we emit at most once per
+   * (team, agent, toolUseId). Pruned on every check() pass for teams that
+   * have left the active-teams set (issue #689).
+   */
+  private emittedSubagentStuck: Set<string> = new Set();
+
+  /**
    * Start the periodic stuck-detection check loop.
    * Runs every `config.stuckCheckIntervalMs` (default 60 000 ms).
    */
@@ -274,6 +281,134 @@ class StuckDetector {
         }
       }
 
+      // --- Subagent-stuck detection (issue #689) ---------------------------
+      // When a TL spawns a subagent and the subagent goes silent for
+      // longer than `subagentStuckThresholdMin`, emit a `subagent_stuck`
+      // stdin message to the TL with respawn instructions. Without this,
+      // the TL silently absorbs the subagent's role at 2x cost.
+      this.checkSubagentStuck(team, now);
+    }
+
+    // Prune dedup keys for teams no longer active. Active-teams ids only
+    // (the dedup Set keys are `${teamId}:${agentName}:${toolUseId}`).
+    if (this.emittedSubagentStuck.size > 0) {
+      const activeIds = new Set<number>();
+      for (const t of activeTeams) {
+        if (typeof t.id === 'number') activeIds.add(t.id);
+      }
+      for (const key of this.emittedSubagentStuck) {
+        const [teamIdStr] = key.split(':');
+        const tid = teamIdStr ? Number(teamIdStr) : NaN;
+        if (!activeIds.has(tid)) {
+          this.emittedSubagentStuck.delete(key);
+        }
+      }
+    }
+  }
+
+  /**
+   * Per-team subagent-stuck pass. Skips when:
+   *   - subagentStuckThresholdMin is 0 (feature disabled),
+   *   - team status is not running/idle,
+   *   - team has no in_progress team_tasks row (TL is not waiting on a sub),
+   *   - team is currently in extended thinking,
+   *   - TeamManager has no activity entries for this team.
+   *
+   * Emits at most once per (teamId, agentName, toolUseId).
+   */
+  private checkSubagentStuck(
+    team: { id: number; status: string; issueNumber: number; issueKey?: string | null },
+    now: number,
+  ): void {
+    if (config.subagentStuckThresholdMin === 0) return;
+    if (team.status !== 'running' && team.status !== 'idle') return;
+
+    let manager: ReturnType<typeof getTeamManager>;
+    try {
+      manager = getTeamManager();
+    } catch {
+      return;
+    }
+
+    if (manager.thinkingTeams.has(team.id)) return;
+
+    const db = getDatabase();
+    let hasActiveSub = false;
+    try {
+      hasActiveSub = db.hasActiveSubagent(team.id);
+    } catch {
+      // If hasActiveSubagent fails, skip — better to under-warn than
+      // misfire on transient DB errors.
+      return;
+    }
+    if (!hasActiveSub) return;
+
+    const activity = manager.getSubagentActivity(team.id);
+    if (activity.size === 0) return;
+
+    const thresholdMs = config.subagentStuckThresholdMin * 60_000;
+
+    for (const [agentName, info] of activity.entries()) {
+      const idleMs = now - info.lastEventAt;
+      if (idleMs <= thresholdMs) continue;
+
+      const dedupKey = `${team.id}:${agentName}:${info.toolUseId}`;
+      if (this.emittedSubagentStuck.has(dedupKey)) continue;
+
+      const idleMin = idleMs / 60_000;
+      const idleMinRounded = Math.round(idleMin);
+
+      const msg = resolveMessage('subagent_stuck', {
+        AGENT_NAME: agentName,
+        IDLE_MINUTES: String(idleMinRounded),
+        TOOL_USE_ID: info.toolUseId,
+      });
+
+      if (msg) {
+        try {
+          manager.sendMessage(team.id, msg, 'fc', 'subagent_stuck');
+          console.log(
+            `[StuckDetector] subagent_stuck sent to team ${team.id} for agent '${agentName}' (silent ${idleMinRounded}min, tool_use_id=${info.toolUseId})`,
+          );
+        } catch {
+          console.warn(
+            `[StuckDetector] Failed to send subagent_stuck to team ${team.id} for agent '${agentName}'`,
+          );
+        }
+      }
+
+      sseBroker.broadcast(
+        'team_warning',
+        {
+          team_id: team.id,
+          warning_type: 'subagent_stuck',
+          message: `Subagent '${agentName}' silent for ${idleMinRounded}min on team ${team.id}`,
+          details: {
+            agent_name: agentName,
+            idle_minutes: idleMinRounded,
+            tool_use_id: info.toolUseId,
+          },
+        },
+        team.id,
+      );
+
+      try {
+        const status = team.status as TeamStatus;
+        db.insertTransition({
+          teamId: team.id,
+          fromStatus: status,
+          toStatus: status,
+          trigger: 'timer',
+          reason: `subagent_stuck: ${agentName} silent for ${idleMinRounded}min`,
+        });
+      } catch (err) {
+        // Non-fatal — transition audit failure should not break detection.
+        console.warn(
+          `[StuckDetector] Failed to insert subagent_stuck transition for team ${team.id}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+
+      this.emittedSubagentStuck.add(dedupKey);
     }
   }
 }

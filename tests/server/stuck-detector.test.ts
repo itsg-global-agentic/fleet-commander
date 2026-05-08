@@ -22,12 +22,16 @@ const mockSseBroker = {
   broadcast: vi.fn(),
 };
 
+type SubagentActivityEntry = { lastEventAt: number; toolUseId: string; startedAt: number };
+
 const mockManager = {
   stop: vi.fn().mockResolvedValue(undefined),
   sendMessage: vi.fn(),
   syncStreamActivityToDb: vi.fn(),
   getLastStreamAt: vi.fn().mockReturnValue(null),
   thinkingTeams: new Set<number>(),
+  getSubagentActivity: vi.fn<(teamId: number) => Map<string, SubagentActivityEntry>>().mockReturnValue(new Map()),
+  clearSubagentActivity: vi.fn(),
 };
 
 vi.mock('../../src/server/db.js', () => ({
@@ -52,6 +56,7 @@ vi.mock('../../src/server/config.js', () => ({
     stuckCheckIntervalMs: 60000,
     idleThresholdMin: 5,
     stuckThresholdMin: 10,
+    subagentStuckThresholdMin: 3,
     launchTimeoutMin: 5,
   },
 }));
@@ -101,6 +106,8 @@ beforeEach(() => {
   mockDb.getActiveTeams.mockReturnValue([]);
   mockDb.hasActiveSubagent.mockReturnValue(false);
   mockDb.getPullRequest.mockReturnValue(undefined);
+  mockManager.thinkingTeams.clear();
+  mockManager.getSubagentActivity.mockReturnValue(new Map());
   mockGetTeamManager.mockImplementation(() => mockManager);
 });
 
@@ -614,5 +621,275 @@ describe('Issue #690 — false-positive idle/stuck suppression', () => {
       expect(mockDb.insertTransition).not.toHaveBeenCalled();
       expect(mockDb.updateTeamSilent).not.toHaveBeenCalled();
     });
+  });
+});
+
+// =============================================================================
+// Subagent stuck detection (#689)
+// =============================================================================
+//
+// FC's per-subagent watchdog: when a subagent goes silent past
+// FLEET_SUBAGENT_STUCK_THRESHOLD_MIN while the team has an in_progress
+// team_tasks row, FC sends `subagent_stuck` to the TL via stdin instead of
+// letting the TL silently absorb the subagent's role at 2x cost.
+//
+// Each test uses a unique toolUseId (the dedup key includes it) so the
+// singleton stuckDetector's emittedSubagentStuck Set does not bleed state
+// across tests.
+// =============================================================================
+
+describe('Subagent stuck detection (#689)', () => {
+  function makeActivity(
+    agentName: string,
+    idleMinutes: number,
+    toolUseId: string,
+  ): Map<string, SubagentActivityEntry> {
+    const m = new Map<string, SubagentActivityEntry>();
+    const lastEventAt = Date.now() - idleMinutes * 60_000;
+    const startedAt = lastEventAt - 60_000;
+    m.set(agentName, { lastEventAt, toolUseId, startedAt });
+    return m;
+  }
+
+  it('emits subagent_stuck with correct payload when a subagent is silent past threshold', async () => {
+    const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+    const mockedResolveMessage = vi.mocked(resolveMessage);
+    mockedResolveMessage.mockReturnValue(
+      "FC subagent watchdog: subagent 'dev' has been silent for 4 minutes (tool_use_id=tu_001). ...",
+    );
+
+    const team = makeTeam({
+      id: 1,
+      status: 'running',
+      lastEventAt: minutesAgo(1), // TL itself is fine
+    });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(true);
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 4, 'tu_001'));
+
+    stuckDetector.check();
+
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(
+      1,
+      expect.stringContaining("subagent 'dev'"),
+      'fc',
+      'subagent_stuck',
+    );
+    expect(mockSseBroker.broadcast).toHaveBeenCalledWith(
+      'team_warning',
+      expect.objectContaining({
+        team_id: 1,
+        warning_type: 'subagent_stuck',
+        details: expect.objectContaining({
+          agent_name: 'dev',
+          tool_use_id: 'tu_001',
+        }),
+      }),
+      1,
+    );
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'running',
+        toStatus: 'running',
+        trigger: 'timer',
+        reason: expect.stringContaining('subagent_stuck'),
+      }),
+    );
+
+    mockedResolveMessage.mockReturnValue(null);
+  });
+
+  it('emits subagent_stuck for a silent subagent on an idle team', async () => {
+    const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+    const mockedResolveMessage = vi.mocked(resolveMessage);
+    mockedResolveMessage.mockReturnValue('FC subagent watchdog: subagent ...');
+
+    const team = makeTeam({
+      id: 2,
+      status: 'idle',
+      lastEventAt: minutesAgo(7),
+    });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(true);
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('reviewer', 5, 'tu_002'));
+
+    stuckDetector.check();
+
+    expect(mockManager.sendMessage).toHaveBeenCalledWith(
+      2,
+      expect.any(String),
+      'fc',
+      'subagent_stuck',
+    );
+
+    mockedResolveMessage.mockReturnValue(null);
+  });
+
+  it('does NOT emit twice for the same (team, agent, toolUseId) — dedup works', async () => {
+    const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+    const mockedResolveMessage = vi.mocked(resolveMessage);
+    mockedResolveMessage.mockReturnValue('subagent_stuck msg');
+
+    const team = makeTeam({
+      id: 3,
+      status: 'running',
+      lastEventAt: minutesAgo(1),
+    });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(true);
+
+    // First pass: still silent, same toolUseId.
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 4, 'tu_dedup'));
+    stuckDetector.check();
+    expect(mockManager.sendMessage).toHaveBeenCalledTimes(1);
+
+    // Second pass: still silent, same toolUseId — dedup must suppress.
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 5, 'tu_dedup'));
+    stuckDetector.check();
+    expect(mockManager.sendMessage).toHaveBeenCalledTimes(1);
+
+    mockedResolveMessage.mockReturnValue(null);
+  });
+
+  it('does NOT emit when subagentStuckThresholdMin is 0 (feature disabled)', async () => {
+    const configMod = await import('../../src/server/config.js');
+    const cfg = configMod.default as unknown as { subagentStuckThresholdMin: number };
+    const original = cfg.subagentStuckThresholdMin;
+    cfg.subagentStuckThresholdMin = 0;
+
+    try {
+      const team = makeTeam({ id: 4, status: 'running', lastEventAt: minutesAgo(1) });
+      mockDb.getActiveTeams.mockReturnValue([team]);
+      mockDb.hasActiveSubagent.mockReturnValue(true);
+      mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 30, 'tu_disabled'));
+
+      stuckDetector.check();
+
+      expect(mockManager.sendMessage).not.toHaveBeenCalled();
+      expect(mockSseBroker.broadcast).not.toHaveBeenCalledWith(
+        'team_warning',
+        expect.anything(),
+        expect.anything(),
+      );
+    } finally {
+      cfg.subagentStuckThresholdMin = original;
+    }
+  });
+
+  it('does NOT emit when no in_progress task exists (hasActiveSubagent=false)', () => {
+    const team = makeTeam({ id: 5, status: 'running', lastEventAt: minutesAgo(1) });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(false);
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 30, 'tu_no_task'));
+
+    stuckDetector.check();
+
+    expect(mockManager.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit while team is in extended thinking', () => {
+    const team = makeTeam({ id: 6, status: 'running', lastEventAt: minutesAgo(1) });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(true);
+    mockManager.thinkingTeams.add(6);
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 30, 'tu_thinking'));
+
+    stuckDetector.check();
+
+    expect(mockManager.sendMessage).not.toHaveBeenCalled();
+    mockManager.thinkingTeams.delete(6);
+  });
+
+  it('does NOT emit for terminal-status teams (queued/launching/done/failed not in active list)', () => {
+    // queued/launching are filtered by status check; even if hasActiveSubagent
+    // returned true (it shouldn't), the status guard skips detection.
+    const team = makeTeam({ id: 7, status: 'launching', lastEventAt: minutesAgo(1) });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(true);
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 30, 'tu_launching'));
+
+    stuckDetector.check();
+
+    expect(mockManager.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit when idle minutes are below threshold', () => {
+    const team = makeTeam({ id: 8, status: 'running', lastEventAt: minutesAgo(1) });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(true);
+    // 2 min idle < 3 min threshold
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 2, 'tu_within'));
+
+    stuckDetector.check();
+
+    expect(mockManager.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does NOT emit when no subagent activity entries exist', () => {
+    const team = makeTeam({ id: 9, status: 'running', lastEventAt: minutesAgo(1) });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(true);
+    // Empty activity map — TL hasn't spawned any subagent yet (or all have
+    // completed). The DB's hasActiveSubagent may be true from a stale or
+    // mismatched team_tasks row, but with no in-memory activity to track,
+    // the watchdog has nothing to evaluate.
+    mockManager.getSubagentActivity.mockReturnValue(new Map());
+
+    stuckDetector.check();
+
+    expect(mockManager.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('emits a separate warning for a respawn (new toolUseId resets dedup slate)', async () => {
+    const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+    const mockedResolveMessage = vi.mocked(resolveMessage);
+    mockedResolveMessage.mockReturnValue('subagent_stuck msg');
+
+    const team = makeTeam({ id: 10, status: 'running', lastEventAt: minutesAgo(1) });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(true);
+
+    // First spawn — emits.
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 4, 'tu_respawn_1'));
+    stuckDetector.check();
+    expect(mockManager.sendMessage).toHaveBeenCalledTimes(1);
+
+    // After respawn — same agent name, different toolUseId — must emit again.
+    mockManager.getSubagentActivity.mockReturnValue(makeActivity('dev', 4, 'tu_respawn_2'));
+    stuckDetector.check();
+    expect(mockManager.sendMessage).toHaveBeenCalledTimes(2);
+
+    mockedResolveMessage.mockReturnValue(null);
+  });
+
+  it('warns multiple distinct subagents in the same team independently', async () => {
+    const { resolveMessage } = await import('../../src/server/utils/resolve-message.js');
+    const mockedResolveMessage = vi.mocked(resolveMessage);
+    mockedResolveMessage.mockReturnValue('subagent_stuck msg');
+
+    const team = makeTeam({ id: 11, status: 'running', lastEventAt: minutesAgo(1) });
+    mockDb.getActiveTeams.mockReturnValue([team]);
+    mockDb.hasActiveSubagent.mockReturnValue(true);
+
+    const activity = new Map<string, SubagentActivityEntry>();
+    activity.set('dev', {
+      lastEventAt: Date.now() - 4 * 60_000,
+      toolUseId: 'tu_multi_dev',
+      startedAt: Date.now() - 5 * 60_000,
+    });
+    activity.set('reviewer', {
+      lastEventAt: Date.now() - 5 * 60_000,
+      toolUseId: 'tu_multi_rev',
+      startedAt: Date.now() - 6 * 60_000,
+    });
+    mockManager.getSubagentActivity.mockReturnValue(activity);
+
+    stuckDetector.check();
+
+    // One sendMessage per distinct stuck subagent.
+    expect(mockManager.sendMessage).toHaveBeenCalledTimes(2);
+
+    mockedResolveMessage.mockReturnValue(null);
   });
 });
