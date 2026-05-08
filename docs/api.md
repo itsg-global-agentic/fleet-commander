@@ -2229,9 +2229,19 @@ curl -s http://localhost:4680/api/projects/1/issues/dependencies
 
 ### POST /api/issues/refresh
 
-Force re-fetch the issue hierarchy from GitHub for all projects. Clears the cache and fetches fresh data.
+Force re-fetch the issue hierarchy from the configured issue provider. Clears the cache and fetches fresh data.
 
-**Request Body:** None
+**Request Body:** Optional `{ projectId?: number }`
+
+- When the body is omitted or `projectId` is not provided, the cache is refreshed for **all projects** (legacy behaviour). The response `tree` is the merged hierarchy across every project.
+- When `projectId` is provided, only that project's cache is refreshed. The response `tree`, `issueCount`, and `refreshedAt` are scoped to that project.
+
+**Errors:**
+
+| Code | Description |
+|------|-------------|
+| 400 | `projectId` is present but not a positive integer |
+| 404 | `projectId` references a project that does not exist |
 
 **Response:** `200 OK`
 
@@ -2244,7 +2254,13 @@ Force re-fetch the issue hierarchy from GitHub for all projects. Clears the cach
 ```
 
 ```bash
+# Refresh all projects (legacy)
 curl -s -X POST http://localhost:4680/api/issues/refresh
+
+# Refresh a single project
+curl -s -X POST -H 'Content-Type: application/json' \
+  -d '{"projectId":1}' \
+  http://localhost:4680/api/issues/refresh
 ```
 
 ---

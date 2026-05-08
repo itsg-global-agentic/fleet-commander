@@ -221,23 +221,43 @@ async function issueRoutes(server: FastifyInstance): Promise<void> {
 
   /**
    * POST /api/issues/refresh — Force re-fetch from GitHub
-   * Clears the cache and re-fetches the full hierarchy for all projects.
+   * Clears the cache and re-fetches the hierarchy.
+   *
+   * Body (optional): `{ projectId?: number }`
+   *   - When `projectId` is provided, only that project's cache is refreshed
+   *     and the response tree / counts / cachedAt are scoped to it.
+   *   - When the body is missing or `projectId` is undefined, all projects
+   *     are refreshed (legacy behaviour, unchanged).
    */
-  server.post('/api/issues/refresh', async (_request: FastifyRequest, reply: FastifyReply) => {
-    try {
-      const service = getIssueService();
-      return await service.refresh();
-    } catch (err: unknown) {
-      if (err instanceof ServiceError) {
-        return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+  server.post<{ Body: { projectId?: number } | null }>(
+    '/api/issues/refresh',
+    async (
+      request: FastifyRequest<{ Body: { projectId?: number } | null }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const body = (request.body ?? {}) as { projectId?: unknown };
+        let projectId: number | undefined;
+        if (body.projectId !== undefined && body.projectId !== null) {
+          // Coerce to string and re-validate so `parseIdParam` produces a
+          // consistent 400 ServiceError for non-numeric / non-positive values.
+          projectId = parseIdParam(String(body.projectId), 'projectId');
+        }
+
+        const service = getIssueService();
+        return await service.refresh(projectId);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        request.log.error(err, 'Failed to refresh issues');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
       }
-      _request.log.error(err, 'Failed to refresh issues');
-      return reply.code(500).send({
-        error: 'Internal Server Error',
-        message: err instanceof Error ? err.message : String(err),
-      });
-    }
-  });
+    },
+  );
 }
 
 export default issueRoutes;
