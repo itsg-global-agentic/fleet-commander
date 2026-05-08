@@ -1183,4 +1183,79 @@ describe('IssueTreeView', () => {
       expect.arrayContaining(['provider-1-github', 'provider-1-jira', 'project-1', '10', '20']),
     );
   });
+
+  // -------------------------------------------------------------------------
+  // Per-project refresh button (Issue #712)
+  // -------------------------------------------------------------------------
+
+  it('top-bar Refresh button posts no body to /issues/refresh', async () => {
+    setupMockApi();
+    mockPost.mockResolvedValue({ tree: [], refreshedAt: null, issueCount: 0 });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Refresh')).toBeInTheDocument();
+    });
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(screen.getByText('Refresh'));
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith('issues/refresh');
+    });
+  });
+
+  it('per-project Refresh button posts { projectId } when clicked from a project group header', async () => {
+    const issueA = { number: 11, title: 'A', state: 'open', labels: [], children: [], activeTeam: null };
+    const issueB = { number: 22, title: 'B', state: 'open', labels: [], children: [], activeTeam: null };
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'issues') {
+        return Promise.resolve({
+          tree: [issueA, issueB],
+          groups: [
+            { projectId: 1, projectName: 'alpha', tree: [issueA], cachedAt: null, count: 1 },
+            { projectId: 2, projectName: 'beta', tree: [issueB], cachedAt: null, count: 1 },
+          ],
+          cachedAt: '2026-04-02T10:00:00Z',
+          count: 2,
+        });
+      }
+      if (path === 'projects') {
+        return Promise.resolve([
+          { id: 1, name: 'alpha', githubRepo: 'u/alpha', maxActiveTeams: 5, activeTeamCount: 0, queuedTeamCount: 0, status: 'active' },
+          { id: 2, name: 'beta', githubRepo: 'u/beta', maxActiveTeams: 5, activeTeamCount: 0, queuedTeamCount: 0, status: 'active' },
+        ]);
+      }
+      return Promise.resolve({});
+    });
+    mockPost.mockResolvedValue({ tree: [], refreshedAt: null, issueCount: 0 });
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('alpha')).toBeInTheDocument();
+    });
+
+    const projectRefreshBtn = screen.getByTestId('project-refresh-1');
+    expect(projectRefreshBtn).toHaveAttribute('aria-label', 'Refresh alpha');
+
+    const { fireEvent } = await import('@testing-library/react');
+    fireEvent.click(projectRefreshBtn);
+
+    await waitFor(() => {
+      expect(mockPost).toHaveBeenCalledWith('issues/refresh', { projectId: 1 });
+    });
+  });
+
+  it('per-project Refresh button is rendered in single-project view', async () => {
+    setupMockApi();
+
+    render(<IssueTreeView />);
+    await waitFor(() => {
+      expect(screen.getByText('Issue Tree')).toBeInTheDocument();
+    });
+
+    // The single active project has id=1 (from makeProjectsResponse)
+    const projectRefreshBtn = await screen.findByTestId('project-refresh-1');
+    expect(projectRefreshBtn).toHaveAttribute('aria-label', 'Refresh test-project');
+  });
 });
