@@ -26,10 +26,13 @@ interface UseTeamDetailDataResult {
 // ---------------------------------------------------------------------------
 
 /** Cache TTL for non-critical data (roster, transitions, message edges) */
-const CACHE_TTL = 30_000;
+const CACHE_TTL = 5_000;
 
 /** Debounce delay for SSE-triggered refreshes */
 const SSE_DEBOUNCE_MS = 2_000;
+
+/** Periodic refresh interval used to recover from SSE-debounce reset loops on active teams */
+const POLL_INTERVAL_MS = 5_000;
 
 // ---------------------------------------------------------------------------
 // Hook
@@ -46,7 +49,12 @@ const SSE_DEBOUNCE_MS = 2_000;
  *
  * On SSE events for the selected team, only re-fetches the detail endpoint
  * (debounced at 2s). Roster, transitions, and message edges are only
- * re-fetched if their cache is stale (> 30s).
+ * re-fetched if their cache is stale (> 5s).
+ *
+ * A periodic 5s interval also calls `refreshDetail()` while a team is
+ * selected. This guarantees that roster and message edges populate even when
+ * the SSE-driven debounce keeps getting reset by continuous events on a
+ * highly-active team.
  */
 export function useTeamDetailData(
   selectedTeamId: number | null,
@@ -253,6 +261,22 @@ export function useTeamDetailData(
       }
     };
   }, [lastEvent, lastEventTeamId, selectedTeamId, refreshDetail]);
+
+  // ---------------------------------------------------------------------------
+  // Periodic refresh — guarantees roster/edges populate even when continuous
+  // SSE events keep resetting the debounce timer above (active-team case).
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    if (selectedTeamId == null) return;
+
+    const handle = setInterval(() => {
+      refreshDetail();
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      clearInterval(handle);
+    };
+  }, [selectedTeamId, refreshDetail]);
 
   return { detail, transitions, roster, messageEdges, loading, error, refreshDetail };
 }

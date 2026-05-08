@@ -270,6 +270,69 @@ describe('useTeamDetailData', () => {
     expect(mockGet.mock.calls.length).toBe(callCountAfterInit);
   });
 
+  it('periodic refresh re-fetches roster and message edges while a team is selected', async () => {
+    const detail = makeDetail();
+    const transitions = makeTransitions();
+    const rosterData = makeRoster();
+    const edges = makeEdges();
+
+    mockGet.mockImplementation((path: string) => {
+      if (path === 'teams/1') return Promise.resolve(detail);
+      if (path === 'teams/1/transitions') return Promise.resolve(transitions);
+      if (path === 'teams/1/roster') return Promise.resolve(rosterData);
+      if (path === 'teams/1/messages/summary') return Promise.resolve(edges);
+      return Promise.reject(new Error(`Unexpected path: ${path}`));
+    });
+
+    // Install fake timers BEFORE rendering so the hook's setInterval is
+    // registered with the fake-timer queue. Use shouldAdvanceTime: true so
+    // micro-timers (like the ones React uses internally) still progress and
+    // don't deadlock the initial useEffect.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const { result, rerender } = renderHook(
+        ({ teamId, lastEvent, lastEventTeamId }: {
+          teamId: number | null;
+          lastEvent: Date | null;
+          lastEventTeamId: number | null;
+        }) => useTeamDetailData(teamId, lastEvent, lastEventTeamId),
+        { initialProps: { teamId: 1, lastEvent: null as Date | null, lastEventTeamId: null as number | null } },
+      );
+
+      // Wait for the initial Promise.allSettled to resolve. With shouldAdvanceTime:true,
+      // waitFor's internal setTimeout still polls.
+      await waitFor(() => {
+        expect(result.current.loading).toBe(false);
+      });
+
+      const initialRosterCalls = mockGet.mock.calls.filter(([p]) => p === 'teams/1/roster').length;
+      const initialEdgesCalls = mockGet.mock.calls.filter(([p]) => p === 'teams/1/messages/summary').length;
+
+      expect(initialRosterCalls).toBe(1);
+      expect(initialEdgesCalls).toBe(1);
+
+      // Simulate continuous SSE events at 1 Hz for 6 seconds, like an active
+      // team would emit. Each rerender resets the SSE debounce timer (the bug
+      // being worked around). The new periodic interval (POLL_INTERVAL_MS =
+      // 5_000) should still fire at t=5s and re-fetch the stale caches.
+      for (let t = 1; t <= 6; t++) {
+        await act(async () => {
+          rerender({ teamId: 1, lastEvent: new Date(), lastEventTeamId: 1 });
+          await vi.advanceTimersByTimeAsync(1000);
+        });
+      }
+
+      const rosterCallsAfter = mockGet.mock.calls.filter(([p]) => p === 'teams/1/roster').length;
+      const edgesCallsAfter = mockGet.mock.calls.filter(([p]) => p === 'teams/1/messages/summary').length;
+
+      // The periodic interval should have fired at least once (at t=5s) and refetched roster + edges.
+      expect(rosterCallsAfter).toBeGreaterThan(initialRosterCalls);
+      expect(edgesCallsAfter).toBeGreaterThan(initialEdgesCalls);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('exposes refreshDetail as a stable function', async () => {
     const detail = makeDetail();
     mockGet.mockResolvedValue(detail);

@@ -883,6 +883,22 @@ const teamsRoutes: FastifyPluginCallback = (
         const teamId = parseIdParam(request.params.id, 'id');
         const service = getTeamService();
         const summary = service.getMessageSummary(teamId);
+
+        // Diagnostic: if the message summary is empty but the team has spawned
+        // a subagent in the last 30 minutes, something has gone wrong in the
+        // inter-agent message capture pipeline. Emit a warn-level log so it
+        // shows up in production logs without affecting the response.
+        if (Array.isArray(summary) && summary.length === 0) {
+          const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+          const recentSubagentStarts = service.countRecentSubagentStarts(teamId, since);
+          if (recentSubagentStarts > 0) {
+            request.log.warn(
+              { teamId, recentSubagentStarts, since },
+              'Empty agent_messages/summary despite recent SubagentStart events',
+            );
+          }
+        }
+
         return reply.code(200).send(summary);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {
