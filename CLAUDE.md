@@ -230,9 +230,9 @@ The SSE broker emits 18 event types:
 | `FLEET_PROMPT_CACHE_1H` | `true` | When `true`, set `ENABLE_PROMPT_CACHING_1H=1` on spawned CC processes for 1-hour prompt cache TTL. Set to `false` to use the default 5-minute TTL. |
 | `FLEET_DEBUG_RAW_ISSUE_BODY` | `false` | When `true`, write `.fleet-issue-body-raw.md` next to `.fleet-issue-context.md` containing the unmodified GitHub issue body, for debugging image-preservation discrepancies. |
 | `LOG_LEVEL` | `info` | Server log level |
-| `FLEET_GITHUB_POLL_MS` | `30000` | GitHub PR/CI/merge poll interval (ms) |
-| `FLEET_ISSUE_POLL_MS` | `300000` | Issue list poll interval (ms, default 5min) |
-| `FLEET_ISSUE_UPDATE_POLL_MS` | `30000` | Issue update (comments, labels, body) poll interval (ms) |
+| `FLEET_GITHUB_POLL_MS` | `60000` | GitHub PR/CI/merge poll interval (ms) |
+| `FLEET_ISSUE_POLL_MS` | `600000` | Issue list poll interval (ms, default 10min) |
+| `FLEET_ISSUE_UPDATE_POLL_MS` | `60000` | Issue update (comments, labels, body) poll interval (ms) |
 | `FLEET_STUCK_CHECK_MS` | `60000` | Stuck/idle detection check interval (ms) |
 | `FLEET_USAGE_POLL_MS` | `900000` | Usage percentage poll interval (ms, default 15min) |
 | `FLEET_MAP_CLEANUP_MS` | `3600000` | In-memory map cleanup interval (ms, default 1hr) |
