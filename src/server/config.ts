@@ -131,6 +131,12 @@ const config = Object.freeze({
 
   idleThresholdMin: safeParseInt(process.env['FLEET_IDLE_THRESHOLD_MIN'] || '5', 'FLEET_IDLE_THRESHOLD_MIN'),
   stuckThresholdMin: safeParseInt(process.env['FLEET_STUCK_THRESHOLD_MIN'] || '10', 'FLEET_STUCK_THRESHOLD_MIN'),
+  /**
+   * Minutes a subagent (planner/dev/reviewer) may be silent during an in-progress
+   * team_tasks row before FC sends `subagent_stuck` to the TL with respawn
+   * instructions (issue #689). Set to 0 to disable subagent-stuck detection.
+   */
+  subagentStuckThresholdMin: safeParseInt(process.env['FLEET_SUBAGENT_STUCK_THRESHOLD_MIN'] || '3', 'FLEET_SUBAGENT_STUCK_THRESHOLD_MIN'),
   launchTimeoutMin: safeParseInt(process.env['FLEET_LAUNCH_TIMEOUT_MIN'] || '5', 'FLEET_LAUNCH_TIMEOUT_MIN'),
   maxUniqueCiFailures: safeParseInt(process.env['FLEET_MAX_CI_FAILURES'] || '3', 'FLEET_MAX_CI_FAILURES'),
 
@@ -262,6 +268,7 @@ export function validateConfig(): void {
   const nonNegativeIntegers: Array<[string, number]> = [
     ['idleThresholdMin', config.idleThresholdMin],
     ['stuckThresholdMin', config.stuckThresholdMin],
+    ['subagentStuckThresholdMin', config.subagentStuckThresholdMin],
     ['ccQueryMaxRetries', config.ccQueryMaxRetries],
   ];
   for (const [name, value] of nonNegativeIntegers) {
