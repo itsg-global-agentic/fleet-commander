@@ -250,9 +250,11 @@ Dev writes a summary including: what changed (files list with descriptions), any
 ### Edge Case: Dev Gets Stuck
 
 - FC's stuck detector will nudge TL if the team is idle too long
+- FC also runs a per-subagent watchdog. If the dev (or any subagent) is silent for `FLEET_SUBAGENT_STUCK_THRESHOLD_MIN` minutes (default 3) while a `team_tasks` row is `in_progress`, FC sends `subagent_stuck` to the TL — see "On `subagent_stuck`" above.
 - TL checks if the dev agent is still active (TaskList)
 - If dev is stuck: send a message with more context, hints, or simplified scope
 - If dev is unresponsive after nudge: stop the dev agent, spawn a fresh one with additional context from the failed attempt
+- **Never silently absorb the dev's role yourself** — respawn the dev (within budget) instead. Absorbing the role doubles cost (issue #689).
 
 ---
 
@@ -384,6 +386,7 @@ Fleet Commander sends these messages directly to the TL via stdin. They arrive a
 | `issue_labels_changed` | Priority/blocking labels change | "Labels changed on issue #{KEY}: {added} added, {removed} removed." |
 | `issue_closed_externally` | Issue closed outside team | "Issue #{KEY} was closed externally. Wrap up and shut down." |
 | `issue_body_updated` | Issue description edited | "The description of issue #{KEY} has been updated. Review latest requirements." |
+| `subagent_stuck` | Subagent silent past threshold while task in_progress | "FC subagent watchdog: subagent '{NAME}' has been silent for {N} minutes (tool_use_id={ID}). Do NOT absorb its role. Run TaskList → shutdown_request → respawn the same subagent type with refreshed context. Decrement respawn budget." |
 
 ### TL Response to FC Messages
 
@@ -398,6 +401,13 @@ Fleet Commander sends these messages directly to the TL via stdin. They arrive a
 **On `issue_labels_changed`**: Check for priority shifts (`blocking`/`urgent`). If `blocked` added, investigate and report to FC.
 **On `issue_closed_externally`**: Stop work, push pending changes, shut down all agents.
 **On `issue_body_updated`**: Re-read requirements, forward to dev if they affect current work.
+**On `subagent_stuck`**: A subagent (planner/dev/reviewer) has gone silent past the watchdog threshold. **Do NOT silently take over its role yourself** — that doubles cost. Follow this protocol exactly:
+   1. Run `TaskList` to confirm the named subagent is still listed as `in_progress`.
+   2. Send `shutdown_request` to it via `TaskUpdate`.
+   3. Wait up to 30 seconds for `shutdown_response`.
+   4. Spawn a fresh subagent of the SAME type via the `Agent` tool. Re-read `plan.md` / `changes.md` / `review.md` (whichever applies) so the new spawn has fresh context. Include this line in its prompt: "Previous spawn went unresponsive — retry with focused execution."
+   5. Subtract 1 from your respawn budget (max 5 per team run, see Respawn Budget section).
+   6. If the budget is exhausted, do NOT respawn — report BLOCKED via the issue and stop.
 
 ---
 

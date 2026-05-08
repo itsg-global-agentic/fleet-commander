@@ -302,6 +302,19 @@ INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
 
 {{BODY_DIFF_SUMMARY}}',
    'Sent to TL when the issue body/description is edited');
+INSERT OR IGNORE INTO message_templates (id, template, description) VALUES
+  ('subagent_stuck',
+   'FC subagent watchdog: subagent ''{{AGENT_NAME}}'' has been silent for {{IDLE_MINUTES}} minutes (tool_use_id={{TOOL_USE_ID}}). It is likely stuck or has crashed silently. Do NOT absorb its role yourself — that doubles cost.
+
+Required actions, in order:
+1. Run `TaskList` to confirm the subagent is still listed as in_progress.
+2. Send `shutdown_request` to it via `TaskUpdate`.
+3. Wait up to 30 seconds for shutdown_response.
+4. Spawn a fresh ''{{AGENT_NAME}}'' via `Agent` tool with the SAME task context (re-read plan.md/changes.md/review.md as needed). Include in the prompt: "Previous spawn went unresponsive — retry with focused execution."
+5. Subtract 1 from your respawn budget (max 5 per team run).
+
+If you have reached the respawn budget, report BLOCKED via TaskList comment instead of respawning.',
+   'Sent to TL when a subagent is silent past the subagent-stuck threshold while a task is in_progress');
 
 -- ---------------------------------------------------------------------------
 -- TEAM TRANSITIONS — state machine transition history per team

@@ -194,6 +194,22 @@ export class TeamManager {
   /** Timestamp of last meaningful stdout stream event per team (hook fallback) */
   private lastStreamAt: Map<number, number> = new Map();
 
+  /**
+   * Per-team, per-subagent activity tracking (issue #689).
+   * Outer map: teamId -> inner map.
+   * Inner map: agentName -> { lastEventAt, toolUseId, startedAt }.
+   *
+   * Seeded when the TL spawns a subagent via the Agent/Task tool (parsed from
+   * the assistant tool_use content block). Updated on every stream event whose
+   * resolvedAgentName != 'team-lead'. Cleared when the subagent's tool_result
+   * arrives or when the team is purged. Used by StuckDetector to detect
+   * unresponsive subagents and emit the `subagent_stuck` warning.
+   */
+  private subagentActivity: Map<
+    number,
+    Map<string, { lastEventAt: number; toolUseId: string; startedAt: number }>
+  > = new Map();
+
   // -------------------------------------------------------------------------
   // syncWithOrigin — fetch + pull before creating a worktree
   // -------------------------------------------------------------------------
@@ -1609,6 +1625,32 @@ export class TeamManager {
   }
 
   // -------------------------------------------------------------------------
+  // Subagent activity accessors (issue #689)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Return a snapshot of per-subagent activity for this team. The returned
+   * Map is the live internal state — callers must not mutate the contained
+   * entry objects. Used by StuckDetector to evaluate silent subagents.
+   */
+  getSubagentActivity(
+    teamId: number,
+  ): Map<string, { lastEventAt: number; toolUseId: string; startedAt: number }> {
+    return this.subagentActivity.get(teamId) ?? new Map();
+  }
+
+  /**
+   * Forget the activity entry for a single agent on a team. StuckDetector
+   * calls this once it has emitted a `subagent_stuck` warning, but only
+   * after a confirmed stuck event is acknowledged in some other path. The
+   * standard recovery path is the tool_result handler, which clears the
+   * entry automatically.
+   */
+  clearSubagentActivity(teamId: number, agentName: string): void {
+    this.subagentActivity.get(teamId)?.delete(agentName);
+  }
+
+  // -------------------------------------------------------------------------
   // gracefulShutdown — notify TL of merge, wait grace period, then kill
   // -------------------------------------------------------------------------
 
@@ -2417,7 +2459,23 @@ export class TeamManager {
                     if (toolId && (toolName === 'Agent' || toolName === 'Task' || toolName === 'dispatch_agent')) {
                       const input = toolBlock.input as Record<string, unknown> | undefined;
                       const agentName = (input?.agent_name ?? input?.name ?? 'subagent') as string;
-                      agentMap.set(toolId, agentName.toLowerCase());
+                      const lowered = agentName.toLowerCase();
+                      agentMap.set(toolId, lowered);
+
+                      // Seed subagent activity tracking (issue #689). Each
+                      // subagent spawn gets a fresh entry keyed by lowered
+                      // agent name. A respawn of the same agent type
+                      // overwrites the prior entry — the new toolUseId
+                      // resets the dedup slate in StuckDetector.
+                      if (!this.subagentActivity.has(teamId)) {
+                        this.subagentActivity.set(teamId, new Map());
+                      }
+                      const now = Date.now();
+                      this.subagentActivity.get(teamId)!.set(lowered, {
+                        lastEventAt: now,
+                        toolUseId: toolId,
+                        startedAt: now,
+                      });
                     }
 
                     // Stdout fallback: extract tasks from TodoWrite tool_use blocks
@@ -2513,6 +2571,31 @@ export class TeamManager {
             // Track stdout activity for hook fallback (#446)
             if (['assistant', 'tool_use', 'tool_result', 'system'].includes(event.type)) {
               this.lastStreamAt.set(teamId, Date.now());
+
+              // Subagent activity tracking (issue #689). Update lastEventAt
+              // for the resolved agent so the watchdog in StuckDetector can
+              // detect silent subagents.
+              if (resolvedAgentName !== 'team-lead' && resolvedAgentName !== '__pm__' && resolvedAgentName !== '__fc__') {
+                const teamActivity = this.subagentActivity.get(teamId);
+                const entry = teamActivity?.get(resolvedAgentName);
+                if (entry) {
+                  entry.lastEventAt = Date.now();
+                }
+              }
+
+              // Clear subagent activity entry when its parent tool_result
+              // arrives (subagent has returned a final result). Match by
+              // tool_use_id stored in the activity entry. tool_result events
+              // carry the originating tool_use_id which equals the agentMap
+              // key for that subagent.
+              if (event.type === 'tool_result') {
+                const resultId = (ev.tool_use_id as string | undefined)
+                  ?? ((ev.message as Record<string, unknown> | undefined)?.tool_use_id as string | undefined);
+                if (typeof resultId === 'string' && agentMap.has(resultId)) {
+                  const finishedAgent = agentMap.get(resultId)!;
+                  this.subagentActivity.get(teamId)?.delete(finishedAgent);
+                }
+              }
 
               // Fallback: transition launching→running from stdout when hooks don't fire
               try {
@@ -2786,7 +2869,7 @@ export class TeamManager {
   // corresponding .delete() call here. The maps cleaned are:
   //   outputBuffers, childProcesses, stdinPipes, parsedEvents, tokenCounters,
   //   agentMaps, lastStreamAt, shutdownTimers, thinkingTeams,
-  //   thinkingStartTimes, thinkingBlockIndex
+  //   thinkingStartTimes, thinkingBlockIndex, subagentActivity
   // -------------------------------------------------------------------------
 
   /**
@@ -2813,6 +2896,7 @@ export class TeamManager {
     this.tokenCounters.delete(teamId);
     this.agentMaps.delete(teamId);
     this.lastStreamAt.delete(teamId);
+    this.subagentActivity.delete(teamId);
   }
 
   // -------------------------------------------------------------------------
@@ -2864,6 +2948,7 @@ export class TeamManager {
     for (const id of this.thinkingTeams) allTeamIds.add(id);
     for (const id of this.thinkingStartTimes.keys()) allTeamIds.add(id);
     for (const id of this.thinkingBlockIndex.keys()) allTeamIds.add(id);
+    for (const id of this.subagentActivity.keys()) allTeamIds.add(id);
 
     let purged = 0;
     for (const teamId of allTeamIds) {

@@ -150,6 +150,18 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     hookEvent: null,
   },
   {
+    id: 'subagent_stuck',
+    from: 'running',
+    to: 'running',
+    trigger: 'timer',
+    triggerLabel: 'Subagent stuck',
+    description:
+      "A subagent has been silent past FLEET_SUBAGENT_STUCK_THRESHOLD_MIN (default 3min) while a team_tasks row is in_progress. FC sends a subagent_stuck stdin message to the TL with respawn instructions to prevent the TL from absorbing the subagent's role at 2x cost (issue #689).",
+    condition:
+      'subagent.lastEventAt + subagentStuckThresholdMin < now AND team has in_progress team_tasks AND team is not in extended thinking',
+    hookEvent: null,
+  },
+  {
     id: 'stuck-failed',
     from: 'stuck',
     to: 'failed',

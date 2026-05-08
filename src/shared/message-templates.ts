@@ -176,4 +176,12 @@ export const DEFAULT_MESSAGE_TEMPLATES: DefaultMessageTemplate[] = [
     description: 'Sent to TL when excessive gh pr view/checks polling is detected.',
     placeholders: [],
   },
+  {
+    id: 'subagent_stuck',
+    template:
+      "FC subagent watchdog: subagent '{{AGENT_NAME}}' has been silent for {{IDLE_MINUTES}} minutes (tool_use_id={{TOOL_USE_ID}}). It is likely stuck or has crashed silently. Do NOT absorb its role yourself — that doubles cost.\n\nRequired actions, in order:\n1. Run `TaskList` to confirm the subagent is still listed as in_progress.\n2. Send `shutdown_request` to it via `TaskUpdate`.\n3. Wait up to 30 seconds for shutdown_response.\n4. Spawn a fresh '{{AGENT_NAME}}' via `Agent` tool with the SAME task context (re-read plan.md/changes.md/review.md as needed). Include in the prompt: \"Previous spawn went unresponsive — retry with focused execution.\"\n5. Subtract 1 from your respawn budget (max 5 per team run).\n\nIf you have reached the respawn budget, report BLOCKED via TaskList comment instead of respawning.",
+    description:
+      'Sent to TL when a subagent is silent past the subagent-stuck threshold while a task is in_progress',
+    placeholders: ['AGENT_NAME', 'IDLE_MINUTES', 'TOOL_USE_ID'],
+  },
 ];

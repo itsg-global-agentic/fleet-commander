@@ -238,6 +238,7 @@ The SSE broker emits 18 event types:
 | `FLEET_MAP_CLEANUP_MS` | `3600000` | In-memory map cleanup interval (ms, default 1hr) |
 | `FLEET_IDLE_THRESHOLD_MIN` | `5` | Minutes before idle status |
 | `FLEET_STUCK_THRESHOLD_MIN` | `10` | Minutes before stuck status |
+| `FLEET_SUBAGENT_STUCK_THRESHOLD_MIN` | `3` | Minutes a subagent (planner/dev/reviewer) may be silent during an in-progress task before FC sends `subagent_stuck` to the TL with respawn instructions (issue #689). Set to `0` to disable. |
 | `FLEET_LAUNCH_TIMEOUT_MIN` | `5` | Minutes before a launching team is marked failed |
 | `FLEET_MAX_CI_FAILURES` | `3` | Unique CI failures before blocking |
 | `FLEET_EARLY_CRASH_THRESHOLD_SEC` | `120` | Seconds before a SubagentStop is considered an early crash |
