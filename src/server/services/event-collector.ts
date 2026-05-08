@@ -109,6 +109,17 @@ export interface EventCollectorDb {
     content: string;
     agentName?: string | null;
   }): { file: HandoffFile; deduplicated: boolean };
+  /**
+   * Back-fill the spawn prompt onto the OLDEST unfilled `agent_messages` row
+   * with `summary='spawned agent'` for the given team and recipient. Used
+   * when `PostToolUse(Task)` carries the prompt that wasn't present on the
+   * preceding `SubagentStart`. Returns true on update, false otherwise.
+   */
+  backfillSpawnPromptForTask?(data: {
+    teamId: number;
+    taskSubagentType: string | null;
+    prompt: string;
+  }): boolean;
 }
 
 /** SSE broker interface for broadcasting events */
@@ -227,6 +238,61 @@ export function normalizeAgentName(name: string | null | undefined): string {
     normalized = normalized.slice(6);
   }
   return normalized;
+}
+
+// ---------------------------------------------------------------------------
+// Spawn prompt capture (Issue #713)
+// ---------------------------------------------------------------------------
+
+/** 50KB cap (in bytes) for spawn prompt content stored in agent_messages.content. */
+const SPAWN_PROMPT_MAX_BYTES = 51200;
+
+/**
+ * Extract the TL's spawn prompt from a hook payload's `tool_input` field.
+ *
+ * Both `SubagentStart` and `PostToolUse(Task)` hook events may include a
+ * `tool_input` field carrying the JSON-stringified Task tool input. When
+ * present, the parsed object's `prompt` property is the prompt the TL passed
+ * to the Task tool. We extract it opportunistically and cap the length at
+ * 50KB to bound storage.
+ *
+ * Returns `null` when:
+ *   - `tool_input` is missing or empty
+ *   - `tool_input` is not valid JSON
+ *   - the parsed value is not an object or has no non-empty string `prompt` property
+ */
+export function extractSpawnPrompt(payload: EventPayload): string | null {
+  const raw = payload.tool_input;
+  if (!raw || typeof raw !== 'string' || raw.trim() === '') return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj.prompt !== 'string' || obj.prompt.length === 0) return null;
+    return obj.prompt.slice(0, SPAWN_PROMPT_MAX_BYTES);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract the `subagent_type` field from a hook payload's `tool_input` field.
+ * Used to look up the matching spawn row when back-filling the prompt from
+ * a `PostToolUse(Task)` event. Returns `null` when the field is missing or
+ * `tool_input` is unparseable.
+ */
+function extractSubagentType(payload: EventPayload): string | null {
+  const raw = payload.tool_input;
+  if (!raw || typeof raw !== 'string' || raw.trim() === '') return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const obj = parsed as Record<string, unknown>;
+    if (typeof obj.subagent_type !== 'string' || obj.subagent_type.length === 0) return null;
+    return obj.subagent_type;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -513,12 +579,17 @@ export function processEvent(
     const subagentName = payload.teammate_name || payload.agent_type || 'unknown';
     const senderName = normalizeAgentName(null); // TL spawns subagents
     const recipientName = normalizeAgentName(subagentName);
+    // Issue #713: capture the TL's spawn prompt when present in tool_input.
+    // The prompt may arrive on SubagentStart (CC version-dependent) OR on
+    // the subsequent PostToolUse(Task) event (handled via back-fill below).
+    // 50KB cap is enforced inside extractSpawnPrompt.
+    const spawnPrompt = extractSpawnPrompt(payload);
     agentMessages.push({
       teamId,
       sender: senderName,
       recipient: recipientName,
       summary: 'spawned agent',
-      content: null,
+      content: spawnPrompt,
       sessionId: payload.session_id || null,
     });
   }
@@ -532,6 +603,39 @@ export function processEvent(
       content: payload.message || null,
       sessionId: payload.session_id || null,
     });
+  }
+
+  // ── Back-fill spawn prompt from PostToolUse(Task) (issue #713) ───
+  // When TL invokes the Task tool, two hook events arrive:
+  //   1. SubagentStart — fires when the subagent process starts. May or may
+  //      not carry tool_input.prompt depending on CC version.
+  //   2. ToolUse for tool_name=Task — fires after the subagent finishes.
+  //      Reliably carries tool_input.{subagent_type, description, prompt}.
+  // If the SubagentStart row has no captured content yet, opportunistically
+  // populate it now from the Task tool's prompt. This is opt-in (the DB
+  // method may be undefined on the mock interface) and best-effort.
+  if (
+    evtLower === 'tool_use' &&
+    payload.tool_name === 'Task' &&
+    typeof db.backfillSpawnPromptForTask === 'function'
+  ) {
+    try {
+      const taskPrompt = extractSpawnPrompt(payload);
+      const taskSubagentType = extractSubagentType(payload);
+      if (taskPrompt && taskSubagentType) {
+        db.backfillSpawnPromptForTask({
+          teamId,
+          taskSubagentType,
+          prompt: taskPrompt,
+        });
+      }
+    } catch (err) {
+      // Non-critical: spawn-prompt back-fill is opportunistic. Log but do
+      // not abort event processing.
+      console.warn(
+        `[EventCollector] Spawn prompt back-fill failed for team=${payload.team}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   // ── Dedup: drop back-to-back identical shutdown events (issue #691 C) ─

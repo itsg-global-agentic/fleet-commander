@@ -479,6 +479,42 @@ export interface MessageEdge {
   lastSummary: string | null;
 }
 
+/**
+ * Terminal status of a subagent spawn.
+ *
+ * - `running`: no `SubagentStop` event has been observed for this spawn yet.
+ * - `done`: a `SubagentStop` event was recorded after the spawn timestamp.
+ *
+ * Note: a `'crashed'` value is intentionally NOT emitted in v1. The crash
+ * heuristic (early SubagentStop with few tool_use events) lives in the
+ * runtime tracker; surfacing it from the DB is future work.
+ */
+export type SpawnTerminalStatus = 'running' | 'done';
+
+/**
+ * A captured TL->subagent spawn event with optional prompt content.
+ *
+ * One row per `SubagentStart` hook event. The `content` field carries the
+ * TL's spawn prompt (extracted from `tool_input.prompt` on `SubagentStart`
+ * or back-filled from the subsequent `PostToolUse(Task)` event). When the
+ * prompt could not be captured, `content` is `null` and the UI renders a
+ * "no prompt recorded" placeholder.
+ *
+ * `terminalStatus` is computed at query time by checking whether a
+ * `SubagentStop` event for the same recipient was recorded at or after
+ * the spawn's `createdAt` timestamp.
+ */
+export interface SpawnRecord {
+  id: number;
+  recipient: string;
+  sender: string;
+  content: string | null;
+  sessionId: string | null;
+  createdAt: string;
+  eventId: number | null;
+  terminalStatus: SpawnTerminalStatus;
+}
+
 // ---------------------------------------------------------------------------
 // Issue Dependencies (GitHub issue dependency tracking)
 // ---------------------------------------------------------------------------
