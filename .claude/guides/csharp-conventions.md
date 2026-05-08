@@ -1,4 +1,4 @@
-<!-- fleet-commander v0.0.23 -->
+<!-- fleet-commander v0.0.24 -->
 # C# / .NET Conventions
 
 > Applies to: `*.cs`, `*.csproj`, `Directory.Build.props`
