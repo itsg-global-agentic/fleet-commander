@@ -349,6 +349,24 @@ Configuration locations (defense-in-depth):
 - `hooks/settings.json.example` — template copied to every worktree's `.claude/settings.json` on team launch. Carries the top-level `"autoMemoryEnabled": false` key.
 - `src/server/utils/cc-spawn.ts` — the `buildEnv()` helper sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` on every spawned CC process. On Windows interactive launches, the var is also written into the temp `.cmd` launcher file by `writeLauncherCmdFile()` (which forwards every `CLAUDE_CODE_*` env key).
 
+## CC Subagent Worktree Isolation
+
+Claude Code 2.1.49+ supports `isolation: "worktree"` in subagent frontmatter (and as an Agent tool flag) to run a subagent inside a temporary git worktree. CC creates the worktree at subagent start and removes it at subagent exit when there are no uncommitted changes / new commits; on a clean exit the worktree is fully torn down. WorktreeCreate / WorktreeRemove hooks fire on both events (issue #731).
+
+**Fleet Commander's Diamond subagents (planner, dev, reviewer) do NOT use `isolation: "worktree"`.** Concrete reasons:
+
+- The Diamond workflow is strictly sequential (planner → dev → reviewer; see `templates/workflow.md`). No two FC subagents ever edit the same files concurrently, so the isolation flag's parallelism benefit is zero for the default workflow.
+- The planner and reviewer are read-only — they only write their handoff files (`plan.md`, `review.md`) into the team's main worktree and never edit source. Isolating them would just add a worktree create/destroy round-trip with no upside.
+- The dev is the only writer, and isolating the dev actively breaks it. CC's subagent worktrees branch from `origin/HEAD` (default branch) unless `worktree.baseRef: "head"` is set in CC settings. The dev's commits would end up on the wrong branch in a different directory, and the TL's Phase 4 rebase / push runs in the team's main worktree which would never see those commits. (See `worktree.baseRef` discussion in `https://code.claude.com/docs/en/worktrees`.)
+
+**When isolation IS useful (and permitted):** A TL may spawn multiple **read-only** research subagents in parallel via the `Agent` tool with `isolation: "worktree"` — for example, three subagents scanning different subtrees of a large repository. Each runs in its own throwaway worktree, no concurrent edits hit shared files, and CC tears the worktrees down automatically. This pattern is documented in `templates/workflow.md` under "Parallel research subagents (optional)". Do not use isolation for any subagent that needs to see uncommitted or unpushed work from a sibling subagent — the subworktree starts from `origin/HEAD` and is blind to in-flight changes elsewhere.
+
+**FC tracking and cleanup:**
+
+- Issue #731 added `WorktreeCreate` / `WorktreeRemove` hooks (`hooks/on_worktree_create.sh`, `hooks/on_worktree_remove.sh`) plus the `team_subworktrees` DB table. Every CC-initiated subworktree is recorded with `createdVia = 'cc'`; clean teardown sets `removed_at`.
+- Issue #737 added automatic cleanup of orphan CC subworktrees when a team transitions to `done` or `failed`. The function `cleanupTeamCcSubworktrees(teamId)` in `src/server/services/cleanup.ts` runs `git worktree remove --force` (with `fs.rmSync` fallback) for any active CC subworktree row, then marks `removed_at` so retries are bounded. It is invoked from `team-manager.ts` `stop()` and `handleProcessExit()` after the terminal-state DB transition.
+- The team's main worktree (the one FC itself created) is NOT auto-removed. That remains a manual operation via the Projects → Cleanup UI.
+
 ## MCP Server
 
 Fleet Commander exposes tools via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio transport. This allows Claude Code (or any MCP client) to query fleet state programmatically.

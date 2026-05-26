@@ -126,6 +126,19 @@ All implementation work is assigned to the single `fleet-dev` agent. The Planner
 | Generic / unknown | CLAUDE.md only (no language-specific guidebook) |
 | Mixed (A + B) | Multiple guidebooks — dev reads all relevant ones |
 
+## Parallel research subagents (optional)
+
+The Diamond team (planner + dev + reviewer) is strictly sequential. None of those three agents use `isolation: "worktree"` — see CLAUDE.md "CC Subagent Worktree Isolation" for why.
+
+You MAY, however, spawn ad-hoc **read-only research subagents in parallel** if you need to scan a large codebase or gather diverse perspectives quickly. When you do, pass `isolation: "worktree"` to the `Agent` tool so the parallel subagents each get their own throwaway worktree and cannot collide on shared files:
+
+- Use this ONLY for subagents that **read** code/docs and return findings — never for code-writing work.
+- Do NOT isolate any of `fleet-planner`, `fleet-dev`, or `fleet-reviewer` — they need access to the team's main worktree to read/write `plan.md`, source files, `changes.md`, and `review.md`.
+- Isolated subagents see `origin/{{BASE_BRANCH}}`, not the dev's in-flight commits or uncommitted work — do not isolate any subagent that must inspect work-in-progress.
+- Fleet Commander auto-cleans CC subworktrees when the team finishes (see `cleanupTeamCcSubworktrees` in `src/server/services/cleanup.ts`), so you do not need to worry about leaked directories if a parallel subagent crashes.
+
+Default behavior: **do not spawn parallel subagents at all.** The Diamond agents cover every standard implementation flow. Only reach for parallel research when the task explicitly calls for breadth (e.g., a multi-area refactor scoping exercise).
+
 ## Workflow State Machine
 
 ```mermaid

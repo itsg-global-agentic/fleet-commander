@@ -92,6 +92,17 @@ vi.mock('../../src/server/services/issue-context-generator.js', () => ({
   generateIssueContext: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Issue #737: spy on cleanupTeamCcSubworktrees so we can assert it is invoked
+// at the right transition points. Default implementation returns an empty
+// result; individual tests override with mockImplementation when they need
+// to simulate a throw.
+const mockCleanupTeamCcSubworktrees = vi.hoisted(() =>
+  vi.fn().mockReturnValue({ removed: [], failed: [] }),
+);
+vi.mock('../../src/server/services/cleanup.js', () => ({
+  cleanupTeamCcSubworktrees: mockCleanupTeamCcSubworktrees,
+}));
+
 import { TeamManager } from '../../src/server/services/team-manager.js';
 
 // ---------------------------------------------------------------------------
@@ -284,6 +295,66 @@ describe('TeamManager.stop', () => {
 
     // stop() completed without needing the full 5000ms
     expect(mockStdin.end).toHaveBeenCalled();
+  });
+
+  // ---------------------------------------------------------------------------
+  // Issue #737 — fire CC subworktree auto-cleanup after stop
+  // ---------------------------------------------------------------------------
+
+  it('invokes cleanupTeamCcSubworktrees after PM stop (issue #737)', async () => {
+    const team = makeTeam({ id: 1, status: 'running', pid: 12345 });
+
+    (tm as any).stdinPipes.set(1, createMockStdin());
+    (tm as any).childProcesses.set(1, createMockChildProcess());
+
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.updateTeam.mockReturnValue(team);
+
+    const stopPromise = tm.stop(1);
+    await vi.advanceTimersByTimeAsync(6000);
+    await stopPromise;
+    // Flush the microtask that schedules cleanupTeamCcSubworktrees
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockCleanupTeamCcSubworktrees).toHaveBeenCalledWith(1);
+  });
+
+  it('does not block stop() when cleanup helper throws (issue #737)', async () => {
+    const team = makeTeam({ id: 1, status: 'running', pid: 12345 });
+
+    (tm as any).stdinPipes.set(1, createMockStdin());
+    (tm as any).childProcesses.set(1, createMockChildProcess());
+
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.updateTeam.mockReturnValue(team);
+
+    // Simulate a synchronous throw inside cleanupTeamCcSubworktrees.
+    mockCleanupTeamCcSubworktrees.mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const stopPromise = tm.stop(1);
+    await vi.advanceTimersByTimeAsync(6000);
+    // stop() must resolve normally even though the cleanup helper threw
+    await expect(stopPromise).resolves.toBeDefined();
+    // Let the microtask run so the .catch() fires
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // team_stopped SSE was still broadcast — transition completed
+    expect(mockSseBroker.broadcast).toHaveBeenCalledWith(
+      'team_stopped',
+      { team_id: 1 },
+      1,
+    );
+    // The throw was logged
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('cleanupTeamCcSubworktrees failed for team 1'),
+      expect.anything(),
+    );
+    errorSpy.mockRestore();
   });
 });
 
@@ -1061,6 +1132,114 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
 
     // After exit, purgeTeamMaps ran — the cache entry must be gone.
     expect((tm as any).lastAssistantMessages.has(1)).toBe(false);
+  });
+
+  // =========================================================================
+  // Issue #737 — auto-cleanup CC subworktrees on terminal transitions
+  // =========================================================================
+
+  it('issue #737: invokes cleanupTeamCcSubworktrees after done transition (code 0)', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: null });
+    setupTeamMaps(1, child);
+
+    mockDb.getTeam.mockReturnValue(team);
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    expect(mockCleanupTeamCcSubworktrees).toHaveBeenCalledWith(1);
+    // Transition still committed
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'done' }),
+    );
+  });
+
+  it('issue #737: invokes cleanupTeamCcSubworktrees after failed transition (code != 0)', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running' });
+    setupTeamMaps(1, child);
+
+    mockDb.getTeam.mockReturnValue(team);
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 1, null);
+    await flushExit();
+
+    expect(mockCleanupTeamCcSubworktrees).toHaveBeenCalledWith(1);
+    // Transition still committed
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'failed' }),
+    );
+  });
+
+  it('issue #737: does not block done transition when cleanup helper throws', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: null });
+    setupTeamMaps(1, child);
+
+    mockDb.getTeam.mockReturnValue(team);
+
+    mockCleanupTeamCcSubworktrees.mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    // Transition still committed — the throw inside the microtask must not
+    // abort the synchronous done branch.
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        toStatus: 'done',
+      }),
+    );
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'done' }),
+    );
+    // The throw was logged from the .catch() handler
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('cleanupTeamCcSubworktrees failed for team 1'),
+      expect.anything(),
+    );
+    errorSpy.mockRestore();
+  });
+
+  it('issue #737: does not block failed transition when cleanup helper throws', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running' });
+    setupTeamMaps(1, child);
+
+    mockDb.getTeam.mockReturnValue(team);
+
+    mockCleanupTeamCcSubworktrees.mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 1, null);
+    await flushExit();
+
+    // Transition still committed
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        toStatus: 'failed',
+      }),
+    );
+    expect(mockDb.updateTeamSilent).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'failed' }),
+    );
+    errorSpy.mockRestore();
   });
 });
 
