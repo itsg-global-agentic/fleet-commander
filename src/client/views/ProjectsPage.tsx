@@ -93,6 +93,37 @@ function getInstallHealthLabel(color: HealthColor, project?: ProjectSummary): st
 }
 
 // ---------------------------------------------------------------------------
+// Hook mode badge (issue #735)
+// ---------------------------------------------------------------------------
+// Surfaces the project's hook deployment mode so operators can see at a
+// glance whether a project is on the new HTTP transport or the legacy bash
+// path. `null` means the project predates issue #735 and the mode has not
+// yet been recorded — surfaced as "Unknown" until the next reinstall.
+
+function HookModeBadge({ project }: { project: ProjectSummary }) {
+  const mode = project.hookMode;
+  const label = mode === 'http' ? 'HTTP' : mode === 'bash' ? 'Bash' : 'Unknown';
+  const color = mode === 'http' ? '#3FB950' : mode === 'bash' ? '#D29922' : '#8B949E';
+  const tooltip =
+    mode === 'http'
+      ? 'Hooks: native HTTP (CC 2.1.62+). Reinstall to switch modes.'
+      : mode === 'bash'
+        ? 'Hooks: legacy bash + curl. Reinstall with HTTP mode for lower latency.'
+        : 'Hook mode unknown — reinstall to record current mode.';
+
+  return (
+    <div className="relative group shrink-0">
+      <span className="cursor-default" style={{ color }}>
+        hooks: {label}
+      </span>
+      <div className="hidden group-hover:block absolute z-10 bottom-full right-0 mb-1 p-2 rounded bg-[#1C2128] border border-[#30363D] shadow-lg text-xs whitespace-nowrap">
+        <span className="text-[#C9D1D9]">{tooltip}</span>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Install detail categories (reused from original)
 // ---------------------------------------------------------------------------
 
@@ -259,6 +290,8 @@ function InstallHealthDetail({ project, repoSettings }: { project: ProjectSummar
           </div>
         );
       })}
+      {/* Hook mode badge (issue #735) \u2014 HTTP / Bash / Unknown */}
+      <HookModeBadge project={project} />
       {/* Git commit status badge */}
       {s.gitCommitStatus && (
         <div className="relative group shrink-0">
@@ -677,7 +710,12 @@ function ProjectCard({
   onSaveLimit: (projectId: number, value: number) => void;
   onSaveModel: (projectId: number, value: string) => void;
   onSaveEffort: (projectId: number, value: string) => void;
-  onReinstall: (p: ProjectSummary) => void;
+  /**
+   * Reinstall callback. Second arg is the hook deployment mode the user
+   * selected in the mode picker (issue #735). The card always passes a
+   * concrete value so the API call always gets an explicit mode.
+   */
+  onReinstall: (p: ProjectSummary, mode: 'http' | 'bash') => void;
   onCleanup: (p: ProjectSummary) => void;
   onDelete: (p: ProjectSummary) => void;
   onGroupChange: (projectId: number, groupId: number | null) => void;
@@ -688,6 +726,12 @@ function ProjectCard({
   const [committing, setCommitting] = useState(false);
   const [commitResult, setCommitResult] = useState<{ ok: boolean; error?: string; message?: string } | null>(null);
   const [repoSettingsLoaded, setRepoSettingsLoaded] = useState(false);
+  // Mode picker state — defaults to the project's recorded hookMode, or
+  // 'http' for new/unknown projects (issue #735). Operators can flip this
+  // before clicking Reinstall to migrate between transports.
+  const [selectedMode, setSelectedMode] = useState<'http' | 'bash'>(
+    project.hookMode === 'bash' ? 'bash' : 'http',
+  );
   const limitEdit = useInlineEdit<number>(project.maxActiveTeams);
   const modelEdit = useInlineEdit<string>(project.model ?? '');
 
@@ -773,15 +817,28 @@ function ProjectCard({
           </span>
         )}
 
-        {/* Reinstall button */}
+        {/* Hook mode picker + Reinstall button (issue #735) — operators can
+            flip http <-> bash before triggering a reinstall. Defaults to the
+            project's recorded mode, or HTTP for new/unknown projects. */}
+        <select
+          value={selectedMode}
+          onChange={(e) => setSelectedMode(e.target.value as 'http' | 'bash')}
+          onClick={(e) => e.stopPropagation()}
+          disabled={reinstalling === project.id}
+          className="px-2 py-1 text-xs rounded border border-dark-border bg-dark-bg text-dark-text shrink-0 disabled:opacity-40"
+          title="Hook deployment mode — applied on next reinstall"
+        >
+          <option value="http">HTTP (default)</option>
+          <option value="bash">Bash (legacy)</option>
+        </select>
         <button
-          onClick={(e) => { e.stopPropagation(); onReinstall(project); }}
+          onClick={(e) => { e.stopPropagation(); onReinstall(project, selectedMode); }}
           disabled={reinstalling === project.id}
           className="px-3 py-1 text-xs rounded border border-dark-accent/40 text-dark-accent bg-dark-accent/10 hover:bg-dark-accent/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
           title={
             (project.installStatus?.outdatedCount ?? 0) > 0
-              ? `Reinstall (${project.installStatus!.outdatedCount} file${project.installStatus!.outdatedCount === 1 ? '' : 's'} outdated)`
-              : '(Re)install hooks, settings, and workflow prompt'
+              ? `Reinstall in ${selectedMode.toUpperCase()} mode (${project.installStatus!.outdatedCount} file${project.installStatus!.outdatedCount === 1 ? '' : 's'} outdated)`
+              : `(Re)install hooks, settings, and workflow prompt in ${selectedMode.toUpperCase()} mode`
           }
         >
           {reinstalling === project.id ? 'Installing...' : 'Reinstall'}
@@ -1365,7 +1422,7 @@ export function ProjectsPage() {
   }, [fetchProjects]);
 
   const handleReinstall = useCallback(
-    async (project: ProjectSummary) => {
+    async (project: ProjectSummary, mode: 'http' | 'bash') => {
       setReinstalling(project.id);
       setReinstallResult(null);
       try {
@@ -1376,15 +1433,23 @@ export function ProjectsPage() {
           installStatus?: ProjectSummary['installStatus'];
         }>(
           `projects/${project.id}/install`,
-          {},
+          { mode },
         );
         setReinstallResult({ id: project.id, ok: data.ok, error: data.error });
-        // Optimistic update: use the install status from the response
-        if (data.installStatus) {
-          setProjects((prev) =>
-            prev.map((p) => (p.id === project.id ? { ...p, installStatus: data.installStatus } : p)),
-          );
-        }
+        // Optimistic update: use the install status from the response and
+        // flip the hookMode badge to the requested mode so the UI doesn't
+        // wait for a fetchProjects round-trip (issue #735).
+        setProjects((prev) =>
+          prev.map((p) =>
+            p.id === project.id
+              ? {
+                  ...p,
+                  hookMode: mode,
+                  installStatus: data.installStatus ?? p.installStatus,
+                }
+              : p,
+          ),
+        );
       } catch (err: unknown) {
         setReinstallResult({
           id: project.id,

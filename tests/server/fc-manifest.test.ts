@@ -3,16 +3,20 @@
 // =============================================================================
 
 import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 import {
   getHookFiles,
   getAgentFiles,
   getGuideFiles,
   getWorkflowFile,
   getSettingsExampleFile,
+  getHttpSettingsExampleFile,
   getHookEventTypes,
   getGitignoreEntries,
   getAllManagedFiles,
 } from '../../src/server/utils/fc-manifest.js';
+import config from '../../src/server/config.js';
 
 // ---------------------------------------------------------------------------
 // getHookFiles
@@ -97,8 +101,45 @@ describe('getWorkflowFile', () => {
 });
 
 describe('getSettingsExampleFile', () => {
-  it('returns the settings example filename', () => {
+  it('returns the bash-mode settings example filename by default', () => {
     expect(getSettingsExampleFile()).toBe('settings.json.example');
+  });
+
+  it("returns the bash-mode filename when called with 'bash'", () => {
+    expect(getSettingsExampleFile('bash')).toBe('settings.json.example');
+  });
+
+  it("returns the http-mode filename when called with 'http' (issue #735)", () => {
+    expect(getSettingsExampleFile('http')).toBe('settings.json.http.example');
+  });
+
+  it('http-mode example file exists on disk', () => {
+    const httpFile = path.join(config.fcHooksDir, getSettingsExampleFile('http'));
+    expect(fs.existsSync(httpFile)).toBe(true);
+  });
+
+  it('http-mode example file is parseable JSON with hooks block', () => {
+    const httpFile = path.join(config.fcHooksDir, getSettingsExampleFile('http'));
+    const content = fs.readFileSync(httpFile, 'utf-8');
+    const parsed = JSON.parse(content) as { hooks?: Record<string, unknown> };
+    expect(parsed.hooks).toBeDefined();
+    expect(Object.keys(parsed.hooks!).length).toBeGreaterThan(0);
+  });
+
+  it('http-mode example file contains {{FLEET_PORT}} placeholder for install-time substitution', () => {
+    const httpFile = path.join(config.fcHooksDir, getSettingsExampleFile('http'));
+    const content = fs.readFileSync(httpFile, 'utf-8');
+    expect(content).toContain('{{FLEET_PORT}}');
+  });
+});
+
+describe('getHttpSettingsExampleFile', () => {
+  it('returns the http example filename', () => {
+    expect(getHttpSettingsExampleFile()).toBe('settings.json.http.example');
+  });
+
+  it('is consistent with getSettingsExampleFile("http")', () => {
+    expect(getHttpSettingsExampleFile()).toBe(getSettingsExampleFile('http'));
   });
 });
 
@@ -193,6 +234,7 @@ describe('getAllManagedFiles', () => {
     expect(manifest.guides.length).toBeGreaterThan(0);
     expect(manifest.workflow).toBe('fleet-workflow.md');
     expect(manifest.settingsExample).toBe('settings.json.example');
+    expect(manifest.httpSettingsExample).toBe('settings.json.http.example');
     expect(manifest.gitignoreEntries.length).toBeGreaterThan(0);
   });
 

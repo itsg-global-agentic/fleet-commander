@@ -84,8 +84,19 @@ export function toBashPath(p: string): string {
 /**
  * Install Fleet Commander hooks into a project repo.
  * Returns { ok, stdout, stderr } so callers can log / surface errors.
+ *
+ * @param opts.mode  Hook deployment mode: 'http' (default, CC 2.1.62+) or
+ *                   'bash' (legacy bash+curl path). Forwarded to install.sh
+ *                   via `--mode`. Issue #735.
+ * @param opts.port  FC server port baked into the http template's
+ *                   {{FLEET_PORT}} placeholder. Defaults to `config.port`.
+ *                   Forwarded to install.sh via `--port`.
  */
-export function installHooks(repoPath: string, logger: FastifyBaseLogger): { ok: boolean; stdout: string; stderr: string } {
+export function installHooks(
+  repoPath: string,
+  logger: FastifyBaseLogger,
+  opts?: { mode?: 'http' | 'bash'; port?: number },
+): { ok: boolean; stdout: string; stderr: string } {
   const fail = (msg: string) => ({ ok: false, stdout: '', stderr: msg });
 
   const scriptPath = path.join(config.fleetCommanderRoot, 'scripts', 'install.sh');
@@ -93,12 +104,16 @@ export function installHooks(repoPath: string, logger: FastifyBaseLogger): { ok:
     return fail(`install.sh not found at ${scriptPath}`);
   }
 
+  const mode = opts?.mode ?? 'http';
+  const port = opts?.port ?? config.port;
+
   // On Windows, use Git Bash with forward-slash paths (Git Bash handles C:/ natively)
   // Use --login so /etc/profile is sourced and PATH includes /usr/bin (dirname, mkdir, etc.)
   const bash = getGitBash();
+  const modeArgs = `--mode ${mode} --port ${port}`;
   const cmd = process.platform === 'win32'
-    ? `"${bash}" --login "${toBashPath(scriptPath)}" "${toBashPath(repoPath)}"`
-    : `"${scriptPath}" "${repoPath}"`;
+    ? `"${bash}" --login "${toBashPath(scriptPath)}" ${modeArgs} "${toBashPath(repoPath)}"`
+    : `"${scriptPath}" ${modeArgs} "${repoPath}"`;
 
   logger.info(`[installHooks] bash=${bash}, cmd=${cmd}`);
 

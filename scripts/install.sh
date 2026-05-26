@@ -4,8 +4,13 @@ set -euo pipefail
 # Installs hook scripts, merges settings.json, deploys workflow prompt,
 # and copies agent templates into a target repo's .claude directory.
 #
-# Usage: ./scripts/install.sh [/path/to/target/repo]
+# Usage: ./scripts/install.sh [--mode http|bash] [--port <n>] [/path/to/target/repo]
 #   If no path given, auto-detects the git repo root from current directory.
+#
+# Options:
+#   --mode http   Use native HTTP hooks (CC 2.1.62+, default).
+#   --mode bash   Use legacy bash+curl hooks.
+#   --port <n>    Fleet Commander server port for HTTP hooks (default $FLEET_PORT or 4680).
 
 # Ensure standard Unix tools are on PATH — when Git Bash's usr/bin/bash.exe
 # is invoked directly (not via git-bash.exe), /usr/bin may be missing.
@@ -18,6 +23,60 @@ done
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FC_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+# ── Parse CLI flags (--mode, --port) before positional target arg ──
+# Default mode is 'http' (issue #735); operators can opt into 'bash' for
+# CC < 2.1.62 or when troubleshooting. Port defaults to $FLEET_PORT or 4680.
+INSTALL_MODE="http"
+INSTALL_PORT="${FLEET_PORT:-4680}"
+POSITIONAL_ARGS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --mode)
+      if [ -z "${2:-}" ]; then
+        echo "Error: --mode requires a value (http|bash)" >&2
+        exit 1
+      fi
+      INSTALL_MODE="$2"
+      shift 2
+      ;;
+    --mode=*)
+      INSTALL_MODE="${1#--mode=}"
+      shift
+      ;;
+    --port)
+      if [ -z "${2:-}" ]; then
+        echo "Error: --port requires a value" >&2
+        exit 1
+      fi
+      INSTALL_PORT="$2"
+      shift 2
+      ;;
+    --port=*)
+      INSTALL_PORT="${1#--port=}"
+      shift
+      ;;
+    *)
+      POSITIONAL_ARGS+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [ "$INSTALL_MODE" != "http" ] && [ "$INSTALL_MODE" != "bash" ]; then
+  echo "Error: --mode must be 'http' or 'bash' (got: $INSTALL_MODE)" >&2
+  exit 1
+fi
+
+# Validate port — must be a positive integer
+if ! echo "$INSTALL_PORT" | grep -Eq '^[0-9]+$' || [ "$INSTALL_PORT" -lt 1 ] || [ "$INSTALL_PORT" -gt 65535 ]; then
+  echo "Error: --port must be an integer between 1 and 65535 (got: $INSTALL_PORT)" >&2
+  exit 1
+fi
+
+# Restore positional args so the existing $1 logic below still works
+set -- "${POSITIONAL_ARGS[@]:-}"
 
 # ── Read FC version from package.json ────────────────────────────
 FC_VERSION="unknown"
@@ -66,8 +125,17 @@ if [ ! -f "$FC_ROOT/templates/workflow.md" ]; then
   echo "ERROR: templates/workflow.md not found"
   exit 1
 fi
-if [ ! -f "$FC_ROOT/hooks/settings.json.example" ]; then
-  echo "ERROR: hooks/settings.json.example not found"
+
+# Pick the settings.json source template based on mode and validate its
+# presence. The bash template is the historical default; the http template
+# is new in issue #735 and substitutes {{FLEET_PORT}} at install time.
+if [ "$INSTALL_MODE" = "http" ]; then
+  SETTINGS_EXAMPLE_NAME="settings.json.http.example"
+else
+  SETTINGS_EXAMPLE_NAME="settings.json.example"
+fi
+if [ ! -f "$FC_ROOT/hooks/$SETTINGS_EXAMPLE_NAME" ]; then
+  echo "ERROR: hooks/$SETTINGS_EXAMPLE_NAME not found"
   exit 1
 fi
 
@@ -110,36 +178,56 @@ echo "  Copied hook scripts to $HOOK_DIR (v${FC_VERSION})"
 
 # ── 2. Merge into .claude/settings.json ──────────────────────────
 SETTINGS="$TARGET/.claude/settings.json"
-EXAMPLE="$FC_ROOT/hooks/settings.json.example"
+EXAMPLE="$FC_ROOT/hooks/$SETTINGS_EXAMPLE_NAME"
 
+# A FC hook entry is identified by either:
+#   - a bash command containing 'fleet-commander' (legacy bash mode), OR
+#   - an http URL containing '/api/hooks/' (new HTTP mode).
+# We always strip both kinds before re-adding the mode-specific entries so a
+# reinstall with a different mode leaves no stale duplicates (issue #735).
 if [ -f "$SETTINGS" ]; then
   # Merge Fleet Commander hook entries into existing settings,
   # preserving all existing hooks. Uses Node for reliable JSON handling.
+  # FLEET_PORT placeholder in the http template is substituted at install time.
   node -e "
     const fs = require('fs');
     const existing = JSON.parse(fs.readFileSync(process.argv[1], 'utf-8'));
-    const example = JSON.parse(fs.readFileSync(process.argv[2], 'utf-8'));
+    const exampleRaw = fs.readFileSync(process.argv[2], 'utf-8');
+    const fleetPort = process.argv[4];
+    const example = JSON.parse(exampleRaw.replace(/{{FLEET_PORT}}/g, fleetPort));
 
     if (!existing.hooks) existing.hooks = {};
 
+    // Returns true if the given entry is a Fleet Commander hook entry
+    // (matches both bash and http styles).
+    function isFcEntry(entry) {
+      const hooks = (entry && entry.hooks) || [];
+      return hooks.some(h => {
+        if (h && typeof h.command === 'string' && h.command.includes('fleet-commander')) return true;
+        if (h && typeof h.url === 'string' && h.url.includes('/api/hooks/')) return true;
+        return false;
+      });
+    }
+
+    // First pass: strip ALL existing FC entries across every hook type so a
+    // reinstall with a different mode (or after a botched previous install)
+    // does not leave bash and http entries coexisting (issue #735).
+    for (const hookType of Object.keys(existing.hooks)) {
+      const before = existing.hooks[hookType].length;
+      existing.hooks[hookType] = existing.hooks[hookType].filter(e => !isFcEntry(e));
+      if (existing.hooks[hookType].length === 0) {
+        delete existing.hooks[hookType];
+      } else if (existing.hooks[hookType].length !== before) {
+        // kept some non-FC entries, removed some FC ones
+      }
+    }
+
+    // Second pass: add this install's FC entries from the chosen template.
     for (const [hookType, entries] of Object.entries(example.hooks || {})) {
       for (const entry of entries) {
-        // Only add fleet-commander entries; skip others like pr-watcher
-        const commands = (entry.hooks || []).map(h => h.command || '');
-        const isFC = commands.some(c => c.includes('fleet-commander'));
-        if (!isFC) continue;
-
-        // Ensure the array exists for this hook type
+        if (!isFcEntry(entry)) continue;
         if (!existing.hooks[hookType]) existing.hooks[hookType] = [];
-
-        // Check if this exact entry already exists (idempotent)
-        const entryStr = JSON.stringify(entry);
-        const alreadyExists = existing.hooks[hookType].some(
-          e => JSON.stringify(e) === entryStr
-        );
-        if (!alreadyExists) {
-          existing.hooks[hookType].push(entry);
-        }
+        existing.hooks[hookType].push(entry);
       }
     }
 
@@ -151,14 +239,17 @@ if [ -f "$SETTINGS" ]; then
     } finally {
       try { fs.unlinkSync(tmpPath); } catch {}
     }
-  " "$SETTINGS" "$EXAMPLE" "$FC_VERSION"
-  echo "  Merged hook entries into existing settings.json (v${FC_VERSION})"
+  " "$SETTINGS" "$EXAMPLE" "$FC_VERSION" "$INSTALL_PORT"
+  echo "  Merged hook entries into existing settings.json (v${FC_VERSION}, mode=${INSTALL_MODE}, port=${INSTALL_PORT})"
 else
   mkdir -p "$TARGET/.claude"
-  # Copy template and inject version stamp
+  # Copy template and inject version stamp. FLEET_PORT placeholder in the
+  # http template is substituted here as well.
   node -e "
     const fs = require('fs');
-    const data = JSON.parse(fs.readFileSync(process.argv[1], 'utf-8'));
+    const exampleRaw = fs.readFileSync(process.argv[1], 'utf-8');
+    const fleetPort = process.argv[4];
+    const data = JSON.parse(exampleRaw.replace(/{{FLEET_PORT}}/g, fleetPort));
     data._fleetCommanderVersion = process.argv[2];
     const tmpPath = process.argv[3] + '.tmp';
     try {
@@ -167,8 +258,8 @@ else
     } finally {
       try { fs.unlinkSync(tmpPath); } catch {}
     }
-  " "$EXAMPLE" "$FC_VERSION" "$SETTINGS"
-  echo "  Created settings.json from template (v${FC_VERSION})"
+  " "$EXAMPLE" "$FC_VERSION" "$SETTINGS" "$INSTALL_PORT"
+  echo "  Created settings.json from template (v${FC_VERSION}, mode=${INSTALL_MODE}, port=${INSTALL_PORT})"
 fi
 
 # ── 3. Install workflow template and command ─────────────────────

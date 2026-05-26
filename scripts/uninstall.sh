@@ -52,12 +52,16 @@ if [ -f "$SETTINGS" ]; then
     if (settings.hooks) {
       for (const [hookType, entries] of Object.entries(settings.hooks)) {
         // Remove entries whose hook commands reference fleet-commander
+        // (legacy bash mode) or whose URL points at /api/hooks/ (HTTP mode,
+        // issue #735).
         settings.hooks[hookType] = entries.filter(entry => {
           // Check nested hooks array (structured format)
           if (entry && entry.hooks && Array.isArray(entry.hooks)) {
-            const hasFC = entry.hooks.some(
-              h => typeof h.command === 'string' && h.command.includes('fleet-commander')
-            );
+            const hasFC = entry.hooks.some(h => {
+              if (typeof h.command === 'string' && h.command.includes('fleet-commander')) return true;
+              if (typeof h.url === 'string' && h.url.includes('/api/hooks/')) return true;
+              return false;
+            });
             return !hasFC;
           }
           // Check direct command string

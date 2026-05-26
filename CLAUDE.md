@@ -88,7 +88,7 @@ fleet-commander/
       types.ts              # Shared TypeScript types (Team, Project, Event, etc.)
       message-templates.ts  # Message template type definitions and defaults
   hooks/                    # CC hook scripts (deployed to target repos)
-    send_event.sh           # Fire-and-forget POST to Fleet Commander
+    send_event.sh           # Fire-and-forget POST to Fleet Commander (legacy bash mode)
     run-hook.sh             # Generic hook runner (delegates to send_event.sh)
     on_session_start.sh
     on_session_end.sh
@@ -102,6 +102,8 @@ fleet-commander/
     on_stop_failure.sh
     on_teammate_idle.sh
     on_task_created.sh
+    settings.json.example       # Settings template for legacy bash hooks
+    settings.json.http.example  # Settings template for native HTTP hooks (CC 2.1.62+, default)
   scripts/
     launch.js               # Auto-install + build + open browser
     install.sh / install.ps1
@@ -279,6 +281,38 @@ The SSE broker emits 18 event types:
 11. **Stream JSON for CC** -- Claude Code is invoked with `--input-format stream-json --output-format stream-json` for stdin/stdout piping.
 12. **No Octokit, no REST wrappers** -- shell out to `gh` for GitHub API calls.
 13. **State machine transitions must ALWAYS be kept in sync with code.** The file `src/shared/state-machine.ts` defines all team status transitions, their triggers, conditions, and message templates. When modifying any code that changes team status (`db.updateTeam({ status: ... })`), you MUST also update `state-machine.ts` to reflect the change. The State Machine view in the UI (`/lifecycle`) reads from this file — if it's out of date, users will see incorrect transition information. The `message_templates` database table stores editable versions of messages sent to teams; defaults come from `state-machine.ts` and are seeded on startup.
+
+## Hook Deployment Modes (issue #735)
+
+Claude Code 2.1.62+ supports native HTTP hooks (`{"type": "http", "url": "..."}`)
+that POST a hook's stdin JSON directly to a URL, eliminating the bash + curl
+subshell startup cost (significant on Windows). FC supports both modes:
+
+| Mode | Template | Transport | When to use |
+|------|----------|-----------|------------|
+| `http` (default) | `hooks/settings.json.http.example` | CC POSTs directly to `POST /api/hooks/:eventType` | New installs (CC 2.1.62+). Lower latency, fewer moving parts. |
+| `bash` (legacy) | `hooks/settings.json.example` | CC spawns `bash run-hook.sh ... → send_event.sh → curl → POST /api/events` | CC < 2.1.62 or when you need the bash hook scripts to do custom pre-processing. |
+
+- **New projects** default to `http` (see `ProjectService.createProject`).
+- **Existing projects** can flip modes via the **Mode picker + Reinstall** button
+  in `/projects` (or `POST /api/projects/:id/install` with `{ "mode": "http" | "bash" }`).
+- **Reinstall is idempotent and exclusive** — install.sh first strips any prior
+  FC entries (both bash and http) from `.claude/settings.json` and then adds
+  the entries for the requested mode, so the two never coexist.
+- The selected mode is recorded on `projects.hook_mode` (DB schema v24) and
+  shown as an "HTTP / Bash / Unknown" badge in the install health row.
+- The HTTP endpoint is `localhost`-only by default and has no auth — see
+  issue #736 if you need to harden it for remote scenarios.
+
+`install.sh --mode http --port 4680` substitutes `{{FLEET_PORT}}` in the http
+template at install time. The `--port` flag falls back to the `FLEET_PORT`
+environment variable (default 4680).
+
+The `POST /api/hooks/:eventType` route lives in `src/server/routes/hooks.ts`
+and reuses the same `event-collector` pipeline as the legacy `POST /api/events`
+route via the shared `buildEventPayloadFromCc` helper. PascalCase hook names
+(e.g. `SessionStart`, `PostToolUse`) are mapped to snake_case event types
+(`session_start`, `tool_use`) inside the route.
 
 ## Development Workflow
 

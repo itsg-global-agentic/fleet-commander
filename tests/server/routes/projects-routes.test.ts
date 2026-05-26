@@ -445,6 +445,103 @@ describe('POST /api/projects/:id/install', () => {
 
     expect(res.statusCode).toBe(400);
   });
+
+  // ---- Issue #735: hook_mode flip via body { mode: 'http'|'bash' } ------
+  // installHooks is mocked at the top of this file so the route returns
+  // ok=false (no stdout/stderr). We don't care about install success here —
+  // we only care that the service persists the requested mode on the
+  // project row.
+  it("should persist hookMode='http' when body.mode='http'", async () => {
+    const project = seedProject();
+    const { installHooks } = await import(
+      '../../../src/server/utils/hook-installer.js'
+    );
+    (installHooks as ReturnType<typeof vi.fn>).mockReturnValue({
+      ok: true,
+      stdout: '',
+      stderr: '',
+    });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/install`,
+      payload: { mode: 'http' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const db = getDatabase();
+    const refreshed = db.getProject(project.id);
+    expect(refreshed?.hookMode).toBe('http');
+    // The mock should have been called with mode=http forwarded through
+    expect(installHooks).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.anything(),
+      expect.objectContaining({ mode: 'http' }),
+    );
+  });
+
+  it("should persist hookMode='bash' when body.mode='bash'", async () => {
+    const project = seedProject();
+    const { installHooks } = await import(
+      '../../../src/server/utils/hook-installer.js'
+    );
+    (installHooks as ReturnType<typeof vi.fn>).mockReturnValue({
+      ok: true,
+      stdout: '',
+      stderr: '',
+    });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/install`,
+      payload: { mode: 'bash' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const db = getDatabase();
+    const refreshed = db.getProject(project.id);
+    expect(refreshed?.hookMode).toBe('bash');
+    expect(installHooks).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.anything(),
+      expect.objectContaining({ mode: 'bash' }),
+    );
+  });
+
+  it('should default to http when no mode is supplied', async () => {
+    const project = seedProject();
+    const { installHooks } = await import(
+      '../../../src/server/utils/hook-installer.js'
+    );
+    (installHooks as ReturnType<typeof vi.fn>).mockReturnValue({
+      ok: true,
+      stdout: '',
+      stderr: '',
+    });
+
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/install`,
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    const db = getDatabase();
+    const refreshed = db.getProject(project.id);
+    expect(refreshed?.hookMode).toBe('http');
+  });
+
+  it('should return 400 for an invalid mode value', async () => {
+    const project = seedProject();
+    const res = await server.inject({
+      method: 'POST',
+      url: `/api/projects/${project.id}/install`,
+      payload: { mode: 'tcp' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.payload).message).toMatch(/http|bash/);
+  });
 });
 
 // =============================================================================
