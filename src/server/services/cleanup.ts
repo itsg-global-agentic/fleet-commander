@@ -334,51 +334,9 @@ export function executeCleanup(
           continue;
         }
 
-        // Try git worktree remove first; fall back to fs.rmSync.
-        try {
-          execSync(
-            `git -C "${project.repoPath}" worktree remove --force "${item.path}"`,
-            { encoding: 'utf-8', stdio: 'pipe', timeout: 15000 },
-          );
-        } catch (e) {
-          console.error(
-            `[Cleanup] CC subworktree remove failed for ${item.path}:`,
-            e instanceof Error ? e.message : e,
-          );
-          try {
-            fs.rmSync(item.path, { recursive: true, force: true });
-          } catch (rmErr) {
-            // Both git and fs failed — still mark removed_at so we don't
-            // keep retrying this path on every subsequent cleanup.
-            console.error(
-              `[Cleanup] CC subworktree fs.rmSync failed for ${item.path}:`,
-              rmErr instanceof Error ? rmErr.message : rmErr,
-            );
-          }
-        }
-
-        // Prune stale worktree references (best-effort, like main worktree path).
-        try {
-          execSync(`git -C "${project.repoPath}" worktree prune`, {
-            stdio: 'pipe',
-            timeout: 5000,
-          });
-        } catch (e) {
-          console.error(`[Cleanup] worktree prune failed:`, e instanceof Error ? e.message : e);
-        }
-
-        // Mark the row removed in DB regardless of git/fs outcome — we don't
-        // want repeated retries against an already-vanished directory.
-        if (typeof db.recordCcSubworktreeRemove === 'function') {
-          try {
-            db.recordCcSubworktreeRemove({ teamId: ownerTeamId, path: item.path });
-          } catch (e) {
-            console.error(
-              `[Cleanup] recordCcSubworktreeRemove failed for ${item.path}:`,
-              e instanceof Error ? e.message : e,
-            );
-          }
-        }
+        // Delegate the actual git/fs/DB work to the shared helper so the
+        // same path is exercised by `cleanupTeamCcSubworktrees` (issue #737).
+        removeCcSubworktreePath(project.repoPath, ownerTeamId, item.path);
 
         removed.push(item.name);
       }
@@ -387,6 +345,148 @@ export function executeCleanup(
         name: item.name,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  return { removed, failed };
+}
+
+// ---------------------------------------------------------------------------
+// Per-team CC subworktree cleanup (issue #737)
+// ---------------------------------------------------------------------------
+
+/**
+ * Shared helper that removes a single CC-created subworktree directory and
+ * records the removal in the database. Used by both the `cc_subworktree`
+ * branch of `executeCleanup` (PM-initiated, project-scoped) and
+ * `cleanupTeamCcSubworktrees` (auto-cleanup at team done/failed,
+ * team-scoped). Behavior-preserving extraction of the original logic; do
+ * not change semantics without updating the corresponding tests.
+ *
+ * @param repoPath Project's repo path (used as `git -C` target).
+ * @param teamId The team that owns this subworktree row.
+ * @param swPath Absolute path to the CC subworktree.
+ * @returns `{ removed: true }` on success; `{ removed: false, error }` if
+ *   both `git worktree remove --force` and the `fs.rmSync` fallback
+ *   failed. The DB row is still marked `removed_at` regardless so we do
+ *   not retry indefinitely.
+ */
+function removeCcSubworktreePath(
+  repoPath: string,
+  teamId: number,
+  swPath: string,
+): { removed: boolean; error?: string } {
+  const db = getDatabase();
+  let removed = true;
+  let lastError: string | undefined;
+
+  // Try git worktree remove first; fall back to fs.rmSync.
+  try {
+    execSync(
+      `git -C "${repoPath}" worktree remove --force "${swPath}"`,
+      { encoding: 'utf-8', stdio: 'pipe', timeout: 15000 },
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[Cleanup] CC subworktree remove failed for ${swPath}:`, msg);
+    lastError = msg;
+    try {
+      fs.rmSync(swPath, { recursive: true, force: true });
+      // fs fallback succeeded — clear the error so we report removed=true.
+      lastError = undefined;
+    } catch (rmErr) {
+      const rmMsg = rmErr instanceof Error ? rmErr.message : String(rmErr);
+      console.error(`[Cleanup] CC subworktree fs.rmSync failed for ${swPath}:`, rmMsg);
+      lastError = rmMsg;
+      removed = false;
+    }
+  }
+
+  // Prune stale worktree references (best-effort, like main worktree path).
+  try {
+    execSync(`git -C "${repoPath}" worktree prune`, {
+      stdio: 'pipe',
+      timeout: 5000,
+    });
+  } catch (e) {
+    console.error(`[Cleanup] worktree prune failed:`, e instanceof Error ? e.message : e);
+  }
+
+  // Mark the row removed in DB regardless of git/fs outcome — we don't
+  // want repeated retries against an already-vanished directory.
+  if (typeof db.recordCcSubworktreeRemove === 'function') {
+    try {
+      db.recordCcSubworktreeRemove({ teamId, path: swPath });
+    } catch (e) {
+      console.error(
+        `[Cleanup] recordCcSubworktreeRemove failed for ${swPath}:`,
+        e instanceof Error ? e.message : e,
+      );
+    }
+  }
+
+  return lastError ? { removed, error: lastError } : { removed };
+}
+
+/**
+ * Auto-cleanup helper called after a team transitions to done/failed
+ * (issue #737). Removes only CC-created subworktrees (createdVia='cc')
+ * tracked for this team. Does NOT touch the team's main worktree — that
+ * remains manual via `getCleanupPreview` / `executeCleanup`.
+ *
+ * The function is fire-and-forget safe: it logs and swallows all errors,
+ * returns a `{ removed, failed }` summary, and never throws. Callers in
+ * `team-manager.ts` invoke it in a `Promise.resolve().then(...).catch(...)`
+ * microtask so a slow `git worktree remove` cannot block the queue or
+ * SSE broadcast.
+ *
+ * @param teamId The team whose CC subworktrees should be cleaned up.
+ */
+export function cleanupTeamCcSubworktrees(teamId: number): {
+  removed: string[];
+  failed: { path: string; error: string }[];
+} {
+  const db = getDatabase();
+  const removed: string[] = [];
+  const failed: { path: string; error: string }[] = [];
+
+  const team = db.getTeam(teamId);
+  if (!team) {
+    console.log(`[Cleanup] cleanupTeamCcSubworktrees: team ${teamId} not found`);
+    return { removed, failed };
+  }
+
+  if (!team.projectId) {
+    console.log(`[Cleanup] cleanupTeamCcSubworktrees: team ${teamId} has no project`);
+    return { removed, failed };
+  }
+
+  const project = db.getProject(team.projectId);
+  if (!project) {
+    console.log(
+      `[Cleanup] cleanupTeamCcSubworktrees: project ${team.projectId} for team ${teamId} not found`,
+    );
+    return { removed, failed };
+  }
+
+  if (typeof db.getTeamSubworktrees !== 'function') {
+    // DB doesn't support subworktree tracking (older schema) — nothing to do.
+    return { removed, failed };
+  }
+
+  const subworktrees = db.getTeamSubworktrees(teamId, { activeOnly: true }) as Array<{
+    path: string;
+    createdVia: 'cc' | 'fc';
+    removedAt: string | null;
+  }>;
+
+  for (const sw of subworktrees) {
+    if (sw.createdVia !== 'cc') continue;
+    const result = removeCcSubworktreePath(project.repoPath, teamId, sw.path);
+    if (result.removed) {
+      removed.push(sw.path);
+    } else {
+      failed.push({ path: sw.path, error: result.error ?? 'unknown error' });
     }
   }
 
