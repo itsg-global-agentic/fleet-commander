@@ -61,6 +61,12 @@ function buildPayloadFromCcStdin(body: Record<string, unknown>): EventPayload {
   payload.error_details = str(cc.error_details);
   payload.last_assistant_message = str(cc.last_assistant_message);
 
+  // duration_ms: tool execution time in milliseconds (CC 2.1.119+, PostToolUse/PostToolUseFailure only).
+  // CC emits this as a real number; reject any other type defensively (strings, NaN, Infinity).
+  if (typeof cc.duration_ms === 'number' && Number.isFinite(cc.duration_ms)) {
+    payload.duration_ms = cc.duration_ms;
+  }
+
   // tool_input: CC sends this as an object; stringify it for storage
   if (cc.tool_input !== undefined && cc.tool_input !== null) {
     payload.tool_input = typeof cc.tool_input === 'string'
@@ -106,6 +112,16 @@ function buildPayloadFromCcStdin(body: Record<string, unknown>): EventPayload {
  * body fields. Maintains backward compatibility with old hook installations.
  */
 function buildPayloadFromLegacy(body: Record<string, unknown>): EventPayload {
+  // duration_ms may arrive as either a number or a stringified number depending on
+  // shell parsing. Coerce defensively and only accept finite numeric values.
+  let durationMs: number | undefined;
+  if (body.duration_ms !== undefined && body.duration_ms !== null) {
+    const n = Number(body.duration_ms);
+    if (Number.isFinite(n)) {
+      durationMs = n;
+    }
+  }
+
   return {
     event: String(body.event),
     team: String(body.team),
@@ -125,6 +141,7 @@ function buildPayloadFromLegacy(body: Record<string, unknown>): EventPayload {
     msg_to: str(body.msg_to),
     msg_summary: str(body.msg_summary),
     owner: str(body.owner),
+    duration_ms: durationMs,
   };
 }
 

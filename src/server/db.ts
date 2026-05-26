@@ -162,6 +162,12 @@ export interface EventInsert {
   eventType: string;
   toolName?: string | null;
   payload?: string | null;
+  /**
+   * Tool execution time in milliseconds, from CC 2.1.119+ PostToolUse /
+   * PostToolUseFailure hook input. Nullable: older CC versions and non-
+   * PostToolUse events do not carry the field.
+   */
+  durationMs?: number | null;
 }
 
 export interface PRInsert {
@@ -443,6 +449,9 @@ export class FleetDatabase {
 
     // Rewrite any effort='max' rows to 'xhigh' (v22 migration — CC removed 'max' in 2.1.68)
     this.migrateMaxEffortToXhigh();
+
+    // Add duration_ms column to events (v23 migration — per-tool timing capture)
+    this.addEventsDurationMsColumn();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1353,6 +1362,33 @@ export class FleetDatabase {
   }
 
   /**
+   * Add duration_ms column to events table if it doesn't exist (v23 migration).
+   * Nullable INTEGER capturing milliseconds a tool call took, populated from
+   * the CC 2.1.119+ PostToolUse/PostToolUseFailure hook input. Older events
+   * and non-PostToolUse events retain NULL.
+   *
+   * Fresh databases get the column via schema.sql; upgraded databases use
+   * this migration. Idempotent across restarts.
+   */
+  private addEventsDurationMsColumn(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(events)').all() as Array<{ name: string }>;
+      // Fresh DB: events table doesn't exist yet — schema.sql will create it
+      // with duration_ms already present. Nothing to migrate.
+      if (cols.length === 0) return;
+      const hasColumn = cols.some((c) => c.name === 'duration_ms');
+      if (!hasColumn) {
+        this.db.exec('ALTER TABLE events ADD COLUMN duration_ms INTEGER');
+        console.log('[DB] v23 migration: added duration_ms column to events');
+      }
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (23)');
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v23 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Migrate branch_behind and branch_behind_resolved message templates
    * from hardcoded 'main' to use {{BASE_BRANCH}} placeholder.
    * Only updates templates that exactly match the old defaults (user edits are preserved).
@@ -2049,8 +2085,8 @@ export class FleetDatabase {
 
   insertEvent(data: EventInsert): Event {
     const stmt = this.stmt(`
-      INSERT INTO events (team_id, session_id, agent_name, event_type, tool_name, payload)
-      VALUES (@teamId, @sessionId, @agentName, @eventType, @toolName, @payload)
+      INSERT INTO events (team_id, session_id, agent_name, event_type, tool_name, payload, duration_ms)
+      VALUES (@teamId, @sessionId, @agentName, @eventType, @toolName, @payload, @durationMs)
     `);
 
     const info = stmt.run({
@@ -2060,6 +2096,7 @@ export class FleetDatabase {
       eventType: data.eventType,
       toolName: data.toolName ?? null,
       payload: data.payload ?? null,
+      durationMs: data.durationMs ?? null,
     });
 
     const row = this.stmt('SELECT * FROM events WHERE id = ?').get(
@@ -2110,8 +2147,8 @@ export class FleetDatabase {
 
       // 4. Insert event — always required
       const eventInfo = this.stmt(`
-        INSERT INTO events (team_id, session_id, agent_name, event_type, tool_name, payload)
-        VALUES (@teamId, @sessionId, @agentName, @eventType, @toolName, @payload)
+        INSERT INTO events (team_id, session_id, agent_name, event_type, tool_name, payload, duration_ms)
+        VALUES (@teamId, @sessionId, @agentName, @eventType, @toolName, @payload, @durationMs)
       `).run({
         teamId: txOps.eventInsert.teamId,
         sessionId: txOps.eventInsert.sessionId ?? null,
@@ -2119,6 +2156,7 @@ export class FleetDatabase {
         eventType: txOps.eventInsert.eventType,
         toolName: txOps.eventInsert.toolName ?? null,
         payload: txOps.eventInsert.payload ?? null,
+        durationMs: txOps.eventInsert.durationMs ?? null,
       });
       const eventId = Number(eventInfo.lastInsertRowid);
 
@@ -2227,6 +2265,23 @@ export class FleetDatabase {
     );
     const row = stmt.get(teamId) as Record<string, unknown> | undefined;
     return row ? this.mapEventRow(row) : undefined;
+  }
+
+  /**
+   * Return the top-N events for a team ranked by recorded tool execution time
+   * (`duration_ms DESC`). Events without a recorded duration are excluded.
+   *
+   * Used by the TeamDetail UI to surface the slowest tool calls per team
+   * (issue #732). The query is bounded per team and per LIMIT, so a full
+   * table scan filtered by `team_id` is acceptable for typical team sizes
+   * (a few hundred to a few thousand events).
+   */
+  getSlowestToolEvents(teamId: number, limit = 5): Event[] {
+    const stmt = this.stmt(
+      'SELECT * FROM events WHERE team_id = ? AND duration_ms IS NOT NULL ORDER BY duration_ms DESC LIMIT ?'
+    );
+    const rows = stmt.all(teamId, limit) as Record<string, unknown>[];
+    return rows.map((r) => this.mapEventRow(r));
   }
 
   getAllEvents(filters?: EventFilter): Event[] {
@@ -3383,6 +3438,7 @@ export class FleetDatabase {
       toolName: row.tool_name as string | null,
       agentName: row.agent_name as string | null,
       payload: row.payload as string | null,
+      durationMs: (row.duration_ms as number | null) ?? null,
       createdAt: utcify(row.created_at as string),
     };
   }
