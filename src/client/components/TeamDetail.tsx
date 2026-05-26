@@ -28,6 +28,80 @@ function formatDuration(minutes: number | undefined | null): string {
   return `${m}m`;
 }
 
+/**
+ * Format a duration in milliseconds for the "Slowest Tool Calls" panel.
+ *
+ * Examples:
+ *   - 850     -> "850ms"
+ *   - 2300    -> "2.3s"
+ *   - 72_500  -> "1m 13s"
+ */
+function formatMs(ms: number | null | undefined): string {
+  if (ms == null || !Number.isFinite(ms) || ms < 0) return '—';
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) {
+    // 1 decimal place when sub-minute (e.g. 2.3s)
+    return `${seconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const secs = Math.round(seconds - minutes * 60);
+  return `${minutes}m ${secs}s`;
+}
+
+/**
+ * Derive a single-line label for a tool-call row in the "Slowest Tool Calls"
+ * panel. Prefers the `toolName` directly (e.g. "Bash", "Read"). For Bash,
+ * attempts to parse the JSON payload's `tool_input.command` (or `cc_stdin`'s
+ * parsed tool_input.command) and produces a truncated 60-char display
+ * (e.g. "Bash: npm test"). Falls back to the bare tool name when parsing
+ * fails or the payload contains no usable input.
+ */
+function parseToolFromPayload(payload: string | null, toolName: string | null): string {
+  const baseLabel = toolName ?? 'unknown';
+  if (!payload || toolName !== 'Bash') return baseLabel;
+
+  try {
+    const parsed = JSON.parse(payload) as Record<string, unknown>;
+
+    // The payload stored on events.payload is the EventPayload JSON. It may
+    // contain a stringified `tool_input` field directly, or a raw `cc_stdin`
+    // JSON string that itself contains `tool_input`.
+    let command: string | null = null;
+
+    if (typeof parsed.tool_input === 'string') {
+      try {
+        const ti = JSON.parse(parsed.tool_input) as Record<string, unknown>;
+        if (typeof ti.command === 'string') command = ti.command;
+      } catch {
+        // Not JSON — leave command null.
+      }
+    }
+
+    if (!command && typeof parsed.cc_stdin === 'string') {
+      try {
+        const cc = JSON.parse(parsed.cc_stdin) as Record<string, unknown>;
+        if (cc.tool_input && typeof cc.tool_input === 'object' && !Array.isArray(cc.tool_input)) {
+          const ti = cc.tool_input as Record<string, unknown>;
+          if (typeof ti.command === 'string') command = ti.command;
+        }
+      } catch {
+        // Not JSON — leave command null.
+      }
+    }
+
+    if (command) {
+      const trimmed = command.trim().replace(/\s+/g, ' ');
+      const truncated = trimmed.length > 60 ? trimmed.slice(0, 57) + '...' : trimmed;
+      return `${baseLabel}: ${truncated}`;
+    }
+  } catch {
+    // Payload is not JSON — fall through to base label.
+  }
+
+  return baseLabel;
+}
+
 
 // ---------------------------------------------------------------------------
 // Component
@@ -605,6 +679,45 @@ export function TeamDetail() {
                         )}
                         {' '}(details loading...)
                       </p>
+                    </section>
+                  )}
+
+                  {/* ---- Slowest Tool Calls (issue #732) ---- */}
+                  {/*
+                    Renders only when CC supplied at least one duration_ms value
+                    (CC 2.1.119+ PostToolUse / PostToolUseFailure hooks). For
+                    older teams or CC versions the array is empty and the
+                    section is omitted entirely.
+                  */}
+                  {Array.isArray(detail.slowestToolCalls) && detail.slowestToolCalls.length > 0 && (
+                    <section>
+                      <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
+                        Slowest Tool Calls
+                      </h4>
+                      <ul className="space-y-1.5">
+                        {detail.slowestToolCalls.slice(0, 5).map((evt) => {
+                          const label = parseToolFromPayload(evt.payload, evt.toolName);
+                          const durationLabel = formatMs(evt.durationMs);
+                          return (
+                            <li
+                              key={evt.id}
+                              className="flex items-center gap-2 text-sm"
+                            >
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-dark-border/30 text-dark-text shrink-0">
+                                {durationLabel}
+                              </span>
+                              <span className="text-dark-text truncate" title={label}>
+                                {label}
+                              </span>
+                              {evt.agentName && evt.agentName !== 'team-lead' && (
+                                <span className="text-xs text-dark-muted shrink-0">
+                                  {evt.agentName}
+                                </span>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
                     </section>
                   )}
                 </div>

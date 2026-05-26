@@ -549,6 +549,11 @@ export class TeamService {
     // Recent events
     const recentEvents = db.getEventsByTeam(teamId, 20);
 
+    // Top-5 slowest tool calls for this team (issue #732). Events without a
+    // recorded duration are filtered out at the query level. May be empty for
+    // older teams or teams running pre-CC-2.1.119.
+    const slowestToolCalls = db.getSlowestToolEvents(teamId, 5);
+
     // Output tail
     const manager = getTeamManager();
     const outputLines = manager.getOutput(teamId, 50);
@@ -610,6 +615,7 @@ export class TeamService {
       retryCount: team.retryCount,
       pr: prDetail,
       recentEvents,
+      slowestToolCalls,
       outputTail,
       backgroundTasks,
       sessionCrons,
