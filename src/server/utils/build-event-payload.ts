@@ -101,6 +101,18 @@ export function buildEventPayloadFromCc(
   payload.owner = str(ccBody.owner);
   payload.cwd = str(ccBody.cwd);
 
+  // Issue #733: CC 2.1.133+ adds effort.level to hook stdin. Extract the
+  // nested string into a flat payload.effort field so EventCollector can
+  // diff against the stored team value without re-parsing JSON. Defensive
+  // shape check: cc.effort must be an object with a string `level` — any
+  // other shape (string, array, number) is dropped.
+  if (ccBody.effort && typeof ccBody.effort === 'object' && !Array.isArray(ccBody.effort)) {
+    const eff = ccBody.effort as Record<string, unknown>;
+    if (typeof eff.level === 'string') {
+      payload.effort = eff.level;
+    }
+  }
+
   // CC 2.1.145+ Stop / SubagentStop hook input ships arrays of pending
   // background tasks and session crons. Stringify them so they fit the
   // EventPayload string-only schema (see issue #730). The legacy shell

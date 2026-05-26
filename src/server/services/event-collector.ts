@@ -58,6 +58,7 @@ export interface EventPayload {
   background_tasks?: string;    // JSON-stringified array of pending background tasks
   session_crons?: string;       // JSON-stringified array of pending session crons
   duration_ms?: number;         // Tool execution time in ms (CC 2.1.119+, PostToolUse / PostToolUseFailure only)
+  effort?: string;              // CC 2.1.133+ effort.level extracted from cc_stdin (see routes/events.ts).
 }
 
 /** Result returned from processEvent */
@@ -69,7 +70,10 @@ export interface ProcessEventResult {
 
 /** Minimal DB abstraction (subset of methods used by EventCollector) */
 export interface EventCollectorDb {
-  getTeamByWorktree(worktreeName: string): { id: number; status: TeamStatus; phase: string } | undefined;
+  // Issue #733: include `effort` in the lookup shape so processEvent can diff
+  // against the stored runtime value without an extra DB roundtrip. The DB
+  // method already SELECTs *, so the marginal cost is negligible.
+  getTeamByWorktree(worktreeName: string): { id: number; status: TeamStatus; phase: string; effort: string | null } | undefined;
   insertEvent(event: {
     teamId: number;
     sessionId: string | null;
@@ -568,6 +572,37 @@ export function normalizeJsonArray(input: string | undefined): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Effort-level normalization (Issue #733)
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical Claude Code adaptive-reasoning effort levels. Mirrors the
+ * `EffortLevel` union in `src/shared/types.ts` and the CHECK constraint on
+ * the `teams.effort` / `projects.effort` columns. `max` was removed by CC in
+ * 2.1.68 and is intentionally absent.
+ */
+const VALID_EFFORT_LEVELS = new Set(['low', 'medium', 'high', 'xhigh']);
+
+/**
+ * Normalize a raw effort string from `cc_stdin.effort.level` into one of the
+ * 4 canonical CC levels, or `null` when the input is missing or invalid.
+ *
+ * Returns the lowercased trimmed string when it matches a canonical level;
+ * returns `null` otherwise so the caller can treat missing / invalid input
+ * as "no-op" (no DB write, no SSE emission).
+ *
+ * Exported for unit-test access.
+ */
+export function normalizeEffortLevel(raw: string | undefined | null): string | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === '') return null;
+  if (!VALID_EFFORT_LEVELS.has(trimmed)) return null;
+  return trimmed;
+}
+
+// ---------------------------------------------------------------------------
 // StopFailure classification (Issue #727)
 // ---------------------------------------------------------------------------
 
@@ -859,6 +894,27 @@ export function processEvent(
     }
   }
 
+  // ── Effort-level change detection (Issue #733) ──────────────────────
+  // CC 2.1.133+ ships `effort.level` inside cc_stdin on every hook event.
+  // routes/events.ts flattens that nested string into `payload.effort`. We
+  // diff against the stored team value (loaded via getTeamByWorktree above)
+  // and only write/emit when the value actually changes — this keeps no-op
+  // events cheap (no DB churn, no SSE traffic) while still capturing every
+  // `/effort high` mid-session change as it lands. Invalid or missing values
+  // normalize to `null` and skip the write entirely.
+  //
+  // Terminal teams (done/failed) are excluded because their effort is fixed
+  // history and never receives new hook events that should mutate it.
+  let effortChange: { teamId: number; previous: string | null; current: string } | undefined;
+  if (!isTerminal) {
+    const normalizedEffort = normalizeEffortLevel(payload.effort);
+    if (normalizedEffort !== null && team.effort !== normalizedEffort) {
+      effortChange = { teamId, previous: team.effort, current: normalizedEffort };
+      statusUpdateData ??= { teamId, fields: {} };
+      statusUpdateData.fields.effort = normalizedEffort;
+    }
+  }
+
   // ── Throttle tool_use events ─────────────────────────────────────
   // Throttled events still need a heartbeat update and any transition
   // that was determined above. For throttled events, execute the
@@ -881,6 +937,17 @@ export function processEvent(
           team_id: teamId,
           status: 'running',
           previous_status: previousStatus,
+        }, teamId);
+      }
+      // Issue #733: a `/effort` change can land on a throttled tool_use; the
+      // DB write went through inside processThrottledUpdate (effort is on
+      // statusUpdate.fields), so we still need to emit the SSE so the UI
+      // converges. Skipping this branch would drop the change silently.
+      if (effortChange) {
+        sse.broadcast('effort_changed', {
+          team_id: effortChange.teamId,
+          effort: effortChange.current,
+          previous_effort: effortChange.previous,
         }, teamId);
       }
       return { event_id: null, team_id: teamId, processed: false };
@@ -1086,6 +1153,18 @@ export function processEvent(
       previous_status: team.status,
       phase: phaseUpdateData.phase,
       previous_phase: phaseUpdateData.previousPhase,
+    }, teamId);
+  }
+
+  // Issue #733: announce a runtime effort change. Standalone event (rather
+  // than a field on team_status_changed) so subscribers that only care about
+  // status transitions are not paged for effort-only deltas, and the
+  // FleetContext incremental update path stays focused on status/phase data.
+  if (effortChange) {
+    sse.broadcast('effort_changed', {
+      team_id: effortChange.teamId,
+      effort: effortChange.current,
+      previous_effort: effortChange.previous,
     }, teamId);
   }
 

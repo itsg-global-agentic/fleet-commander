@@ -261,6 +261,14 @@ export interface Team {
   lastEventAt: string | null;
   blockedByJson: string | null;
   pendingChildrenJson: string | null;
+  /**
+   * Runtime adaptive-reasoning effort level (issue #733).
+   * Mirrors `effort.level` from CC 2.1.133+ hook stdin so a `/effort high`
+   * mid-session change can be surfaced in the dashboard. NULL means the team
+   * is inheriting the project's `effort` (or the FC default when both are NULL).
+   * Constrained to the canonical CC levels via a CHECK on the column.
+   */
+  effort: string | null;
   backgroundTasksJson: string | null;
   sessionCronsJson: string | null;
   retryCount: number;
@@ -615,6 +623,14 @@ export interface TeamDashboardRow {
   projectName: string | null;
   model: string | null;
   modelInherited: boolean;
+  /**
+   * Resolved adaptive-reasoning effort level for this team (issue #733).
+   * COALESCE(team.effort, project.effort) — team's runtime value wins over the
+   * project's spawn-time default. NULL when neither is set (CC picks default).
+   */
+  effort: string | null;
+  /** True when the resolved effort comes from the project (team's raw effort is NULL). */
+  effortInherited: boolean;
   status: TeamStatus;
   phase: TeamPhase;
   worktreeName: string;
@@ -659,6 +675,14 @@ export interface TeamDetail {
   issueProvider: string | null;
   model?: string | null;
   modelInherited?: boolean;
+  /**
+   * Resolved adaptive-reasoning effort level (issue #733). COALESCE of the
+   * team's runtime mirror and the project's spawn-time default. NULL when
+   * neither is set.
+   */
+  effort?: string | null;
+  /** True when the resolved effort comes from the project (team's raw effort is NULL). */
+  effortInherited?: boolean;
   status: TeamStatus;
   phase: TeamPhase;
   pid: number | null;

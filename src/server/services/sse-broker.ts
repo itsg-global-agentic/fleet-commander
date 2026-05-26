@@ -39,7 +39,11 @@ export type SSEEventType =
   | 'relations_updated'
   | 'team_handoff_file'
   | 'team_warning'
-  | 'usage_override_changed';
+  | 'usage_override_changed'
+  // Issue #733: runtime effort.level delta — emitted when EventCollector
+  // detects that `cc_stdin.effort.level` no longer matches the stored
+  // `teams.effort` value (e.g. TL ran `/effort high` mid-session).
+  | 'effort_changed';
 
 /** Payload shapes for each event type */
 export interface SSEEventPayloads {
@@ -64,6 +68,9 @@ export interface SSEEventPayloads {
   team_handoff_file: { team_id: number; file_type: string; agent_name: string | null; captured_at: string };
   team_warning: { team_id: number; warning_type: string; message: string; details?: Record<string, unknown> };
   usage_override_changed: { overrideActive: boolean; hardPaused: boolean };
+  // Issue #733: previous_effort is nullable because the first non-null value
+  // we observe replaces an inherited project default (raw teams.effort=NULL).
+  effort_changed: { team_id: number; effort: string; previous_effort: string | null };
 }
 
 // ---------------------------------------------------------------------------

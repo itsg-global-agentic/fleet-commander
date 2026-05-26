@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS teams (
   pr_number       INTEGER,
   custom_prompt   TEXT,                            -- custom prompt override (persisted for queued teams)
   headless        INTEGER NOT NULL DEFAULT 1,     -- 0=interactive terminal, 1=headless stream-json
+  effort          TEXT CHECK(effort IS NULL OR effort IN ('low','medium','high','xhigh')),  -- runtime CC adaptive-reasoning effort mirror (issue #733); NULL = inherit project effort
   blocked_by_json TEXT,                            -- JSON array of blocking issue numbers e.g. [368, 370]
   pending_children_json TEXT,                     -- JSON array of open child issue numbers e.g. [371, 372]
   retry_count     INTEGER NOT NULL DEFAULT 0,     -- auto-retry count (0 = never retried)
@@ -180,6 +181,12 @@ SELECT
   t.project_id,
   p.name AS project_name,
   p.model AS model,
+  -- Issue #733: runtime effort mirror. `team_effort` exposes the raw nullable
+  -- team value so the API layer can compute `effortInherited`; `effort` is the
+  -- resolved value with project fallback so the UI can render a single string.
+  t.effort AS team_effort,
+  COALESCE(t.effort, p.effort) AS effort,
+  p.effort AS project_effort,
   p.max_active_teams,
   p.github_repo AS github_repo,
   p.issue_provider AS project_issue_provider,
@@ -448,4 +455,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_subworktrees_team_path_active
   ON team_subworktrees(team_id, path) WHERE removed_at IS NULL;
 
 -- Insert schema version (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (25);
+INSERT OR IGNORE INTO schema_version (version) VALUES (26);
