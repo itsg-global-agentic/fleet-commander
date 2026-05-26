@@ -405,6 +405,66 @@ function normalizeEventType(raw: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// StopFailure classification (Issue #727)
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify a StopFailure hook payload's error string as transient, fatal, or unknown.
+ *
+ * - `'fatal'`: authentication/permission errors that will not self-recover. Auto-retry
+ *   is suppressed by exhausting the retry budget (see processEvent).
+ * - `'transient'`: rate limits, server errors, network issues that may succeed on retry.
+ *   The normal `failed-queued-auto` retry path applies.
+ * - `'unknown'`: anything that does not match either bucket. Treated as transient for
+ *   retry purposes (permissive) — `retryMaxCount` cap is the backstop.
+ *
+ * Matching is case-insensitive substring matching. If `errorDetails` is empty, falls
+ * back to the `errorFallback` string (typically the legacy `error` field).
+ */
+export function classifyStopFailure(
+  errorDetails: string | undefined,
+  errorFallback: string | undefined,
+): 'transient' | 'fatal' | 'unknown' {
+  const raw = (errorDetails || errorFallback || '').toLowerCase();
+  if (!raw) return 'unknown';
+
+  const FATAL_SUBSTRINGS = [
+    'auth',
+    'unauthorized',
+    '401',
+    '403',
+    'invalid api key',
+    'permission',
+    'forbidden',
+  ];
+  for (const needle of FATAL_SUBSTRINGS) {
+    if (raw.includes(needle)) return 'fatal';
+  }
+
+  const TRANSIENT_SUBSTRINGS = [
+    'rate limit',
+    'rate_limit',
+    'overloaded',
+    'server error',
+    '500',
+    '502',
+    '503',
+    '504',
+    'timeout',
+    'econnrefused',
+    'enotfound',
+    'etimedout',
+    'network',
+    'temporarily unavailable',
+  ];
+  for (const needle of TRANSIENT_SUBSTRINGS) {
+    if (raw.includes(needle)) return 'transient';
+  }
+
+  return 'unknown';
+}
+
+// ---------------------------------------------------------------------------
 // Core processing
 // ---------------------------------------------------------------------------
 
@@ -471,7 +531,7 @@ export function processEvent(
   let statusUpdateData: { teamId: number; fields: Record<string, unknown> } | undefined;
   let previousStatus: TeamStatus | undefined;
 
-  const DORMANCY_EVENTS = new Set(['stop', 'stop_failure', 'session_end']);
+  const DORMANCY_EVENTS = new Set(['stop', 'session_end']);
   const eventNameLower = payload.event.toLowerCase();
 
   // ── State transition: idle/stuck -> running on activity events ─────
@@ -506,6 +566,40 @@ export function processEvent(
         statusUpdateData = { teamId, fields: { status: 'running' } };
         previousStatus = 'launching';
       }
+    }
+  }
+
+  // ── State transition: stop_failure -> failed (Issue #727) ─────────
+  // StopFailure hook indicates the CC turn ended due to an API error
+  // (rate limit, auth, 5xx, etc.) — NOT normal completion. We mark the
+  // team failed immediately with a classified reason so the operator can
+  // see why the failure happened and so auto-retry can be suppressed for
+  // fatal causes (auth/permission). This block runs after any default
+  // idle/stuck or launching transition logic above and OVERWRITES the
+  // collected transition data so the failed transition wins.
+  if (!isTerminal && eventNameLower === 'stop_failure') {
+    const freshTeam = db.getTeamByWorktree(payload.team);
+    if (freshTeam && !TERMINAL_STATUSES.has(freshTeam.status)) {
+      const classification = classifyStopFailure(payload.error_details, payload.error);
+      const detail = (payload.error_details || payload.error || 'unknown error').slice(0, 500);
+      const reasonTag = classification === 'fatal' ? ' [no-retry]' : '';
+      transitionData = {
+        teamId,
+        fromStatus: freshTeam.status,
+        toStatus: 'failed',
+        trigger: 'hook',
+        reason: `StopFailure: ${detail} (${classification})${reasonTag}`,
+      };
+      const statusFields: Record<string, unknown> = {
+        status: 'failed',
+        stoppedAt: nowIso,
+        pid: null,
+      };
+      if (classification === 'fatal') {
+        statusFields.retryCount = config.retryMaxCount;
+      }
+      statusUpdateData = { teamId, fields: statusFields };
+      previousStatus = freshTeam.status;
     }
   }
 
@@ -743,10 +837,14 @@ export function processEvent(
   // ── Broadcast via SSE (after transaction commits) ────────────────
   // Emit a single team_status_changed event carrying both status and
   // phase info when both change simultaneously (avoids double-broadcast).
+  // Derive the new status from statusUpdateData so transitions that target
+  // statuses other than 'running' (e.g. running -> failed on StopFailure,
+  // issue #727) broadcast the correct new status.
+  const broadcastStatus = (statusUpdateData?.fields.status as string | undefined) || 'running';
   if (previousStatus !== undefined && phaseUpdateData) {
     sse.broadcast('team_status_changed', {
       team_id: teamId,
-      status: 'running',
+      status: broadcastStatus,
       previous_status: previousStatus,
       phase: phaseUpdateData.phase,
       previous_phase: phaseUpdateData.previousPhase,
@@ -754,7 +852,7 @@ export function processEvent(
   } else if (previousStatus !== undefined) {
     sse.broadcast('team_status_changed', {
       team_id: teamId,
-      status: 'running',
+      status: broadcastStatus,
       previous_status: previousStatus,
     }, teamId);
   } else if (phaseUpdateData) {
@@ -765,6 +863,14 @@ export function processEvent(
       phase: phaseUpdateData.phase,
       previous_phase: phaseUpdateData.previousPhase,
     }, teamId);
+  }
+
+  // ── Broadcast team_stopped when status transitions to failed (#727) ──
+  // Replicates team-manager.handleProcessExit behavior so the UI converges
+  // immediately on StopFailure-driven failures (the team-manager won't
+  // observe a process exit until the CC process actually dies).
+  if (statusUpdateData?.fields.status === 'failed') {
+    sse.broadcast('team_stopped', { team_id: teamId }, teamId);
   }
 
   sse.broadcast('team_event', {
