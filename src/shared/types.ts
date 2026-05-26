@@ -27,8 +27,10 @@ export type MergeStatus = 'unknown' | 'clean' | 'behind' | 'blocked' | 'blocked_
 /** Project status */
 export type ProjectStatus = 'active' | 'archived';
 
-/** Claude Code adaptive-reasoning effort level (Opus 4.7+) */
-export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+/** Claude Code adaptive-reasoning effort level (Opus 4.7+).
+ * 'max' was removed by Claude Code in 2.1.68; 'xhigh' (added in 2.1.111) is now
+ * the highest level and the Opus 4.7 default. */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh';
 
 /** Usage zone for queue gating */
 export type UsageZone = 'green' | 'red' | 'hard_red';
