@@ -34,6 +34,9 @@ describe('getHookFiles', () => {
     expect(hooks).toContain('on_session_end.sh');
     expect(hooks).toContain('on_stop.sh');
     expect(hooks).toContain('on_task_created.sh');
+    // Issue #731: WorktreeCreate / WorktreeRemove hook scripts
+    expect(hooks).toContain('on_worktree_create.sh');
+    expect(hooks).toContain('on_worktree_remove.sh');
   });
 
   it('returns filenames sorted alphabetically', () => {
@@ -115,6 +118,9 @@ describe('getHookEventTypes', () => {
     expect(types).toContain('SessionEnd');
     expect(types).toContain('Stop');
     expect(types).toContain('TaskCreated');
+    // Issue #731: WorktreeCreate / WorktreeRemove hook events
+    expect(types).toContain('WorktreeCreate');
+    expect(types).toContain('WorktreeRemove');
   });
 
   it('returns event types sorted alphabetically', () => {

@@ -1311,6 +1311,28 @@ export class TeamService {
 
     return db.getHandoffFiles(teamId);
   }
+
+  /**
+   * Get all CC-initiated subworktrees tracked for a team. Includes both
+   * active and previously-removed rows so the UI can show historical
+   * worktrees as well as live ones (issue #731).
+   *
+   * @throws ServiceError with code VALIDATION if teamId is invalid
+   * @throws ServiceError with code NOT_FOUND if team doesn't exist
+   */
+  getSubworktrees(teamId: number): unknown[] {
+    if (isNaN(teamId) || teamId < 1) {
+      throw validationError('Invalid team ID');
+    }
+
+    const db = getDatabase();
+    const team = db.getTeam(teamId);
+    if (!team) {
+      throw notFoundError(`Team ${teamId} not found`);
+    }
+
+    return db.getTeamSubworktrees(teamId);
+  }
 }
 
 // ---------------------------------------------------------------------------

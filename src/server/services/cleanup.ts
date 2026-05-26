@@ -165,7 +165,39 @@ export function getCleanupPreview(projectId: number, resetTeams: boolean = false
   }
 
   // -------------------------------------------------------------------
-  // 4. If resetTeams, include all team DB records for this project
+  // 4. CC-initiated subworktrees from done/failed teams (issue #731)
+  // -------------------------------------------------------------------
+  // For each terminal team in this project, list its active CC-tracked
+  // subworktrees. These are nested worktrees CC created via WorktreeCreate
+  // (--worktree, EnterWorktree, isolation=worktree) inside or alongside
+  // the team's main worktree. Skipped when the team is still active.
+  if (typeof db.getTeamSubworktrees === 'function') {
+    for (const team of allTeams) {
+      if (!['done', 'failed'].includes(team.status)) continue;
+      const subworktrees = db.getTeamSubworktrees(team.id) as Array<{
+        path: string;
+        createdVia: 'cc' | 'fc';
+        removedAt: string | null;
+      }>;
+      for (const sw of subworktrees) {
+        if (sw.removedAt !== null) continue;
+        if (sw.createdVia !== 'cc') continue;
+        // Derive a display name from the trailing path segment so the UI
+        // shows something readable rather than the full absolute path.
+        const segments = sw.path.replace(/\\/g, '/').replace(/\/+$/, '').split('/');
+        const displayName = segments[segments.length - 1] || sw.path;
+        items.push({
+          type: 'cc_subworktree',
+          name: displayName,
+          path: sw.path,
+          reason: `CC-created subworktree, team ${team.status}`,
+        });
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // 5. If resetTeams, include all team DB records for this project
   // -------------------------------------------------------------------
   if (resetTeams) {
     const teams = db.getTeams({ projectId });
@@ -272,6 +304,82 @@ export function executeCleanup(
           continue;
         }
         db.deleteTeamAndRelated(teamId);
+        removed.push(item.name);
+      } else if (item.type === 'cc_subworktree') {
+        // Locate the matching active subworktree row to know which team
+        // owns it (so we can mark it removed in DB). Walk the project's
+        // teams once; the per-team list is small (one row per active
+        // CC subworktree) so the cost is negligible.
+        let ownerTeamId: number | null = null;
+        if (typeof db.getTeamSubworktrees === 'function') {
+          for (const team of db.getTeams({ projectId })) {
+            const rows = db.getTeamSubworktrees(team.id) as Array<{
+              path: string;
+              removedAt: string | null;
+              createdVia: 'cc' | 'fc';
+            }>;
+            const match = rows.find(
+              (r) => r.path === item.path && r.removedAt === null && r.createdVia === 'cc',
+            );
+            if (match) {
+              ownerTeamId = team.id;
+              break;
+            }
+          }
+        }
+
+        if (ownerTeamId === null) {
+          // Row vanished between preview and execute — silently skip.
+          console.log(`[Cleanup] CC subworktree no longer tracked: ${item.path}`);
+          continue;
+        }
+
+        // Try git worktree remove first; fall back to fs.rmSync.
+        try {
+          execSync(
+            `git -C "${project.repoPath}" worktree remove --force "${item.path}"`,
+            { encoding: 'utf-8', stdio: 'pipe', timeout: 15000 },
+          );
+        } catch (e) {
+          console.error(
+            `[Cleanup] CC subworktree remove failed for ${item.path}:`,
+            e instanceof Error ? e.message : e,
+          );
+          try {
+            fs.rmSync(item.path, { recursive: true, force: true });
+          } catch (rmErr) {
+            // Both git and fs failed — still mark removed_at so we don't
+            // keep retrying this path on every subsequent cleanup.
+            console.error(
+              `[Cleanup] CC subworktree fs.rmSync failed for ${item.path}:`,
+              rmErr instanceof Error ? rmErr.message : rmErr,
+            );
+          }
+        }
+
+        // Prune stale worktree references (best-effort, like main worktree path).
+        try {
+          execSync(`git -C "${project.repoPath}" worktree prune`, {
+            stdio: 'pipe',
+            timeout: 5000,
+          });
+        } catch (e) {
+          console.error(`[Cleanup] worktree prune failed:`, e instanceof Error ? e.message : e);
+        }
+
+        // Mark the row removed in DB regardless of git/fs outcome — we don't
+        // want repeated retries against an already-vanished directory.
+        if (typeof db.recordCcSubworktreeRemove === 'function') {
+          try {
+            db.recordCcSubworktreeRemove({ teamId: ownerTeamId, path: item.path });
+          } catch (e) {
+            console.error(
+              `[Cleanup] recordCcSubworktreeRemove failed for ${item.path}:`,
+              e instanceof Error ? e.message : e,
+            );
+          }
+        }
+
         removed.push(item.name);
       }
     } catch (err) {

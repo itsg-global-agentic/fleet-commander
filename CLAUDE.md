@@ -27,7 +27,7 @@ fleet-commander/
       index.ts              # Fastify app entry, route registration, service startup
       config.ts             # Environment variable parsing and validation
       db.ts                 # SQLite connection (WAL mode), schema init, query helpers
-      schema.sql            # 14 tables: projects, project_groups, project_issue_sources, teams, pull_requests, events, commands, usage_snapshots, schema_version, message_templates, team_transitions, agent_messages, stream_events, team_tasks
+      schema.sql            # 15 tables: projects, project_groups, project_issue_sources, teams, pull_requests, events, commands, usage_snapshots, schema_version, message_templates, team_transitions, agent_messages, stream_events, team_tasks, team_subworktrees
       routes/               # REST API route handlers
         teams.ts            # CRUD + launch/stop/message
         projects.ts         # CRUD + install/uninstall/cleanup
@@ -126,7 +126,7 @@ fleet-commander/
 | `src/server/index.ts` | App entry point, registers routes, starts services |
 | `src/server/config.ts` | All env var parsing, validation, frozen config object |
 | `src/server/db.ts` | SQLite connection, WAL mode, schema initialization |
-| `src/server/schema.sql` | Full database schema (14 tables + 1 view) |
+| `src/server/schema.sql` | Full database schema (15 tables + 1 view) |
 | `src/server/services/team-manager.ts` | Spawns CC processes, manages stdin/stdout pipes |
 | `src/server/services/event-collector.ts` | Receives hook events, writes to DB, broadcasts SSE |
 | `src/server/services/github-poller.ts` | Polls GitHub via `gh` CLI for PR/CI/merge status |
@@ -155,7 +155,7 @@ npm run launch       # Full launch: install + build + open browser
 
 ## Database
 
-SQLite with WAL mode, 14 tables:
+SQLite with WAL mode, 15 tables:
 
 | Table | Purpose |
 |-------|---------|
@@ -173,6 +173,7 @@ SQLite with WAL mode, 14 tables:
 | `agent_messages` | Inter-agent message tracking |
 | `stream_events` | Raw CC stream events for output replay |
 | `team_tasks` | Task tracking per team (from TaskCreated hooks) |
+| `team_subworktrees` | CC-initiated subworktrees per team (path, branch, created_via, removed_at) from WorktreeCreate/WorktreeRemove hooks |
 
 Plus one view: `v_team_dashboard` (joins teams + projects + PRs for the grid).
 
