@@ -7,6 +7,7 @@ import { getTeamManager } from '../services/team-manager.js';
 import { getEventService } from '../services/event-service.js';
 import { ServiceError } from '../services/service-error.js';
 import { parseOptionalIdParam } from '../utils/parse-params.js';
+import { buildEventPayloadFromCc } from '../utils/build-event-payload.js';
 
 interface EventQuerystring {
   team_id?: string;
@@ -28,82 +29,48 @@ function str(val: unknown): string | undefined {
 
 /**
  * New format: shell sends event, team, timestamp, and raw cc_stdin.
- * Server parses cc_stdin with JSON.parse() and extracts all CC fields.
+ * Server parses cc_stdin with JSON.parse() and delegates the field
+ * extraction to `buildEventPayloadFromCc` (shared with the HTTP hook route).
+ *
+ * We preserve the raw `cc_stdin` string the shell sent (rather than
+ * re-serializing the parsed object) because:
+ *   - the TaskCreated handler in event-collector parses cc_stdin back into
+ *     an object, which works either way;
+ *   - the dedup fingerprint hashes the full payload — a stable cc_stdin
+ *     string keeps fingerprints comparable across CC versions whose JSON
+ *     key order may vary;
+ *   - existing unit tests in event-collector.test.ts assert on the original
+ *     cc_stdin string for malformed / non-object inputs.
  */
 function buildPayloadFromCcStdin(body: Record<string, unknown>): EventPayload {
-  const payload: EventPayload = {
-    event: String(body.event),
-    team: String(body.team),
-    timestamp: str(body.timestamp),
-    cc_stdin: String(body.cc_stdin),
-  };
+  const eventType = String(body.event);
+  const team = String(body.team);
+  const timestamp = str(body.timestamp);
+  const ccStdinRaw = String(body.cc_stdin);
 
-  // Parse raw CC stdin JSON
   let cc: Record<string, unknown> = {};
   try {
-    const parsed: unknown = JSON.parse(String(body.cc_stdin));
+    const parsed: unknown = JSON.parse(ccStdinRaw);
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
       cc = parsed as Record<string, unknown>;
     }
   } catch {
-    // If cc_stdin is not valid JSON, store it as-is but extract nothing
-    return payload;
+    // Malformed JSON — preserve the raw string in cc_stdin (so TaskCreated
+    // and the dedup fingerprint still work) but skip field extraction.
+    return {
+      event: eventType,
+      team,
+      timestamp,
+      cc_stdin: ccStdinRaw,
+    };
   }
 
-  // Extract known CC fields
-  payload.session_id = str(cc.session_id);
-  payload.tool_name = str(cc.tool_name);
-  payload.agent_type = str(cc.agent_type);
-  payload.teammate_name = str(cc.teammate_name);
-  payload.message = str(cc.message);
-  payload.error = str(cc.error);
-  payload.tool_use_id = str(cc.tool_use_id);
-  payload.error_details = str(cc.error_details);
-  payload.last_assistant_message = str(cc.last_assistant_message);
-
-  // duration_ms: tool execution time in milliseconds (CC 2.1.119+, PostToolUse/PostToolUseFailure only).
-  // CC emits this as a real number; reject any other type defensively (strings, NaN, Infinity).
-  if (typeof cc.duration_ms === 'number' && Number.isFinite(cc.duration_ms)) {
-    payload.duration_ms = cc.duration_ms;
-  }
-
-  // tool_input: CC sends this as an object; stringify it for storage
-  if (cc.tool_input !== undefined && cc.tool_input !== null) {
-    payload.tool_input = typeof cc.tool_input === 'string'
-      ? cc.tool_input
-      : JSON.stringify(cc.tool_input);
-  }
-
-  // Extract SendMessage routing fields from parsed tool_input
-  if (payload.tool_name === 'SendMessage' && cc.tool_input && typeof cc.tool_input === 'object') {
-    const toolInput = cc.tool_input as Record<string, unknown>;
-    payload.msg_to = str(toolInput.to);
-    payload.msg_summary = str(toolInput.summary);
-  }
-
-  // Worktree fields
-  payload.worktree_root = str(cc.worktree_root);
-  payload.worktree_path = str(cc.worktree_path);
-
-  // New fields that CC provides but were previously dropped by shell regex
-  payload.model = str(cc.model);
-  payload.source = str(cc.source);
-  payload.notification_type = str(cc.notification_type);
-  payload.agent_id = str(cc.agent_id);
-  payload.owner = str(cc.owner);
-  payload.cwd = str(cc.cwd);
-
-  // Issue #730: CC 2.1.145+ Stop/SubagentStop hook input ships arrays of
-  // pending background tasks and session crons. Stringify them so they fit
-  // the EventPayload shape (string-only fields). The legacy shell hook path
-  // cannot transmit these — they only flow through cc_stdin.
-  if (Array.isArray(cc.background_tasks)) {
-    payload.background_tasks = JSON.stringify(cc.background_tasks);
-  }
-  if (Array.isArray(cc.session_crons)) {
-    payload.session_crons = JSON.stringify(cc.session_crons);
-  }
-
+  // Delegate to the shared builder, then overwrite cc_stdin with the raw
+  // string the shell originally sent (the builder re-serializes the parsed
+  // object, which is canonical but not guaranteed bit-identical to the
+  // shell's input).
+  const payload = buildEventPayloadFromCc(cc, team, eventType, timestamp);
+  payload.cc_stdin = ccStdinRaw;
   return payload;
 }
 
