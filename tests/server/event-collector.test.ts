@@ -2001,6 +2001,24 @@ describe('buildPayloadFromCcStdin', () => {
     expect(payload.cwd).toBe('/home/user/project');
   });
 
+  it('extracts owner field from cc_stdin (Issue #728)', () => {
+    const ccData = {
+      task_id: 'task-1',
+      subject: 'A task',
+      status: 'pending',
+      owner: 'planner',
+    };
+    const body = {
+      event: 'task_created',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.owner).toBe('planner');
+  });
+
   it('handles invalid cc_stdin JSON gracefully', () => {
     const body = {
       event: 'tool_use',
@@ -2130,6 +2148,18 @@ describe('buildPayloadFromLegacy', () => {
     const payload = buildPayloadFromLegacy(body);
 
     expect(payload.cc_stdin).toBeUndefined();
+  });
+
+  it('extracts owner field from legacy body (Issue #728)', () => {
+    const body = {
+      event: 'task_created',
+      team: 'kea-100',
+      owner: 'reviewer',
+    };
+
+    const payload = buildPayloadFromLegacy(body);
+
+    expect(payload.owner).toBe('reviewer');
   });
 });
 
@@ -3240,6 +3270,40 @@ describe('TaskCreated event processing', () => {
     // The event should be stored with normalized type
     const insertCall = db.processEventTransaction.mock.calls[0][0];
     expect(insertCall.eventInsert.eventType).toBe('TaskCreated');
+  });
+
+  it('extracts owner from cc_stdin when present', () => {
+    // Issue #728: TaskCreated hook now ships an explicit `owner` field.
+    // The handler should use payload.owner directly, ahead of agent_id and
+    // agent_type fallbacks.
+    const upsertTeamTask = vi.fn().mockReturnValue({
+      id: 1,
+      teamId: 1,
+      taskId: 'task-1',
+      subject: 'Implement feature',
+      status: 'in_progress',
+      owner: 'planner',
+    });
+    const db = createMockDb({ upsertTeamTask });
+    const sse = createMockSse();
+
+    const payload = makePayload({
+      event: 'task_created',
+      cc_stdin: JSON.stringify({
+        task_id: 'task-1',
+        subject: 'Implement feature',
+        status: 'in_progress',
+        owner: 'planner',
+      }),
+    });
+    // Simulate buildPayloadFromCcStdin lifting cc.owner onto payload.owner.
+    payload.owner = 'planner';
+
+    processEvent(payload, db, sse);
+
+    expect(upsertTeamTask).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: 'planner' }),
+    );
   });
 });
 

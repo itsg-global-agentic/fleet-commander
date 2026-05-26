@@ -26,6 +26,7 @@ import { resolveMessage } from '../utils/resolve-message.js';
 import { CircularBuffer } from '../utils/circular-buffer.js';
 import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile, getGitignoreEntries } from '../utils/fc-manifest.js';
 import { classifyAgentRole, shouldAdvancePhase } from './event-collector.js';
+import { wasTaskSeenByHook } from './task-dedup.js';
 import type { TeamPhase } from '../../shared/types.js';
 import { isValidGithubRepo } from '../utils/exec-gh.js';
 import { generateIssueContext } from './issue-context-generator.js';
@@ -38,6 +39,16 @@ const execAsync = promisify(execCallback);
 
 const MAX_OUTPUT_LINES = config.outputBufferLines;
 const MAX_PARSED_EVENTS = 1000;
+
+// ---------------------------------------------------------------------------
+// Task extraction dedup logging (Issue #728)
+// ---------------------------------------------------------------------------
+// When both the TaskCreated hook AND the legacy stream-event TodoWrite parser
+// fire for the same task, the stream parser skips silently — but emits a
+// one-time log line per (teamId, taskId) so operators can confirm the
+// transition is working. This Set tracks which (team, task) pairs have
+// already been logged to avoid spamming the log.
+const loggedTaskDedupes = new Set<string>();
 
 // ---------------------------------------------------------------------------
 // summarizeEvent — short text summary for console logging
@@ -2479,6 +2490,11 @@ export class TeamManager {
                     }
 
                     // Stdout fallback: extract tasks from TodoWrite tool_use blocks
+                    // NOTE: CC 2.1.143+ ships a native `TaskCreated` hook with
+                    // the same data — that path runs first via event-collector
+                    // and is canonical. We skip the upsert+SSE here when the
+                    // hook already recorded this taskId; a one-time log line
+                    // surfaces the dedup so operators can confirm coverage.
                     if (toolName === 'TodoWrite') {
                       try {
                         const input = toolBlock.input as Record<string, unknown> | undefined;
@@ -2489,6 +2505,21 @@ export class TeamManager {
                             const taskId = (todo.id ?? `team-${teamId}-task-${todos.indexOf(todo)}`) as string;
                             const subject = (todo.content ?? todo.title ?? todo.subject ?? 'Untitled task') as string;
                             const status = (todo.status ?? 'pending') as string;
+
+                            // Dedup: if the TaskCreated hook already inserted
+                            // this taskId, skip the upsert AND the SSE
+                            // broadcast. Log once per (team, task) pair.
+                            if (wasTaskSeenByHook(teamId, taskId)) {
+                              const dedupeKey = `${teamId}:${taskId}`;
+                              if (!loggedTaskDedupes.has(dedupeKey)) {
+                                loggedTaskDedupes.add(dedupeKey);
+                                console.log(
+                                  `[TaskExtraction] dedupe: stream-event TodoWrite "${subject}" task_id=${taskId} already captured via TaskCreated hook (team=${teamId})`
+                                );
+                              }
+                              continue;
+                            }
+
                             // Derive owner from parent_tool_use_id if available
                             const parentId = (ev.parent_tool_use_id as string | null | undefined) ?? null;
                             const owner = parentId ? (agentMap.get(parentId) ?? 'team-lead') : 'team-lead';

@@ -84,6 +84,7 @@ function buildPayloadFromCcStdin(body: Record<string, unknown>): EventPayload {
   payload.source = str(cc.source);
   payload.notification_type = str(cc.notification_type);
   payload.agent_id = str(cc.agent_id);
+  payload.owner = str(cc.owner);
   payload.cwd = str(cc.cwd);
 
   return payload;
@@ -112,6 +113,7 @@ function buildPayloadFromLegacy(body: Record<string, unknown>): EventPayload {
     worktree_path: str(body.worktree_path),
     msg_to: str(body.msg_to),
     msg_summary: str(body.msg_summary),
+    owner: str(body.owner),
   };
 }
 
