@@ -989,8 +989,10 @@ export class ProjectService {
       }
     }
 
-    // Install hooks (non-fatal)
-    const installResult = installHooks(normalizedPath, _minimalLogger);
+    // Install hooks (non-fatal) — new projects default to HTTP mode per
+    // issue #735. The mode is recorded on the project row so the UI can
+    // surface it and so reinstall flows know what to flip to/from.
+    const installResult = installHooks(normalizedPath, _minimalLogger, { mode: 'http' });
     if (!installResult.ok) {
       console.warn(`[ProjectService] Hook installation failed for ${normalizedPath}: ${installResult.stderr}`);
     }
@@ -1002,7 +1004,12 @@ export class ProjectService {
     const status = checkInstallStatus(normalizedPath);
     const allInstalled = status.hooks.installed && status.prompt.installed;
     if (allInstalled) {
-      db.updateProject(project.id, { hooksInstalled: true });
+      db.updateProject(project.id, { hooksInstalled: true, hookMode: 'http' });
+    } else {
+      // Still record the requested mode even if some artifacts are missing —
+      // the operator's intent was http; partial-install state is captured
+      // separately via hooksInstalled.
+      db.updateProject(project.id, { hookMode: 'http' });
     }
 
     // Re-fetch to get updated hooks_installed
@@ -1140,10 +1147,17 @@ export class ProjectService {
    * and updates the DB accordingly.
    *
    * @param projectId - The project ID
+   * @param opts.mode - Hook deployment mode: 'http' (default) or 'bash'.
+   *                    Forwarded to installHooks() and persisted on the
+   *                    project row so the UI badge and future reinstalls
+   *                    know which mode this project uses. Issue #735.
    * @returns Install result with status details
    * @throws ServiceError with code NOT_FOUND if project doesn't exist
    */
-  installHooksForProject(projectId: number): {
+  installHooksForProject(
+    projectId: number,
+    opts?: { mode?: 'http' | 'bash' },
+  ): {
     ok: boolean;
     output: string;
     error?: string;
@@ -1155,13 +1169,16 @@ export class ProjectService {
       throw notFoundError(`Project ${projectId} not found`);
     }
 
-    const result = installHooks(project.repoPath, _minimalLogger);
+    const mode = opts?.mode ?? 'http';
+    const result = installHooks(project.repoPath, _minimalLogger, { mode });
 
     // Invalidate cache and check what actually landed on disk
     invalidateInstallStatusCache(project.repoPath);
     const status = checkInstallStatus(project.repoPath);
     const allInstalled = status.hooks.installed && status.prompt.installed;
-    db.updateProject(project.id, { hooksInstalled: allInstalled });
+    // Persist the requested mode even if some artifacts are missing — it
+    // captures operator intent. hooksInstalled tracks completeness separately.
+    db.updateProject(project.id, { hooksInstalled: allInstalled, hookMode: mode });
 
     // Broadcast so UI refreshes badges
     sseBroker.broadcast('project_updated', {

@@ -243,6 +243,8 @@ export interface ProjectInsert {
   issueProvider?: string | null;
   projectKey?: string | null;
   providerConfig?: string | null;
+  /** Hook deployment mode: 'http' (default for new projects), 'bash' (legacy), or null (unknown). */
+  hookMode?: 'http' | 'bash' | null;
 }
 
 export interface ProjectUpdate {
@@ -260,6 +262,8 @@ export interface ProjectUpdate {
   providerConfig?: string | null;
   autoMergeEnabled?: boolean | null;
   autoMergeCheckedAt?: string | null;
+  /** Hook deployment mode: 'http' / 'bash' / null. Updated on (re)install. */
+  hookMode?: 'http' | 'bash' | null;
 }
 
 export interface ProjectGroupInsert {
@@ -456,6 +460,9 @@ export class FleetDatabase {
 
     // Add team_subworktrees table if missing (v24 migration — CC-initiated subworktrees)
     this.addTeamSubworktreesTable();
+
+    // Add hook_mode column to projects (v25 migration — HTTP vs bash hooks, issue #735)
+    this.addHookModeColumn();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1447,6 +1454,37 @@ export class FleetDatabase {
   }
 
   /**
+   * Add hook_mode column to projects table if it doesn't exist (v25 migration).
+   *
+   * Records which hook deployment mode each project uses:
+   *   - 'http': native HTTP hooks (CC 2.1.62+, default for new projects).
+   *   - 'bash': legacy bash+curl hooks (fallback for older CC versions).
+   *   - NULL : pre-issue-#735 projects whose mode has not yet been recorded.
+   *            The UI surfaces these as "Unknown" so the operator can flip
+   *            them explicitly on the next reinstall.
+   *
+   * Fresh databases get the column via schema.sql; upgraded databases use
+   * this migration. Idempotent across restarts. Issue #735.
+   */
+  private addHookModeColumn(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+      // Fresh DB: projects table doesn't exist yet — schema.sql will create it
+      // with hook_mode already present. Nothing to migrate.
+      if (cols.length === 0) return;
+      const hasColumn = cols.some((c) => c.name === 'hook_mode');
+      if (!hasColumn) {
+        this.db.exec('ALTER TABLE projects ADD COLUMN hook_mode TEXT');
+        console.log('[DB] v25 migration: added hook_mode column to projects');
+      }
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (25)');
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v25 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Migrate branch_behind and branch_behind_resolved message templates
    * from hardcoded 'main' to use {{BASE_BRANCH}} placeholder.
    * Only updates templates that exactly match the old defaults (user edits are preserved).
@@ -1507,8 +1545,8 @@ export class FleetDatabase {
   insertProject(data: ProjectInsert): Project {
     const now = new Date().toISOString();
     const stmt = this.stmt(`
-      INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, effort, issue_provider, project_key, provider_config, created_at, updated_at)
-      VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @effort, @issueProvider, @projectKey, @providerConfig, @createdAt, @updatedAt)
+      INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, effort, issue_provider, project_key, provider_config, hook_mode, created_at, updated_at)
+      VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @effort, @issueProvider, @projectKey, @providerConfig, @hookMode, @createdAt, @updatedAt)
     `);
 
     const info = stmt.run({
@@ -1523,6 +1561,7 @@ export class FleetDatabase {
       issueProvider: data.issueProvider ?? 'github',
       projectKey: data.projectKey ?? null,
       providerConfig: data.providerConfig ? encrypt(data.providerConfig) : null,
+      hookMode: data.hookMode ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -1640,6 +1679,10 @@ export class FleetDatabase {
     if (fields.autoMergeCheckedAt !== undefined) {
       setClauses.push('auto_merge_checked_at = @autoMergeCheckedAt');
       params.autoMergeCheckedAt = fields.autoMergeCheckedAt;
+    }
+    if (fields.hookMode !== undefined) {
+      setClauses.push('hook_mode = @hookMode');
+      params.hookMode = fields.hookMode;
     }
 
     if (setClauses.length === 0) return this.getProject(id);
@@ -3397,6 +3440,12 @@ export class FleetDatabase {
         ? null
         : (rawAutoMerge as number) === 1;
 
+    // Coerce hook_mode to the narrowed union; treat unexpected values as null
+    // so a corrupted column never confuses callers.
+    const rawHookMode = row.hook_mode as string | null | undefined;
+    const hookMode: 'http' | 'bash' | null =
+      rawHookMode === 'http' || rawHookMode === 'bash' ? rawHookMode : null;
+
     return {
       id: row.id as number,
       name: row.name as string,
@@ -3414,6 +3463,7 @@ export class FleetDatabase {
       providerConfig,
       autoMergeEnabled,
       autoMergeCheckedAt: (row.auto_merge_checked_at as string | null) ?? null,
+      hookMode,
       createdAt: utcify(row.created_at as string),
       updatedAt: utcify(row.updated_at as string),
     };

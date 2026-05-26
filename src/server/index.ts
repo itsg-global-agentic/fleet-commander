@@ -21,6 +21,7 @@ import queryRoutes from './routes/query.js';
 import issueSourcesRoutes from './routes/issue-sources.js';
 import issueRelationsRoutes from './routes/issue-relations.js';
 import handoffRoutes from './routes/handoff.js';
+import hooksRoutes from './routes/hooks.js';
 import { sseBroker } from './services/sse-broker.js';
 import { getIssueFetcher } from './services/issue-fetcher.js';
 import { stuckDetector } from './services/stuck-detector.js';
@@ -75,6 +76,7 @@ async function main() {
 
   // API routes
   await server.register(eventsRoutes);
+  await server.register(hooksRoutes);
   await server.register(streamRoutes);
   await server.register(issueRoutes);
   await server.register(teamsRoutes);

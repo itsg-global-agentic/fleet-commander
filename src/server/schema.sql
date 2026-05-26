@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS projects (
   provider_config TEXT,                               -- JSON blob of provider-specific configuration
   auto_merge_enabled INTEGER,                         -- 0|1|NULL (NULL = unknown / not yet detected; non-GitHub projects stay NULL)
   auto_merge_checked_at TEXT,                         -- ISO timestamp of last gh check, or NULL
+  hook_mode       TEXT,                               -- 'http' | 'bash' | NULL (NULL = legacy / not yet set; new projects default to 'http' via the install path)
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -447,4 +448,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_subworktrees_team_path_active
   ON team_subworktrees(team_id, path) WHERE removed_at IS NULL;
 
 -- Insert schema version (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (24);
+INSERT OR IGNORE INTO schema_version (version) VALUES (25);

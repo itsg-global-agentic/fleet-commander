@@ -74,6 +74,14 @@ export interface Project {
   autoMergeEnabled: boolean | null;
   /** ISO timestamp of last `gh api` check used to throttle refreshes. */
   autoMergeCheckedAt: string | null;
+  /**
+   * Hook deployment mode for this project (issue #735):
+   *   - 'http': native HTTP hooks (CC 2.1.62+), default for new projects.
+   *   - 'bash': legacy bash+curl hooks (fallback for older CC versions).
+   *   - null : pre-issue-#735 project whose mode has not yet been recorded;
+   *            surfaced in the UI as "Unknown" until the operator reinstalls.
+   */
+  hookMode: 'http' | 'bash' | null;
   createdAt: string;
   updatedAt: string;
 }

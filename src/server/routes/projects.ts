@@ -240,18 +240,36 @@ const projectsRoutes: FastifyPluginCallback = (
 
   // -------------------------------------------------------------------------
   // POST /api/projects/:id/install — (re)install hooks, settings, prompt
+  // Accepts optional body { mode: 'http' | 'bash' } to flip the hook
+  // deployment mode (issue #735). Defaults to 'http' when omitted, matching
+  // service-layer behavior.
   // -------------------------------------------------------------------------
   fastify.post(
     '/api/projects/:id/install',
     async (
-      request: FastifyRequest<{ Params: ProjectIdParams }>,
+      request: FastifyRequest<{ Params: ProjectIdParams; Body?: { mode?: 'http' | 'bash' } }>,
       reply: FastifyReply,
     ) => {
       try {
         const projectId = parseIdParam(request.params.id, 'id');
 
+        // Validate mode if explicitly provided. We accept undefined / missing
+        // body and let the service apply its default. Reject any other value
+        // with 400 to surface client typos early.
+        const body = (request.body ?? {}) as { mode?: unknown };
+        let mode: 'http' | 'bash' | undefined;
+        if (body.mode !== undefined) {
+          if (body.mode !== 'http' && body.mode !== 'bash') {
+            return reply.code(400).send({
+              error: 'Bad Request',
+              message: `Invalid hook mode: ${String(body.mode)}. Must be 'http' or 'bash'.`,
+            });
+          }
+          mode = body.mode;
+        }
+
         const service = getProjectService();
-        const result = service.installHooksForProject(projectId);
+        const result = service.installHooksForProject(projectId, mode ? { mode } : undefined);
         return reply.code(200).send(result);
       } catch (err: unknown) {
         if (err instanceof ServiceError) {

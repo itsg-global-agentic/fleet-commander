@@ -58,11 +58,27 @@ export function getWorkflowFile(): string {
 }
 
 /**
- * Get the settings example filename.
- * Returns 'settings.json.example'.
+ * Get the settings example filename for the requested hook deployment mode.
+ *
+ * - `'bash'` (default, backward-compat): `'settings.json.example'` — the
+ *   legacy bash+curl template.
+ * - `'http'`: `'settings.json.http.example'` — native HTTP hooks template
+ *   added by issue #735.
+ *
+ * Callers that need both filenames (e.g. install validation) should call
+ * this once per mode rather than hardcoding the names.
  */
-export function getSettingsExampleFile(): string {
-  return 'settings.json.example';
+export function getSettingsExampleFile(mode: 'bash' | 'http' = 'bash'): string {
+  return mode === 'http' ? 'settings.json.http.example' : 'settings.json.example';
+}
+
+/**
+ * Convenience wrapper for the HTTP settings example filename. Equivalent to
+ * `getSettingsExampleFile('http')`. Exists so the manifest's static shape
+ * can carry both filenames without callers needing the literal string.
+ */
+export function getHttpSettingsExampleFile(): string {
+  return getSettingsExampleFile('http');
 }
 
 /**
@@ -118,8 +134,10 @@ export interface FCManifest {
   guides: string[];
   /** Workflow prompt filename (always 'fleet-workflow.md') */
   workflow: string;
-  /** Settings example filename (always 'settings.json.example') */
+  /** Bash-mode settings example filename (always 'settings.json.example') */
   settingsExample: string;
+  /** HTTP-mode settings example filename (always 'settings.json.http.example') — issue #735 */
+  httpSettingsExample: string;
   /** Explicit .gitignore entries for FC-managed files */
   gitignoreEntries: string[];
 }
@@ -135,7 +153,8 @@ export function getAllManagedFiles(): FCManifest {
     agents: getAgentFiles(),
     guides: getGuideFiles(),
     workflow: getWorkflowFile(),
-    settingsExample: getSettingsExampleFile(),
+    settingsExample: getSettingsExampleFile('bash'),
+    httpSettingsExample: getSettingsExampleFile('http'),
     gitignoreEntries: getGitignoreEntries(),
   };
 }
