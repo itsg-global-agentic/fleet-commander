@@ -141,6 +141,8 @@ export interface TeamUpdate {
   headless?: boolean;
   blockedByJson?: string | null;
   pendingChildrenJson?: string | null;
+  backgroundTasksJson?: string | null;
+  sessionCronsJson?: string | null;
   totalInputTokens?: number;
   totalOutputTokens?: number;
   totalCacheCreationTokens?: number;
@@ -435,6 +437,9 @@ export class FleetDatabase {
 
     // Add auto_merge_enabled / auto_merge_checked_at columns to projects (v20 migration)
     this.addAutoMergeColumns();
+
+    // Add background_tasks_json / session_crons_json columns to teams (v21 migration)
+    this.addBackgroundTaskColumns();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1264,6 +1269,46 @@ export class FleetDatabase {
   }
 
   /**
+   * Add background_tasks_json and session_crons_json columns to teams table
+   * if they don't exist (v21 migration). These columns persist the
+   * `background_tasks` and `session_crons` arrays that CC 2.1.145+ ships in
+   * Stop/SubagentStop hook input (`cc_stdin`). When either column is
+   * non-empty JSON, the stuck-detector suppresses the idle->stuck
+   * transition so we do not page operators for a team that intentionally
+   * scheduled background work (see issue #730).
+   *
+   * - background_tasks_json TEXT (nullable): JSON-stringified array of
+   *   pending background tasks. NULL when no work pending.
+   * - session_crons_json    TEXT (nullable): JSON-stringified array of
+   *   pending session crons. NULL when no work pending.
+   *
+   * Fresh databases get both columns via schema.sql; upgraded databases use
+   * this migration. Idempotent across restarts.
+   */
+  private addBackgroundTaskColumns(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(teams)').all() as Array<{ name: string }>;
+      // Fresh DB: teams table doesn't exist yet — schema.sql will create it
+      // with both columns already present. Nothing to migrate.
+      if (cols.length === 0) return;
+      const hasBackgroundTasks = cols.some((c) => c.name === 'background_tasks_json');
+      const hasSessionCrons = cols.some((c) => c.name === 'session_crons_json');
+      if (!hasBackgroundTasks) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN background_tasks_json TEXT');
+        console.log('[DB] v21 migration: added background_tasks_json column to teams');
+      }
+      if (!hasSessionCrons) {
+        this.db.exec('ALTER TABLE teams ADD COLUMN session_crons_json TEXT');
+        console.log('[DB] v21 migration: added session_crons_json column to teams');
+      }
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (21)');
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v21 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Migrate branch_behind and branch_behind_resolved message templates
    * from hardcoded 'main' to use {{BASE_BRANCH}} placeholder.
    * Only updates templates that exactly match the old defaults (user edits are preserved).
@@ -1872,6 +1917,14 @@ export class FleetDatabase {
     if (fields.pendingChildrenJson !== undefined) {
       setClauses.push('pending_children_json = @pendingChildrenJson');
       params.pendingChildrenJson = fields.pendingChildrenJson;
+    }
+    if (fields.backgroundTasksJson !== undefined) {
+      setClauses.push('background_tasks_json = @backgroundTasksJson');
+      params.backgroundTasksJson = fields.backgroundTasksJson;
+    }
+    if (fields.sessionCronsJson !== undefined) {
+      setClauses.push('session_crons_json = @sessionCronsJson');
+      params.sessionCronsJson = fields.sessionCronsJson;
     }
     if (fields.totalInputTokens !== undefined) {
       setClauses.push('total_input_tokens = @totalInputTokens');
@@ -3265,6 +3318,8 @@ export class FleetDatabase {
       totalCostUsd: (row.total_cost_usd as number | undefined) ?? 0,
       blockedByJson: (row.blocked_by_json as string | null) ?? null,
       pendingChildrenJson: (row.pending_children_json as string | null) ?? null,
+      backgroundTasksJson: (row.background_tasks_json as string | null) ?? null,
+      sessionCronsJson: (row.session_crons_json as string | null) ?? null,
       retryCount: (row.retry_count as number | undefined) ?? 0,
       launchedAt: utcify(row.launched_at as string | null),
       startedAt: utcify((row.started_at as string | null) ?? null),

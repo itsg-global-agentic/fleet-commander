@@ -2445,13 +2445,18 @@ describe('Transaction atomicity', () => {
       }),
     );
 
-    // Status update should be populated
+    // Status update should be populated. The resume transition (idle/stuck
+    // -> running) also clears the pending background_tasks / session_crons
+    // flags so a subsequent Stop hook can repopulate them cleanly (#730).
     expect(ops.statusUpdate).toEqual(
       expect.objectContaining({
         teamId: 1,
-        fields: { status: 'running' },
+        fields: expect.objectContaining({ status: 'running' }),
       }),
     );
+    const resumeFields = (ops.statusUpdate as { fields: Record<string, unknown> }).fields;
+    expect(resumeFields.backgroundTasksJson).toBeNull();
+    expect(resumeFields.sessionCronsJson).toBeNull();
 
     // Heartbeat always required
     expect(ops.heartbeatUpdate).toEqual(
@@ -3441,5 +3446,276 @@ describe('PR polling frequency detection', () => {
       (call: unknown[]) => call[3] === 'poll_warning',
     );
     expect(pollWarningCalls).toHaveLength(1);
+  });
+});
+
+// =============================================================================
+// Background tasks and session crons (#730)
+// =============================================================================
+//
+// CC 2.1.145+ ships `background_tasks` and `session_crons` arrays inside
+// cc_stdin on Stop / SubagentStop hook input. The route handler stringifies
+// them onto the EventPayload, and processEvent persists them on the team row
+// so stuck-detector can suppress the idle->stuck escalation while either
+// array is non-empty.
+// =============================================================================
+
+describe('Background tasks and session crons (#730)', () => {
+  it('buildPayloadFromCcStdin extracts background_tasks array into JSON string', () => {
+    const ccData = {
+      session_id: 'sess-bg-1',
+      background_tasks: [
+        { shell_command_id: 'sc_1', description: 'building docs' },
+        { shell_command_id: 'sc_2', description: 'running tests' },
+      ],
+    };
+    const body = {
+      event: 'stop',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.background_tasks).toBe(JSON.stringify(ccData.background_tasks));
+  });
+
+  it('buildPayloadFromCcStdin extracts session_crons array into JSON string', () => {
+    const ccData = {
+      session_id: 'sess-cron-1',
+      session_crons: [
+        { cron_id: 'c1', schedule: '*/5 * * * *' },
+      ],
+    };
+    const body = {
+      event: 'subagent_stop',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify(ccData),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.session_crons).toBe(JSON.stringify(ccData.session_crons));
+  });
+
+  it('buildPayloadFromCcStdin leaves background_tasks/session_crons undefined when absent', () => {
+    const body = {
+      event: 'stop',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ session_id: 'sess-no-bg' }),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.background_tasks).toBeUndefined();
+    expect(payload.session_crons).toBeUndefined();
+  });
+
+  it('buildPayloadFromCcStdin ignores non-array background_tasks values', () => {
+    // Defense: CC may send a non-array shape in older / corrupted payloads.
+    // The guard must prevent us from forwarding garbage.
+    const body = {
+      event: 'stop',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ background_tasks: 'not an array' }),
+    };
+
+    const payload = buildPayloadFromCcStdin(body);
+
+    expect(payload.background_tasks).toBeUndefined();
+  });
+
+  it('writes background_tasks_json onto team via statusUpdate when stop event has non-empty array', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const tasksArray = [{ shell_command_id: 'sc_1', description: 'long build' }];
+    const payload = makePayload({
+      event: 'stop',
+      background_tasks: JSON.stringify(tasksArray),
+    });
+
+    processEvent(payload, db, sse);
+
+    // The status update should include backgroundTasksJson with the normalized array.
+    const fieldCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) =>
+        (call[1] as Record<string, unknown>).backgroundTasksJson !== undefined,
+    );
+    expect(fieldCalls.length).toBeGreaterThan(0);
+    const fields = fieldCalls[0]![1] as Record<string, unknown>;
+    expect(fields.backgroundTasksJson).toBe(JSON.stringify(tasksArray));
+  });
+
+  it('writes session_crons_json onto team via statusUpdate on subagent_stop with non-empty array', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const cronsArray = [{ cron_id: 'c1', schedule: '*/5 * * * *' }];
+    const payload = makePayload({
+      event: 'subagent_stop',
+      background_tasks: undefined,
+      session_crons: JSON.stringify(cronsArray),
+    });
+
+    processEvent(payload, db, sse);
+
+    const fieldCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) =>
+        (call[1] as Record<string, unknown>).sessionCronsJson !== undefined,
+    );
+    expect(fieldCalls.length).toBeGreaterThan(0);
+    const fields = fieldCalls[0]![1] as Record<string, unknown>;
+    expect(fields.sessionCronsJson).toBe(JSON.stringify(cronsArray));
+  });
+
+  it('normalizes an empty background_tasks array to null on stop event', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'stop',
+      background_tasks: '[]',
+    });
+
+    processEvent(payload, db, sse);
+
+    const fieldCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) =>
+        Object.prototype.hasOwnProperty.call(call[1], 'backgroundTasksJson'),
+    );
+    expect(fieldCalls.length).toBeGreaterThan(0);
+    const fields = fieldCalls[0]![1] as Record<string, unknown>;
+    expect(fields.backgroundTasksJson).toBeNull();
+  });
+
+  it('treats malformed background_tasks JSON as no work pending (null)', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'stop',
+      background_tasks: 'not valid json {{{',
+    });
+
+    processEvent(payload, db, sse);
+
+    const fieldCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) =>
+        Object.prototype.hasOwnProperty.call(call[1], 'backgroundTasksJson'),
+    );
+    expect(fieldCalls.length).toBeGreaterThan(0);
+    const fields = fieldCalls[0]![1] as Record<string, unknown>;
+    expect(fields.backgroundTasksJson).toBeNull();
+  });
+
+  it('does NOT write background fields on non-dormancy events (e.g. tool_use)', () => {
+    // Background fields should only be written on dormancy events. A tool_use
+    // event must NOT carry these fields through to the DB row even if the
+    // payload happens to include them.
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({
+      event: 'tool_use',
+      background_tasks: JSON.stringify([{ shell_command_id: 'sc_1' }]),
+    });
+
+    processEvent(payload, db, sse);
+
+    const bgFieldCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) =>
+        Object.prototype.hasOwnProperty.call(call[1], 'backgroundTasksJson'),
+    );
+    expect(bgFieldCalls).toHaveLength(0);
+  });
+
+  it('clears background fields when a non-dormancy event arrives on an idle team', () => {
+    // Issue #730: when an idle/stuck team resumes activity, the background
+    // flags must reset to null. If the agent is still genuinely awaiting
+    // background work it will re-emit them on the next Stop hook.
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'tool_use' });
+
+    processEvent(payload, db, sse);
+
+    // The resume statusUpdate should clear both fields to null.
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        status: 'running',
+        backgroundTasksJson: null,
+        sessionCronsJson: null,
+      }),
+    );
+  });
+
+  it('clears background fields when a non-dormancy event arrives on a stuck team', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'stuck', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'notification' });
+
+    processEvent(payload, db, sse);
+
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        status: 'running',
+        backgroundTasksJson: null,
+        sessionCronsJson: null,
+      }),
+    );
+  });
+
+  it('clears background fields defensively when a hook event arrives on a terminal team', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'done', phase: 'done' }),
+    });
+    const sse = createMockSse();
+    const payload = makePayload({ event: 'stop' });
+
+    processEvent(payload, db, sse);
+
+    // updateTeamSilent must be invoked with both fields set to null as part
+    // of the terminal-state cleanup.
+    expect(db.updateTeamSilent).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        backgroundTasksJson: null,
+        sessionCronsJson: null,
+      }),
+    );
+  });
+
+  it('writes background_tasks_json on session_end event with non-empty array', () => {
+    const db = createMockDb({
+      getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'running', phase: 'implementing' }),
+    });
+    const sse = createMockSse();
+    const tasksArray = [{ shell_command_id: 'sc_1' }];
+    const payload = makePayload({
+      event: 'session_end',
+      background_tasks: JSON.stringify(tasksArray),
+    });
+
+    processEvent(payload, db, sse);
+
+    const fieldCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
+      (call: unknown[]) =>
+        (call[1] as Record<string, unknown>).backgroundTasksJson !== undefined,
+    );
+    expect(fieldCalls.length).toBeGreaterThan(0);
+    const fields = fieldCalls[0]![1] as Record<string, unknown>;
+    expect(fields.backgroundTasksJson).toBe(JSON.stringify(tasksArray));
   });
 });

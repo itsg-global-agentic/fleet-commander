@@ -554,6 +554,33 @@ export class TeamService {
     const outputLines = manager.getOutput(teamId, 50);
     const outputTail = outputLines.length > 0 ? outputLines.join('\n') : null;
 
+    // Issue #730: parse the persisted background_tasks / session_crons
+    // arrays from cc_stdin (CC 2.1.145+ Stop hook input). Each column holds
+    // a JSON-stringified array of task descriptors. Malformed JSON or empty
+    // arrays surface as null so the client can use a simple truthy check.
+    let backgroundTasks: unknown[] | null = null;
+    if (team.backgroundTasksJson) {
+      try {
+        const parsed: unknown = JSON.parse(team.backgroundTasksJson);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          backgroundTasks = parsed;
+        }
+      } catch {
+        // Malformed JSON — leave null
+      }
+    }
+    let sessionCrons: unknown[] | null = null;
+    if (team.sessionCronsJson) {
+      try {
+        const parsed: unknown = JSON.parse(team.sessionCronsJson);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          sessionCrons = parsed;
+        }
+      } catch {
+        // Malformed JSON — leave null
+      }
+    }
+
     return {
       id: team.id,
       issueNumber: team.issueNumber,
@@ -584,6 +611,8 @@ export class TeamService {
       pr: prDetail,
       recentEvents,
       outputTail,
+      backgroundTasks,
+      sessionCrons,
     };
   }
 

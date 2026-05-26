@@ -144,9 +144,21 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     trigger: 'timer',
     triggerLabel: 'Stuck threshold exceeded',
     description:
-      'Team has been idle beyond the stuck detection threshold. Suppressed when the team is legitimately waiting on external CI or merge infrastructure (see issue #690).',
+      'Team has been idle beyond the stuck detection threshold. Suppressed when the team is legitimately waiting on external CI or merge infrastructure (see issue #690) OR when CC reported pending background_tasks/session_crons in its last Stop hook (see issue #730).',
     condition:
-      'lastEventAt + stuckThresholdMin < now AND NOT (phase=pr AND (ciStatus=pending OR mergeStatus IN (blocked_ci_pending, behind)))',
+      'lastEventAt + stuckThresholdMin < now AND NOT (phase=pr AND (ciStatus=pending OR mergeStatus IN (blocked_ci_pending, behind))) AND background_tasks_json IS NULL AND session_crons_json IS NULL',
+    hookEvent: null,
+  },
+  {
+    id: 'idle-stuck-suppressed-background',
+    from: 'idle',
+    to: 'idle',
+    trigger: 'timer',
+    triggerLabel: 'Stuck escalation suppressed — background work pending',
+    description:
+      'Idle threshold exceeded but the last Stop hook reported pending background_tasks or session_crons. The team remains idle until the background work completes or the agent emits a non-dormancy hook event, at which point the background flags are cleared (idle -> running) or the stuck timer can resume (issue #730).',
+    condition:
+      'lastEventAt + stuckThresholdMin < now AND (background_tasks_json IS NOT NULL OR session_crons_json IS NOT NULL)',
     hookEvent: null,
   },
   {

@@ -400,6 +400,28 @@ export function TeamDetail() {
                       </span>
                     </div>
 
+                    {/* Background work pending (issue #730) */}
+                    {(detail.backgroundTasks?.length || detail.sessionCrons?.length) ? (
+                      <div className="mt-2 flex items-center gap-2 text-xs">
+                        <span
+                          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-[#58A6FF]/40 text-[#58A6FF]"
+                          title="Agent left work pending in the background \u2014 stuck escalation suppressed"
+                        >
+                          <svg className="w-3 h-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                            <path d="M8 4v4l2 2" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+                          </svg>
+                          Background:
+                          {detail.backgroundTasks?.length ? (
+                            <span className="ml-1">{detail.backgroundTasks.length} task(s)</span>
+                          ) : null}
+                          {detail.sessionCrons?.length ? (
+                            <span className="ml-1">{detail.sessionCrons.length} cron(s)</span>
+                          ) : null}
+                        </span>
+                      </div>
+                    ) : null}
+
                     {/* Token breakdown */}
                     {(detail.totalInputTokens + detail.totalOutputTokens) > 0 && (
                       <div className="mt-3 flex items-center gap-4 text-sm">

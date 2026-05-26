@@ -86,6 +86,8 @@ CREATE TABLE IF NOT EXISTS teams (
   blocked_by_json TEXT,                            -- JSON array of blocking issue numbers e.g. [368, 370]
   pending_children_json TEXT,                     -- JSON array of open child issue numbers e.g. [371, 372]
   retry_count     INTEGER NOT NULL DEFAULT 0,     -- auto-retry count (0 = never retried)
+  background_tasks_json TEXT,                     -- JSON array of pending CC background tasks (CC 2.1.145+ Stop hook input); NULL when no work pending
+  session_crons_json    TEXT,                     -- JSON array of pending CC session crons (CC 2.1.145+ SubagentStop hook input); NULL when no work pending
   total_input_tokens INTEGER DEFAULT 0,
   total_output_tokens INTEGER DEFAULT 0,
   total_cache_creation_tokens INTEGER DEFAULT 0,
@@ -419,4 +421,4 @@ CREATE TABLE IF NOT EXISTS provider_state (
 );
 
 -- Insert schema version (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (20);
+INSERT OR IGNORE INTO schema_version (version) VALUES (21);

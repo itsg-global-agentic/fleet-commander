@@ -251,6 +251,8 @@ export interface Team {
   lastEventAt: string | null;
   blockedByJson: string | null;
   pendingChildrenJson: string | null;
+  backgroundTasksJson: string | null;
+  sessionCronsJson: string | null;
   retryCount: number;
   createdAt: string;
   updatedAt: string;
@@ -652,6 +654,10 @@ export interface TeamDetail {
   } | null;
   recentEvents: Event[];
   outputTail: string | null;
+  /** Parsed background_tasks array from CC's last Stop hook (CC 2.1.145+). NULL when no work pending. */
+  backgroundTasks: unknown[] | null;
+  /** Parsed session_crons array from CC's last SubagentStop hook (CC 2.1.145+). NULL when no work pending. */
+  sessionCrons: unknown[] | null;
 }
 
 // ---------------------------------------------------------------------------
