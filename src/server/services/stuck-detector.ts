@@ -206,6 +206,44 @@ class StuckDetector {
             }
           }
 
+          // Issue #730: suppress idle->stuck escalation when CC reported
+          // pending background_tasks / session_crons on its last Stop hook.
+          // The agent intentionally scheduled work to continue in the
+          // background — going dormant is expected, not a failure mode.
+          // We do NOT suppress running->idle here: that transition is
+          // legitimate (the agent really is dormant). Only the stuck alarm
+          // is suppressed.
+          if (newStatus === 'stuck') {
+            const counts: string[] = [];
+            if (team.backgroundTasksJson) {
+              try {
+                const arr: unknown = JSON.parse(team.backgroundTasksJson);
+                if (Array.isArray(arr) && arr.length > 0) {
+                  counts.push(`${arr.length} background task(s)`);
+                }
+              } catch {
+                // Malformed JSON — treat as no work pending so a corrupted
+                // column never wedges the escalation forever.
+              }
+            }
+            if (team.sessionCronsJson) {
+              try {
+                const arr: unknown = JSON.parse(team.sessionCronsJson);
+                if (Array.isArray(arr) && arr.length > 0) {
+                  counts.push(`${arr.length} session cron(s)`);
+                }
+              } catch {
+                // Malformed JSON — treat as no work pending.
+              }
+            }
+            if (counts.length > 0) {
+              console.log(
+                `[StuckDetector] Team ${team.id} skipped — awaiting ${counts.join(' and ')}`,
+              );
+              continue;
+            }
+          }
+
           const previousStatus = team.status;
           db.insertTransition({
             teamId: team.id,
