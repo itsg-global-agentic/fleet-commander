@@ -285,6 +285,12 @@ export interface Event {
   toolName: string | null;
   agentName: string | null;
   payload: string | null;
+  /**
+   * Tool execution time in milliseconds, recorded from CC 2.1.119+
+   * PostToolUse / PostToolUseFailure hook input. NULL for older events,
+   * non-PostToolUse events, or when CC did not supply a value.
+   */
+  durationMs: number | null;
   createdAt: string;
 }
 
@@ -655,6 +661,13 @@ export interface TeamDetail {
     autoMerge: boolean;
   } | null;
   recentEvents: Event[];
+  /**
+   * Top-5 events for this team ranked by `durationMs DESC`. Surfaces the
+   * slowest tool calls in the UI metadata panel (issue #732). Empty array
+   * when no events with a recorded duration exist (older teams, fresh
+   * teams that haven't issued tool calls yet, or pre-2.1.119 CC versions).
+   */
+  slowestToolCalls: Event[];
   outputTail: string | null;
   /** Parsed background_tasks array from CC's last Stop hook (CC 2.1.145+). NULL when no work pending. */
   backgroundTasks: unknown[] | null;

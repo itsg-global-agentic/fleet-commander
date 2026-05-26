@@ -140,6 +140,8 @@ CREATE TABLE IF NOT EXISTS events (
   event_type      TEXT NOT NULL,                  -- session_start|session_end|stop|subagent_start|subagent_stop|notification|tool_use|tool_error|pre_compact
   tool_name       TEXT,
   payload         TEXT,                           -- JSON blob
+  -- duration_ms: milliseconds tool execution took, from PostToolUse/PostToolUseFailure (CC 2.1.119+). NULL for older events and non-PostToolUse events.
+  duration_ms     INTEGER,
   created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -421,4 +423,4 @@ CREATE TABLE IF NOT EXISTS provider_state (
 );
 
 -- Insert schema version (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (22);
+INSERT OR IGNORE INTO schema_version (version) VALUES (23);

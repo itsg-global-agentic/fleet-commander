@@ -57,6 +57,7 @@ export interface EventPayload {
   // these arrays as JSON strings via cc_stdin — see issue #730.
   background_tasks?: string;    // JSON-stringified array of pending background tasks
   session_crons?: string;       // JSON-stringified array of pending session crons
+  duration_ms?: number;         // Tool execution time in ms (CC 2.1.119+, PostToolUse / PostToolUseFailure only)
 }
 
 /** Result returned from processEvent */
@@ -76,6 +77,7 @@ export interface EventCollectorDb {
     eventType: string;
     toolName?: string | null;
     payload: string;
+    durationMs?: number | null;
   }): { id: number };
   updateTeam(teamId: number, fields: Record<string, unknown>): void;
   updateTeamSilent(teamId: number, fields: Record<string, unknown>): void;
@@ -93,7 +95,7 @@ export interface EventCollectorDb {
     transition?: { teamId: number; fromStatus: TeamStatus; toStatus: TeamStatus; trigger: string; reason: string };
     statusUpdate?: { teamId: number; fields: Record<string, unknown> };
     heartbeatUpdate: { teamId: number; lastEventAt: string };
-    eventInsert: { teamId: number; sessionId: string | null; agentName: string | null; eventType: string; toolName?: string | null; payload: string };
+    eventInsert: { teamId: number; sessionId: string | null; agentName: string | null; eventType: string; toolName?: string | null; payload: string; durationMs?: number | null };
     agentMessages?: Array<{ teamId: number; sender: string; recipient: string; summary?: string | null; content?: string | null; sessionId?: string | null }>;
   }): { eventId: number };
   processThrottledUpdate(ops: {
@@ -895,6 +897,15 @@ export function processEvent(
   }
 
   // ── Execute all DB writes in a single transaction ────────────────
+  // Issue #732: forward `duration_ms` (CC 2.1.119+ PostToolUse/PostToolUseFailure
+  // payloads) onto the events row so the "slowest tool calls" panel can rank
+  // tool calls by execution time. Reject non-numeric / non-finite values
+  // (defense in depth — the route builder already filters, but the legacy
+  // payload may originate from older hook shells).
+  const durationMs =
+    typeof payload.duration_ms === 'number' && Number.isFinite(payload.duration_ms)
+      ? payload.duration_ms
+      : null;
   let eventId: number;
   try {
     const result = db.processEventTransaction({
@@ -908,6 +919,7 @@ export function processEvent(
         eventType,
         toolName: payload.tool_name || null,
         payload: payloadJson,
+        durationMs,
       },
       agentMessages: agentMessages.length > 0 ? agentMessages : undefined,
     });
