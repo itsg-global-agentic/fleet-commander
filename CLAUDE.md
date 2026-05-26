@@ -300,6 +300,20 @@ The team lifecycle state machine is defined in `src/shared/state-machine.ts`. Th
 
 Message templates are stored in the `message_templates` DB table and can be edited from the `/lifecycle` UI view. The `resolveMessage()` utility in `src/server/utils/resolve-message.ts` reads templates from DB and replaces placeholders at runtime.
 
+## CC Auto-Memory & Spawned Teams
+
+Claude Code 2.1.59+ ships an auto-memory feature that stores per-project notes under `~/.claude/projects/<cwd-derived>/memory/` and silently injects them into the system prompt at session start.
+
+**Fleet Commander teams do NOT participate in auto-memory.** Every CC process Fleet Commander spawns — headless team agents, interactive terminal windows, and one-shot `-p` query calls — has auto-memory disabled unconditionally via both `autoMemoryEnabled: false` in the worktree's `.claude/settings.json` (deployed from `hooks/settings.json.example` by `team-manager.copyFCFiles`) and the `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` environment variable set in `src/server/utils/cc-spawn.ts` (`buildEnv()`).
+
+Two reasons this is always-off and not configurable:
+- FC teams are ephemeral single-issue workers — persistent context belongs in `CLAUDE.md`, the GitHub issue body, and the workflow prompt (`templates/workflow.md`), not in user-scoped memory.
+- Memory files written by one team's session would be silently injected into unrelated teams running later in the same worktree-path hash, leaking facts across issues.
+
+Configuration locations (defense-in-depth):
+- `hooks/settings.json.example` — template copied to every worktree's `.claude/settings.json` on team launch. Carries the top-level `"autoMemoryEnabled": false` key.
+- `src/server/utils/cc-spawn.ts` — the `buildEnv()` helper sets `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` on every spawned CC process. On Windows interactive launches, the var is also written into the temp `.cmd` launcher file by `writeLauncherCmdFile()` (which forwards every `CLAUDE_CODE_*` env key).
+
 ## MCP Server
 
 Fleet Commander exposes tools via the [Model Context Protocol](https://modelcontextprotocol.io/) over stdio transport. This allows Claude Code (or any MCP client) to query fleet state programmatically.
