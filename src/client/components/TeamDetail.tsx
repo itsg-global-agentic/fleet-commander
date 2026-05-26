@@ -13,7 +13,7 @@ import { SpawnPromptPanel } from './SpawnPromptPanel';
 import { STATUS_COLORS } from '../utils/constants';
 import { getMergeStatusLabel } from '../utils/merge-status';
 import { formatIssueKey } from '../../shared/issue-provider';
-import type { TeamTask, HandoffFile } from '../../shared/types';
+import type { TeamTask, HandoffFile, TeamSubworktree } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -125,6 +125,9 @@ export function TeamDetail() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [handoffFiles, setHandoffFiles] = useState<HandoffFile[]>([]);
   const [handoffFilesLoading, setHandoffFilesLoading] = useState(false);
+  // Issue #731: CC-initiated subworktrees displayed under the Team tab.
+  const [subworktrees, setSubworktrees] = useState<TeamSubworktree[]>([]);
+  const [subworktreesLoading, setSubworktreesLoading] = useState(false);
   const [metadataCollapsed, setMetadataCollapsed] = useState(false);
   const [agentFilters, setAgentFilters] = useState<Set<string>>(new Set());
   // Issue #713: which agent's spawn prompts are open in the side panel.
@@ -256,6 +259,28 @@ export function TeamDetail() {
   }, [api]);
 
   useFleetSSE('team_handoff_file', handleHandoffFile);
+
+  // Issue #731: fetch CC subworktrees when the Team tab is selected.
+  // No SSE refresh in v1 — subworktree create/remove is a rare event and
+  // the 5s polling in useTeamDetailData would catch the wider state
+  // anyway. If dogfooding shows latency is an issue, add a dedicated
+  // SSE event in a follow-up.
+  useEffect(() => {
+    if (activeTab !== 'team' || !selectedTeamId) return;
+    let cancelled = false;
+    setSubworktreesLoading(true);
+    api.get<TeamSubworktree[]>(`teams/${selectedTeamId}/subworktrees`)
+      .then((data) => {
+        if (!cancelled) setSubworktrees(data);
+      })
+      .catch(() => {
+        if (!cancelled) setSubworktrees([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSubworktreesLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [activeTab, selectedTeamId, api]);
 
   // Close panel handler
   const handleClose = useCallback(() => {
@@ -903,20 +928,77 @@ export function TeamDetail() {
                 )}
 
                 {activeTab === 'team' && (
-                  <div className="flex-1 min-h-0 px-5 py-3 relative">
-                    <CommGraph
-                      edges={messageEdges}
-                      agents={roster}
-                      onNodeClick={setSelectedSpawnAgent}
-                      clickableAgents={clickableAgents}
-                    />
-                    {selectedSpawnAgent !== null && (
-                      <SpawnPromptPanel
-                        agentName={selectedSpawnAgent}
-                        spawns={filteredSpawns}
-                        onClose={() => setSelectedSpawnAgent(null)}
+                  <div className="flex-1 min-h-0 flex flex-col px-5 py-3 relative">
+                    <div className="flex-1 min-h-0 relative">
+                      <CommGraph
+                        edges={messageEdges}
+                        agents={roster}
+                        onNodeClick={setSelectedSpawnAgent}
+                        clickableAgents={clickableAgents}
                       />
-                    )}
+                      {selectedSpawnAgent !== null && (
+                        <SpawnPromptPanel
+                          agentName={selectedSpawnAgent}
+                          spawns={filteredSpawns}
+                          onClose={() => setSelectedSpawnAgent(null)}
+                        />
+                      )}
+                    </div>
+
+                    {/* Issue #731: CC-managed subworktrees panel. Sits below
+                        CommGraph in the Team tab so it never crowds the graph;
+                        bounded height with internal scroll. */}
+                    <div className="shrink-0 mt-3 border-t border-dark-border pt-3">
+                      <div className="flex items-center gap-2 mb-2">
+                        <h3 className="text-xs font-semibold uppercase tracking-wide text-dark-muted">
+                          CC-managed subworktrees
+                        </h3>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-dark-border/30 text-dark-muted">
+                          {subworktrees.length}
+                        </span>
+                      </div>
+                      <div className="max-h-48 overflow-y-auto custom-scrollbar">
+                        {subworktreesLoading && subworktrees.length === 0 && (
+                          <p className="text-xs text-dark-muted py-2">Loading subworktrees...</p>
+                        )}
+                        {!subworktreesLoading && subworktrees.length === 0 && (
+                          <p className="text-xs text-dark-muted py-2">No CC-managed subworktrees yet.</p>
+                        )}
+                        {subworktrees.length > 0 && (
+                          <ul className="space-y-1.5">
+                            {subworktrees.map((sw) => {
+                              const displayPath = sw.path.replace(/\/+$/, '');
+                              const isRemoved = sw.removedAt !== null;
+                              return (
+                                <li
+                                  key={sw.id}
+                                  className={`flex items-center gap-2 px-2 py-1.5 rounded border border-dark-border/40 ${
+                                    isRemoved ? 'bg-dark-border/10 opacity-60' : 'bg-dark-border/5'
+                                  }`}
+                                >
+                                  <code
+                                    className="flex-1 min-w-0 text-xs text-dark-text truncate font-mono"
+                                    title={displayPath}
+                                  >
+                                    {displayPath}
+                                  </code>
+                                  {sw.branch && (
+                                    <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-dark-border/30 text-dark-muted font-mono">
+                                      {sw.branch}
+                                    </span>
+                                  )}
+                                  {isRemoved && (
+                                    <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-[#F85149]/40 text-[#F85149]">
+                                      removed
+                                    </span>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        )}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
