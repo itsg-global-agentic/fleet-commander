@@ -42,6 +42,7 @@ import { sseBroker } from '../services/sse-broker.js';
 import { getTeamManager } from '../services/team-manager.js';
 import { buildEventPayloadFromCc } from '../utils/build-event-payload.js';
 import { resolveTeamFromHookBody } from '../utils/team-resolution.js';
+import { evaluatePermission } from '../services/permission-policy.js';
 
 // ---------------------------------------------------------------------------
 // Event name mapping — PascalCase (CC hook name) -> snake_case (FC event name)
@@ -73,6 +74,10 @@ const PASCAL_TO_SNAKE: Record<string, string> = {
   // via --worktree, EnterWorktree, or subagent isolation=worktree (issue #731).
   WorktreeCreate: 'worktree_create',
   WorktreeRemove: 'worktree_remove',
+  // CC 2.1.45+ — synchronous permission gate; FC responds with allow/deny/ask.
+  // Only wired via http hooks (bash hooks cannot handle synchronous responses).
+  // issue #736.
+  PermissionRequest: 'permission_request',
 };
 
 const VALID_EVENT_TYPES = new Set(Object.keys(PASCAL_TO_SNAKE));
@@ -147,6 +152,93 @@ const hooksRoutes: FastifyPluginCallback = (
         }
 
         const snakeEvent = PASCAL_TO_SNAKE[eventType];
+
+        // ── PermissionRequest: synchronous gate (CC blocks waiting for a response) ──
+        //
+        // Unlike all other hooks (fire-and-forget, 204), CC blocks its tool execution
+        // until it receives a JSON response body with a `decision` field. We must
+        // return HTTP 200 with Content-Type application/json.
+        //
+        // The safe fallback is 'ask' — CC will show its own interactive prompt. We
+        // return 'ask' when the project is not configured for hook-based policy so
+        // existing projects are unaffected.
+        if (snakeEvent === 'permission_request') {
+          // Resolve project to check permission_policy.
+          const project = teamRow.projectId ? db.getProject(teamRow.projectId) : null;
+
+          if (!project || project.permissionPolicy !== 'hook') {
+            // Project not configured for hook-based policy — return safe fallback.
+            return reply
+              .code(200)
+              .header('content-type', 'application/json')
+              .send({ decision: 'ask' });
+          }
+
+          // Extract tool context from the CC hook payload.
+          // CC 2.1.45+ PermissionRequest body: { tool_name, tool_input, cwd, ... }
+          const toolName = (body['tool_name'] as string | undefined) ?? '';
+          const toolInput = (body['tool_input'] as Record<string, unknown> | undefined) ?? {};
+
+          // Parse allowed_domains_json into string[] | null.
+          let projectAllowedDomains: string[] | null = null;
+          if (project.allowedDomainsJson) {
+            try {
+              const parsed = JSON.parse(project.allowedDomainsJson);
+              if (Array.isArray(parsed)) {
+                projectAllowedDomains = parsed.filter((d): d is string => typeof d === 'string');
+              }
+            } catch {
+              // Malformed JSON — treat as no domains allowed.
+            }
+          }
+
+          // Determine the worktree path for boundary checks.
+          // Use the worktree's repo path (project.repoPath) as the boundary root.
+          // In practice the team runs inside project.repoPath + '/.claude/worktrees/' + teamName
+          // but we use the cwd from the hook body to get the exact worktree directory.
+          const worktreePath = (body['cwd'] as string | undefined) ?? project.repoPath;
+
+          const result = evaluatePermission({
+            toolName,
+            toolInput,
+            worktreePath,
+            projectAllowedDomains,
+          });
+
+          // Fire-and-forget audit event AFTER returning the response to CC.
+          // setImmediate ensures the response bytes are sent before we touch the DB.
+          setImmediate(() => {
+            try {
+              const auditPayload = buildEventPayloadFromCc(
+                {
+                  ...body,
+                  tool_name: toolName,
+                  decision: result.decision,
+                  reason: result.reason,
+                },
+                team,
+                snakeEvent,
+              );
+              const manager = getTeamManager();
+              processEvent(
+                auditPayload,
+                db as unknown as EventCollectorDb,
+                sseBroker as unknown as SseBroker,
+                manager as unknown as TeamMessageSender,
+                manager as unknown as LastAssistantMessageSink,
+              );
+            } catch {
+              // Best-effort audit — never surface errors to CC.
+            }
+          });
+
+          return reply
+            .code(200)
+            .header('content-type', 'application/json')
+            .send({ decision: result.decision });
+        }
+
+        // ── Fire-and-forget hooks (all other event types) ──
         const payload = buildEventPayloadFromCc(body, team, snakeEvent);
 
         const manager = getTeamManager();

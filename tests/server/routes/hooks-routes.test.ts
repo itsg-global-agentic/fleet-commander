@@ -333,4 +333,185 @@ describe('PASCAL_TO_SNAKE event name map', () => {
       expect(PASCAL_TO_SNAKE).toHaveProperty(eventType);
     }
   });
+
+  it('includes PermissionRequest in the map', async () => {
+    const { PASCAL_TO_SNAKE } = await import(
+      '../../../src/server/routes/hooks.js'
+    );
+    expect(PASCAL_TO_SNAKE).toHaveProperty('PermissionRequest');
+    expect(PASCAL_TO_SNAKE['PermissionRequest']).toBe('permission_request');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/hooks/PermissionRequest — synchronous permission gate (issue #736)
+// ---------------------------------------------------------------------------
+
+describe('POST /api/hooks/PermissionRequest', () => {
+  /**
+   * Helper to seed a project + team for permission tests.
+   * Returns { project, team, cwd }.
+   */
+  function seedPermissionTeam(
+    overrides: { permissionPolicy?: 'skip' | 'hook' | null; allowedDomainsJson?: string | null } = {},
+  ) {
+    counter++;
+    const db = getDatabase();
+    const worktreePath = `C:/Git/test-repo/.claude/worktrees/perm-test-${counter}`;
+    const project = db.insertProject({
+      name: `perm-project-${counter}`,
+      repoPath: `C:/Git/fake-perm-repo-${counter}`,
+      permissionPolicy: overrides.permissionPolicy ?? null,
+      allowedDomainsJson: overrides.allowedDomainsJson ?? null,
+    });
+    const team = db.insertTeam({
+      issueNumber: 900 + counter,
+      worktreeName: `perm-test-${counter}`,
+      projectId: project.id,
+      status: 'running',
+      phase: 'implementing',
+      prNumber: null,
+    });
+    return { project, team, cwd: worktreePath };
+  }
+
+  it('returns 200 with { decision: "ask" } as safe fallback when project has no permission_policy', async () => {
+    const { cwd } = seedPermissionTeam({ permissionPolicy: null });
+
+    const res = await postHook('PermissionRequest', {
+      session_id: 'sess-perm-ask',
+      cwd,
+      tool_name: 'Read',
+      tool_input: { file_path: `${cwd}/src/index.ts` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { decision: string };
+    expect(body.decision).toBe('ask');
+  });
+
+  it('returns 200 with { decision: "ask" } when permissionPolicy is "skip"', async () => {
+    const { cwd } = seedPermissionTeam({ permissionPolicy: 'skip' });
+
+    const res = await postHook('PermissionRequest', {
+      session_id: 'sess-perm-skip',
+      cwd,
+      tool_name: 'Bash',
+      tool_input: { command: 'ls' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { decision: string };
+    expect(body.decision).toBe('ask');
+  });
+
+  it('returns 200 with { decision: "allow" } for a Read tool on permission_policy="hook" project', async () => {
+    const { cwd } = seedPermissionTeam({ permissionPolicy: 'hook' });
+
+    const res = await postHook('PermissionRequest', {
+      session_id: 'sess-perm-read',
+      cwd,
+      tool_name: 'Read',
+      tool_input: { file_path: `${cwd}/src/index.ts` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { decision: string };
+    expect(body.decision).toBe('allow');
+  });
+
+  it('returns 200 with { decision: "allow" } for a Write tool inside the worktree', async () => {
+    const { cwd } = seedPermissionTeam({ permissionPolicy: 'hook' });
+
+    const res = await postHook('PermissionRequest', {
+      session_id: 'sess-perm-write-in',
+      cwd,
+      tool_name: 'Write',
+      tool_input: { file_path: `${cwd}/src/output.ts` },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { decision: string };
+    expect(body.decision).toBe('allow');
+  });
+
+  it('returns 200 with { decision: "deny" } for a Write tool targeting a path outside the worktree', async () => {
+    const { cwd } = seedPermissionTeam({ permissionPolicy: 'hook' });
+
+    const res = await postHook('PermissionRequest', {
+      session_id: 'sess-perm-write-out',
+      cwd,
+      tool_name: 'Write',
+      tool_input: { file_path: 'C:/Windows/System32/evil.bat' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { decision: string };
+    expect(body.decision).toBe('deny');
+  });
+
+  it('returns 200 with { decision: "deny" } for WebFetch when domain is not in allowed_domains_json', async () => {
+    const { cwd } = seedPermissionTeam({
+      permissionPolicy: 'hook',
+      allowedDomainsJson: '["api.github.com"]',
+    });
+
+    const res = await postHook('PermissionRequest', {
+      session_id: 'sess-perm-net-deny',
+      cwd,
+      tool_name: 'WebFetch',
+      tool_input: { url: 'https://evil.example.com/steal' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { decision: string };
+    expect(body.decision).toBe('deny');
+  });
+
+  it('returns 200 with { decision: "allow" } for WebFetch when domain is in allowed_domains_json', async () => {
+    const { cwd } = seedPermissionTeam({
+      permissionPolicy: 'hook',
+      allowedDomainsJson: '["api.github.com"]',
+    });
+
+    const res = await postHook('PermissionRequest', {
+      session_id: 'sess-perm-net-allow',
+      cwd,
+      tool_name: 'WebFetch',
+      tool_input: { url: 'https://api.github.com/repos/foo/bar' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { decision: string };
+    expect(body.decision).toBe('allow');
+  });
+
+  it('returns 200 with { decision: "deny" } for WebFetch when allowed_domains_json is null', async () => {
+    const { cwd } = seedPermissionTeam({
+      permissionPolicy: 'hook',
+      allowedDomainsJson: null,
+    });
+
+    const res = await postHook('PermissionRequest', {
+      session_id: 'sess-perm-net-null-domains',
+      cwd,
+      tool_name: 'WebFetch',
+      tool_input: { url: 'https://api.github.com/repos/foo/bar' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { decision: string };
+    expect(body.decision).toBe('deny');
+  });
+
+  it('returns 404 when the cwd resolves to an unknown team', async () => {
+    const res = await postHook('PermissionRequest', {
+      session_id: 'sess-perm-404',
+      cwd: makeCwd('nonexistent-perm-team-99998'),
+      tool_name: 'Read',
+      tool_input: { file_path: '/tmp/foo' },
+    });
+
+    expect(res.statusCode).toBe(404);
+  });
 });

@@ -146,6 +146,12 @@ export interface HeadlessArgsOptions {
   resume?: boolean;
   model?: string | null;
   effort?: string | null;
+  /**
+   * Per-project permission policy (issue #736):
+   *   - 'hook': omit --dangerously-skip-permissions (uses PermissionRequest hook).
+   *   - null | 'skip' | undefined: respect config.skipPermissions (existing behavior).
+   */
+  permissionPolicy?: 'skip' | 'hook' | null;
 }
 
 /**
@@ -158,6 +164,12 @@ export interface InteractiveArgsOptions {
   worktreeName: string;
   model?: string | null;
   effort?: string | null;
+  /**
+   * Per-project permission policy (issue #736):
+   *   - 'hook': omit --dangerously-skip-permissions (uses PermissionRequest hook).
+   *   - null | 'skip' | undefined: respect config.skipPermissions (existing behavior).
+   */
+  permissionPolicy?: 'skip' | 'hook' | null;
 }
 
 /** Options for building query (-p one-shot) CLI args. */
@@ -185,7 +197,10 @@ export function buildHeadlessArgs(options: HeadlessArgsOptions): string[] {
 
   args.push('--worktree', options.worktreeName);
 
-  if (config.skipPermissions) {
+  // When permissionPolicy='hook', omit --dangerously-skip-permissions so CC
+  // fires PermissionRequest hooks instead. For null/'skip'/undefined, fall
+  // back to the server-level config.skipPermissions flag (existing behavior).
+  if (options.permissionPolicy !== 'hook' && config.skipPermissions) {
     args.push('--dangerously-skip-permissions');
   }
 
@@ -223,7 +238,10 @@ export function buildInteractiveArgs(options: InteractiveArgsOptions): string[] 
 
   args.push('--worktree', options.worktreeName);
 
-  if (config.skipPermissions) {
+  // When permissionPolicy='hook', omit --dangerously-skip-permissions so CC
+  // fires PermissionRequest hooks instead. For null/'skip'/undefined, fall
+  // back to the server-level config.skipPermissions flag (existing behavior).
+  if (options.permissionPolicy !== 'hook' && config.skipPermissions) {
     args.push('--dangerously-skip-permissions');
   }
 
@@ -280,6 +298,12 @@ export interface HeadlessSpawnOptions {
   model?: string | null;
   /** Optional adaptive-reasoning effort level (Opus 4.7+). */
   effort?: string | null;
+  /**
+   * Per-project permission policy (issue #736):
+   *   - 'hook': omit --dangerously-skip-permissions (uses PermissionRequest hook).
+   *   - null | 'skip' | undefined: respect config.skipPermissions (existing behavior).
+   */
+  permissionPolicy?: 'skip' | 'hook' | null;
 }
 
 /**
@@ -313,6 +337,7 @@ export function spawnHeadless(options: HeadlessSpawnOptions): ChildProcess {
     resume: options.resume,
     model: options.model,
     effort: options.effort,
+    permissionPolicy: options.permissionPolicy,
   });
   const env = buildEnv(options.fleetContext);
 
@@ -471,6 +496,12 @@ export interface InteractiveSpawnOptions {
   /** Optional adaptive-reasoning effort level (Opus 4.7+). */
   effort?: string | null;
   /**
+   * Per-project permission policy (issue #736):
+   *   - 'hook': omit --dangerously-skip-permissions (uses PermissionRequest hook).
+   *   - null | 'skip' | undefined: respect config.skipPermissions (existing behavior).
+   */
+  permissionPolicy?: 'skip' | 'hook' | null;
+  /**
    * Initial prompt passed to Claude as the last positional argument.
    *
    * May contain arbitrary characters including %, ", &, |, <, >, (, ), ^.
@@ -510,6 +541,7 @@ export async function spawnInteractive(options: InteractiveSpawnOptions): Promis
     worktreeName: options.worktreeName,
     model: options.model,
     effort: options.effort,
+    permissionPolicy: options.permissionPolicy,
   });
   const env = buildEnv(options.fleetContext);
 
