@@ -2090,11 +2090,11 @@ describe('Auto-merge cache columns', () => {
 // max -> xhigh effort migration (issue #734)
 // =============================================================================
 
-describe("v21 migration: effort='max' -> 'xhigh'", () => {
+describe("v22 migration: effort='max' -> 'xhigh'", () => {
   /**
    * Build a temp DB containing a projects table with the legacy CHECK
    * constraint that still permits 'max', insert a row with effort='max',
-   * then re-open via FleetDatabase so initSchema()'s v21 migration runs and
+   * then re-open via FleetDatabase so initSchema()'s v22 migration runs and
    * rewrites the row. This mirrors the upgrade path from a pre-issue-#734
    * database.
    */
@@ -2160,7 +2160,7 @@ describe("v21 migration: effort='max' -> 'xhigh'", () => {
     }
   });
 
-  it('bumps schema_version to >= 21 after running the migration', () => {
+  it('bumps schema_version to >= 22 after running the migration', () => {
     const { dbPath: seedPath } = seedLegacyDbWithMaxEffort();
     let upgraded: FleetDatabase | null = null;
     try {
@@ -2170,7 +2170,7 @@ describe("v21 migration: effort='max' -> 'xhigh'", () => {
       const row = upgraded.raw
         .prepare('SELECT MAX(version) AS version FROM schema_version')
         .get() as { version: number };
-      expect(row.version).toBeGreaterThanOrEqual(21);
+      expect(row.version).toBeGreaterThanOrEqual(22);
     } finally {
       try { upgraded?.close(); } catch { /* ignore */ }
       cleanupSeedDb(seedPath);
@@ -2205,11 +2205,11 @@ describe("v21 migration: effort='max' -> 'xhigh'", () => {
       expect(after.effort).toBe('xhigh');
       expect(after.updated_at).toBe(firstUpdatedAt);
 
-      // No v21 migration log line should have been emitted on the second run.
-      const v21Logs = logSpy.mock.calls
+      // No v22 migration log line should have been emitted on the second run.
+      const v22Logs = logSpy.mock.calls
         .map((c) => String(c[0] ?? ''))
-        .filter((s) => s.includes('v21 migration'));
-      expect(v21Logs).toEqual([]);
+        .filter((s) => s.includes("v22 migration: rewrote"));
+      expect(v22Logs).toEqual([]);
     } finally {
       try { upgraded?.close(); } catch { /* ignore */ }
       cleanupSeedDb(seedPath);
@@ -2219,7 +2219,7 @@ describe("v21 migration: effort='max' -> 'xhigh'", () => {
   it('is a no-op on a fresh database (no max rows to migrate)', () => {
     // The standard test db (created by beforeEach) is fresh — no 'max' rows
     // exist; the migration runs but updates 0 rows. schema_version still
-    // reaches >= 21 via the trailing INSERT OR IGNORE in schema.sql.
+    // reaches >= 22 via the trailing INSERT OR IGNORE in schema.sql.
     const count = db.raw
       .prepare("SELECT COUNT(*) AS n FROM projects WHERE effort = 'max'")
       .get() as { n: number };
@@ -2228,7 +2228,7 @@ describe("v21 migration: effort='max' -> 'xhigh'", () => {
     const row = db.raw
       .prepare('SELECT MAX(version) AS version FROM schema_version')
       .get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(21);
+    expect(row.version).toBeGreaterThanOrEqual(22);
   });
 });
 
