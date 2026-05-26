@@ -54,7 +54,11 @@ export function resolveTeamFromCwd(cwd: string): string {
   }
 
   // No worktrees segment — use basename as a defensive fallback.
-  return path.basename(cwd);
+  // Normalize backslashes to forward slashes first: on POSIX, `path.basename`
+  // does NOT recognize `\` as a separator, so a Windows-style input like
+  // `C:\Users\me\projects\standalone-team` would be returned verbatim on
+  // Linux CI runners. Normalizing makes the fallback platform-independent.
+  return path.basename(cwd.replace(/\\/g, '/'));
 }
 
 /**
