@@ -860,6 +860,208 @@ describe('TeamManager.attachProcessHandlers (exit)', () => {
       expect.objectContaining({ status: 'done' }),
     );
   });
+
+  // =========================================================================
+  // Issue #729 — cache `last_assistant_message` and prefer over parsedEvents
+  // =========================================================================
+
+  it('issue #729: rejects done using cached last_assistant_message alone (buffer has no TL text)', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: 50 });
+    setupTeamMaps(1, child);
+
+    // Buffer intentionally empty — the only source of merge-claim text is
+    // the cached `last_assistant_message` set via noteLastAssistantMessage().
+    // This proves the cache is wired into the cross-check.
+    (tm as TeamManager).noteLastAssistantMessage(
+      1,
+      'PR #50 merged via auto-merge. Closing issue and exiting.',
+    );
+
+    const mockStdin = createMockStdin();
+    (tm as any).stdinPipes.set(1, mockStdin);
+
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 50,
+      teamId: 1,
+      title: null,
+      state: 'open',
+      mergeStatus: 'blocked_ci_pending',
+      ciStatus: 'pending',
+      ciFailCount: 0,
+      checksJson: null,
+      autoMerge: false,
+      mergedAt: null,
+      baseRefName: 'main',
+      updatedAt: new Date().toISOString(),
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    // Cross-check rejected the done transition based on the cached value.
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'running',
+        toStatus: 'running',
+        trigger: 'system',
+        reason: expect.stringContaining('Done transition rejected'),
+      }),
+    );
+    expect(mockDb.updateTeamSilent).not.toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'done' }),
+    );
+    // Warning log includes the cached snippet, proving the cache fed the check.
+    expect(warnSpy.mock.calls[0]![0]).toContain('PR #50');
+    expect(warnSpy.mock.calls[0]![0]).toContain('merged via auto-merge');
+
+    warnSpy.mockRestore();
+  });
+
+  it('issue #729: prefers cached last_assistant_message over parsedEvents buffer', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: 51 });
+    setupTeamMaps(1, child);
+
+    // Buffer contains benign text (no merge claim). If the implementation
+    // (incorrectly) preferred the buffer, the transition would be accepted.
+    const events = (tm as any).parsedEvents.get(1) as CircularBuffer<any>;
+    events.push({
+      type: 'assistant',
+      agentName: 'team-lead',
+      message: {
+        content: [{ type: 'text', text: 'Wrapping up; all phases complete.' }],
+      },
+    });
+
+    // Cache claims merge. Cross-check must use the cache, NOT the buffer.
+    (tm as TeamManager).noteLastAssistantMessage(
+      1,
+      'PR #51 has been merged successfully. Issue closed.',
+    );
+
+    const mockStdin = createMockStdin();
+    (tm as any).stdinPipes.set(1, mockStdin);
+
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 51,
+      teamId: 1,
+      title: null,
+      state: 'open',
+      mergeStatus: 'blocked_ci_pending',
+      ciStatus: 'pending',
+      ciFailCount: 0,
+      checksJson: null,
+      autoMerge: false,
+      mergedAt: null,
+      baseRefName: 'main',
+      updatedAt: new Date().toISOString(),
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    // Rejected — cached merge claim wins over the buffer's benign text.
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'running',
+        toStatus: 'running',
+        reason: expect.stringContaining('Done transition rejected'),
+      }),
+    );
+    // Warning snippet must contain the cached text, NOT the buffer text.
+    expect(warnSpy.mock.calls[0]![0]).toContain('PR #51 has been merged');
+    expect(warnSpy.mock.calls[0]![0]).not.toContain('Wrapping up');
+
+    warnSpy.mockRestore();
+  });
+
+  it('issue #729: falls back to parsedEvents buffer when cache is empty', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: 52 });
+    setupTeamMaps(1, child);
+
+    // NO noteLastAssistantMessage call — cache is empty (older CC version).
+    // Buffer has merge claim — the fallback path must trigger the rejection.
+    const events = (tm as any).parsedEvents.get(1) as CircularBuffer<any>;
+    events.push({
+      type: 'assistant',
+      agentName: 'team-lead',
+      message: {
+        content: [
+          { type: 'text', text: 'PR #52 merged, issue resolved. Goodbye.' },
+        ],
+      },
+    });
+
+    const mockStdin = createMockStdin();
+    (tm as any).stdinPipes.set(1, mockStdin);
+
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getPullRequest.mockReturnValue({
+      prNumber: 52,
+      teamId: 1,
+      title: null,
+      state: 'open',
+      mergeStatus: 'blocked_ci_pending',
+      ciStatus: 'pending',
+      ciFailCount: 0,
+      checksJson: null,
+      autoMerge: false,
+      mergedAt: null,
+      baseRefName: 'main',
+      updatedAt: new Date().toISOString(),
+    });
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    // Rejected via the fallback path — buffer text was used.
+    expect(mockDb.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        teamId: 1,
+        fromStatus: 'running',
+        toStatus: 'running',
+        reason: expect.stringContaining('Done transition rejected'),
+      }),
+    );
+    expect(warnSpy.mock.calls[0]![0]).toContain('PR #52 merged');
+
+    warnSpy.mockRestore();
+  });
+
+  it('issue #729: purgeTeamMaps clears the cached last_assistant_message entry', async () => {
+    const child = createMockChildProcess();
+    const team = makeTeam({ id: 1, status: 'running', prNumber: null });
+    setupTeamMaps(1, child);
+
+    // Seed the cache; verify it is present before the exit handler runs.
+    (tm as TeamManager).noteLastAssistantMessage(1, 'Some final TL message.');
+    expect((tm as any).lastAssistantMessages.has(1)).toBe(true);
+
+    mockDb.getTeam.mockReturnValue(team);
+
+    (tm as any).attachProcessHandlers(1, child);
+    child.emit('exit', 0, null);
+    await flushExit();
+
+    // After exit, purgeTeamMaps ran — the cache entry must be gone.
+    expect((tm as any).lastAssistantMessages.has(1)).toBe(false);
+  });
 });
 
 // =============================================================================
