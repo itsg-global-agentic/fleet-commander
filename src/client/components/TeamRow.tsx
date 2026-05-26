@@ -75,6 +75,8 @@ function areTeamRowPropsEqual(prev: TeamRowProps, next: TeamRowProps): boolean {
     a.durationMin === b.durationMin &&
     a.model === b.model &&
     a.modelInherited === b.modelInherited &&
+    a.effort === b.effort &&
+    a.effortInherited === b.effortInherited &&
     a.issueTitle === b.issueTitle &&
     a.projectName === b.projectName &&
     a.issueNumber === b.issueNumber &&
@@ -226,7 +228,7 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
         </span>
       </td>
 
-      {/* Model */}
+      {/* Model + effort (issue #733) */}
       <td className="px-4 whitespace-nowrap">
         <span
           className={`text-sm ${team.modelInherited ? 'text-dark-muted/50' : 'text-dark-muted'}`}
@@ -234,6 +236,16 @@ export const TeamRow = memo(function TeamRow({ team, selected, isThinking: teamI
         >
           {team.model}
         </span>
+        {team.effort ? (
+          <span
+            className={`ml-2 inline-flex items-center px-1.5 py-0.5 text-[10px] rounded border border-dark-border ${
+              team.effortInherited ? 'text-dark-muted/50' : 'text-dark-muted'
+            }`}
+            title={team.effortInherited ? 'Inherited from project' : 'Runtime effort'}
+          >
+            {team.effort}
+          </span>
+        ) : null}
       </td>
 
       {/* Duration */}

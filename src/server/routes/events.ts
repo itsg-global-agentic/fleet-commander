@@ -109,6 +109,10 @@ function buildPayloadFromLegacy(body: Record<string, unknown>): EventPayload {
     msg_summary: str(body.msg_summary),
     owner: str(body.owner),
     duration_ms: durationMs,
+    // Issue #733: future-proof legacy shell that pre-extracts effort. The
+    // canonical extraction path is cc_stdin; this field exists so direct route
+    // callers can also surface a runtime effort change.
+    effort: str(body.effort),
   };
 }
 

@@ -214,6 +214,17 @@ export function FleetProvider({ children }: { children: ReactNode }) {
         thinkingTeamIdsRef.current.delete(payload.team_id);
         forceThinkingUpdate((n) => n + 1);
       }
+    } else if (type === 'effort_changed') {
+      // Issue #733: incremental update — apply the new effort to the
+      // affected team. The event carries the resolved (runtime) value, so
+      // `effortInherited` is always false after this event.
+      const payload = data as { team_id?: number; effort?: string };
+      if (typeof payload.team_id === 'number' && typeof payload.effort === 'string') {
+        setTeams(prev => prev.map(team => {
+          if (team.id !== payload.team_id) return team;
+          return { ...team, effort: payload.effort as string, effortInherited: false };
+        }));
+      }
     }
     // usage_updated: no longer triggers team list refetch (C7)
 

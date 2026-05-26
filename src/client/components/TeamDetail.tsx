@@ -497,6 +497,13 @@ export function TeamDetail() {
                           title={detail.modelInherited ? 'FC default' : undefined}
                         >{detail.model ?? '\u2014'}</span>
                       </span>
+                      {/* Issue #733: runtime effort.level mirror */}
+                      <span className="ml-3">
+                        Effort: <span
+                          className={detail.effortInherited ? 'text-dark-muted/50 italic' : undefined}
+                          title={detail.effortInherited ? 'Inherited from project (or FC default)' : 'Runtime effort'}
+                        >{detail.effort ?? 'default'}</span>
+                      </span>
                     </div>
 
                     {/* Background work pending (issue #730) */}

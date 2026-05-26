@@ -154,6 +154,8 @@ export interface TeamUpdate {
   startedAt?: string | null;
   stoppedAt?: string | null;
   lastEventAt?: string | null;
+  /** Runtime effort mirror (issue #733). Pass `null` to clear back to project default. */
+  effort?: string | null;
 }
 
 export interface EventInsert {
@@ -463,6 +465,9 @@ export class FleetDatabase {
 
     // Add hook_mode column to projects (v25 migration — HTTP vs bash hooks, issue #735)
     this.addHookModeColumn();
+
+    // Add effort column to teams (v26 migration — runtime effort tracking, issue #733)
+    this.addTeamEffortColumn();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1485,6 +1490,52 @@ export class FleetDatabase {
   }
 
   /**
+   * Add effort column to teams table if it doesn't exist (v26 migration).
+   * Nullable TEXT with CHECK constraint restricting values to the 4 CC
+   * adaptive-reasoning effort levels: low, medium, high, xhigh ('max' was
+   * removed in CC 2.1.68). Mirrors the spawn-time effort lived on
+   * `projects.effort` and is updated at runtime from `cc_stdin.effort.level`
+   * so a `/effort high` mid-session change can be surfaced in the dashboard
+   * (issue #733).
+   *
+   * Also drops the existing v_team_dashboard view so schema.sql can recreate
+   * it with the new `team_effort` / `effort` / `project_effort` columns —
+   * same pattern as v18's started_at migration.
+   *
+   * Fresh databases get the column via schema.sql; upgraded databases use
+   * this migration. Idempotent across restarts.
+   *
+   * Note: bumped from v25 to v26 after rebasing onto origin/main because
+   * issue #735 (addHookModeColumn) had already claimed v25 by the time this
+   * branch was ready to merge. The two migrations are otherwise independent.
+   */
+  private addTeamEffortColumn(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(teams)').all() as Array<{ name: string }>;
+      // Fresh DB: teams table doesn't exist yet — schema.sql will create it
+      // with effort already present. Nothing to migrate.
+      if (cols.length === 0) return;
+      const hasColumn = cols.some((c) => c.name === 'effort');
+      if (!hasColumn) {
+        this.db.exec(
+          "ALTER TABLE teams ADD COLUMN effort TEXT CHECK(effort IS NULL OR effort IN ('low','medium','high','xhigh'))"
+        );
+        console.log('[DB] v26 migration: added effort column to teams');
+      }
+
+      // Drop the view so schema.sql can recreate it with the new effort columns.
+      // Safe to re-run — schema.sql will create the authoritative definition
+      // afterwards, but we drop the stale one here so the version check matches.
+      this.db.exec('DROP VIEW IF EXISTS v_team_dashboard');
+
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (26)');
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v26 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Migrate branch_behind and branch_behind_resolved message templates
    * from hardcoded 'main' to use {{BASE_BRANCH}} placeholder.
    * Only updates templates that exactly match the old defaults (user edits are preserved).
@@ -2145,6 +2196,13 @@ export class FleetDatabase {
     if (fields.lastEventAt !== undefined) {
       setClauses.push('last_event_at = @lastEventAt');
       params.lastEventAt = fields.lastEventAt;
+    }
+    if (fields.effort !== undefined) {
+      // Issue #733: runtime effort mirror. CHECK constraint on the column
+      // restricts the value to the 4 canonical CC levels (low/medium/high/xhigh)
+      // or NULL; the caller is expected to normalize the value beforehand.
+      setClauses.push('effort = @effort');
+      params.effort = fields.effort;
     }
     if (fields.retryCount !== undefined) {
       setClauses.push('retry_count = @retryCount');
@@ -3527,6 +3585,7 @@ export class FleetDatabase {
       totalCostUsd: (row.total_cost_usd as number | undefined) ?? 0,
       blockedByJson: (row.blocked_by_json as string | null) ?? null,
       pendingChildrenJson: (row.pending_children_json as string | null) ?? null,
+      effort: (row.effort as string | null) ?? null,
       backgroundTasksJson: (row.background_tasks_json as string | null) ?? null,
       sessionCronsJson: (row.session_crons_json as string | null) ?? null,
       retryCount: (row.retry_count as number | undefined) ?? 0,
@@ -3610,6 +3669,12 @@ export class FleetDatabase {
       projectName: (row.project_name as string | null) ?? null,
       model: (row.model as string | null) ?? config.defaultModel,
       modelInherited: (row.model as string | null) === null,
+      // Issue #733: `effort` is the resolved value (COALESCE team→project),
+      // `team_effort` is the raw nullable team column used to compute
+      // inheritance. The view exposes both so the API can render the resolved
+      // value while still distinguishing inherited from explicit.
+      effort: (row.effort as string | null) ?? null,
+      effortInherited: (row.team_effort as string | null) === null,
       status: row.status as TeamStatus,
       phase: row.phase as TeamPhase,
       worktreeName: row.worktree_name as string,

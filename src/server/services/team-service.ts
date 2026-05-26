@@ -480,13 +480,15 @@ export class TeamService {
       throw notFoundError(`Team ${teamId} not found`);
     }
 
-    // Look up project to get model and GitHub repo
+    // Look up project to get model, effort, and GitHub repo
     let projectModel: string | null = null;
+    let projectEffort: string | null = null;
     let projectGithubRepo: string | null = null;
     if (team.projectId) {
       const project = db.getProject(team.projectId);
       if (project) {
         projectModel = project.model ?? null;
+        projectEffort = project.effort ?? null;
         projectGithubRepo = project.githubRepo ?? null;
       }
     }
@@ -594,6 +596,11 @@ export class TeamService {
       issueProvider: team.issueProvider,
       model: projectModel ?? config.defaultModel,
       modelInherited: projectModel === null,
+      // Issue #733: resolved effort prefers the team's runtime mirror over the
+      // project's spawn-time default. `effortInherited=true` when the team has
+      // no runtime override (raw team.effort is NULL).
+      effort: team.effort ?? projectEffort ?? null,
+      effortInherited: team.effort === null,
       githubRepo: projectGithubRepo,
       status: team.status,
       phase: team.phase,
