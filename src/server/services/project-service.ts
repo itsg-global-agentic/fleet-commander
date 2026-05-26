@@ -946,11 +946,16 @@ export class ProjectService {
       }
     }
 
-    // Validate effort if provided (empty string coerces to null below)
+    // Validate effort if provided (empty string coerces to null below).
+    // 'max' was removed by Claude Code in 2.1.68; 'xhigh' is the highest valid
+    // level (Opus 4.7 default since CC 2.1.111).
     const normalizedEffort = effort?.trim() || null;
     if (normalizedEffort !== null &&
-        !['low', 'medium', 'high', 'xhigh', 'max'].includes(normalizedEffort)) {
-      throw validationError('Invalid effort. Must be one of: low, medium, high, xhigh, max');
+        !['low', 'medium', 'high', 'xhigh'].includes(normalizedEffort)) {
+      throw validationError(
+        "Invalid effort. Must be one of: low, medium, high, xhigh. " +
+        "(Claude Code removed 'max' in 2.1.68 — use 'xhigh' instead.)"
+      );
     }
 
     // Insert the project (no per-project prompt file — always use prompts/default-prompt.md)
@@ -1347,13 +1352,18 @@ export class ProjectService {
       }
     }
 
-    // Validate effort if provided (empty string coerces to null below)
+    // Validate effort if provided (empty string coerces to null below).
+    // 'max' was removed by Claude Code in 2.1.68; 'xhigh' is the highest valid
+    // level (Opus 4.7 default since CC 2.1.111).
     let normalizedEffort: string | null | undefined = undefined;
     if (effort !== undefined) {
       normalizedEffort = effort?.trim() || null;
       if (normalizedEffort !== null &&
-          !['low', 'medium', 'high', 'xhigh', 'max'].includes(normalizedEffort)) {
-        throw validationError('Invalid effort. Must be one of: low, medium, high, xhigh, max');
+          !['low', 'medium', 'high', 'xhigh'].includes(normalizedEffort)) {
+        throw validationError(
+          "Invalid effort. Must be one of: low, medium, high, xhigh. " +
+          "(Claude Code removed 'max' in 2.1.68 — use 'xhigh' instead.)"
+        );
       }
     }
 

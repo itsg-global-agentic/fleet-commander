@@ -441,6 +441,9 @@ export class FleetDatabase {
     // Add background_tasks_json / session_crons_json columns to teams (v21 migration)
     this.addBackgroundTaskColumns();
 
+    // Rewrite any effort='max' rows to 'xhigh' (v22 migration — CC removed 'max' in 2.1.68)
+    this.migrateMaxEffortToXhigh();
+
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
 
@@ -1305,6 +1308,47 @@ export class FleetDatabase {
     } catch (err) {
       // Table may not exist yet (fresh database) — schema.sql will create it
       console.warn('[DB] v21 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * Rewrite any projects with effort='max' to 'xhigh' (v22 migration).
+   *
+   * Claude Code removed the `max` effort level in 2.1.68 and added `xhigh` in
+   * 2.1.111 (Opus 4.7 default). Existing FC databases may carry rows with
+   * effort='max' from before this change; CC will reject them. We rewrite all
+   * 'max' rows to 'xhigh' — the highest still-valid effort level — so users
+   * preserve their explicit "high effort" intent without manual cleanup.
+   *
+   * Note: we cannot differentiate Opus 4.7 from other Opus models when picking
+   * a fallback because the `model` column is a free-form string (e.g. "opus"
+   * alone is ambiguous), and effort is silently ignored on non-Opus-4.7 models
+   * anyway, so the single mapping `max -> xhigh` is the safest user-facing
+   * fallback.
+   *
+   * Idempotent: on restart after the migration runs, the UPDATE matches zero
+   * rows and is a no-op (no log message emitted).
+   *
+   * Fresh databases (projects table doesn't exist yet) are no-ops here —
+   * schema.sql will create the table with the new CHECK constraint that
+   * excludes 'max' entirely.
+   */
+  private migrateMaxEffortToXhigh(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+      // Fresh DB: projects table doesn't exist yet — schema.sql will create it
+      if (cols.length === 0) return;
+      if (!cols.some((c) => c.name === 'effort')) return;
+      const result = this.db.prepare(
+        "UPDATE projects SET effort = 'xhigh', updated_at = datetime('now') WHERE effort = 'max'"
+      ).run();
+      if (result.changes > 0) {
+        console.log(`[DB] v22 migration: rewrote ${result.changes} project(s) with effort='max' to 'xhigh' (CC removed 'max' in 2.1.68)`);
+      }
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (22)');
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v22 migration skipped:', err instanceof Error ? err.message : err);
     }
   }
 

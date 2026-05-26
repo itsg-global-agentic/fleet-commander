@@ -112,6 +112,26 @@ export function buildEnv(fleetContext?: FleetEnvContext): SpawnEnv {
 // Arg builders — pure functions, one per spawn mode
 // ---------------------------------------------------------------------------
 
+/**
+ * Log a one-shot warning when an `effort='max'` value reaches the spawn layer.
+ *
+ * Claude Code removed the `max` effort level in 2.1.68 and added `xhigh` in
+ * 2.1.111 (Opus 4.7 default). Application-level validation in project-service
+ * and the MCP `fleet_add_project` tool should normally reject `max` before it
+ * reaches this point, but a stale `FLEET_DEFAULT_EFFORT=max` env var or a
+ * database row that escaped the v21 migration could still slip through. Log
+ * a clear warning so operators can clean up; do NOT silently drop the flag
+ * (CC will surface its own error).
+ */
+function warnIfDeprecatedEffort(effort: string, worktreeName: string): void {
+  if (effort === 'max') {
+    console.warn(
+      `[cc-spawn] effort='max' is no longer accepted by Claude Code (removed in 2.1.68). ` +
+      `Update the project's effort to 'xhigh' or FLEET_DEFAULT_EFFORT. worktree=${worktreeName}`,
+    );
+  }
+}
+
 /** Options for building headless (stream-json) CLI args. */
 export interface HeadlessArgsOptions {
   worktreeName: string;
@@ -166,6 +186,7 @@ export function buildHeadlessArgs(options: HeadlessArgsOptions): string[] {
   }
 
   if (options.effort) {
+    warnIfDeprecatedEffort(options.effort, options.worktreeName);
     args.push('--effort', options.effort);
   }
 
@@ -203,6 +224,7 @@ export function buildInteractiveArgs(options: InteractiveArgsOptions): string[] 
   }
 
   if (options.effort) {
+    warnIfDeprecatedEffort(options.effort, options.worktreeName);
     args.push('--effort', options.effort);
   }
 
