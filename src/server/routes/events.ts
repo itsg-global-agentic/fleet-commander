@@ -87,6 +87,17 @@ function buildPayloadFromCcStdin(body: Record<string, unknown>): EventPayload {
   payload.owner = str(cc.owner);
   payload.cwd = str(cc.cwd);
 
+  // Issue #730: CC 2.1.145+ Stop/SubagentStop hook input ships arrays of
+  // pending background tasks and session crons. Stringify them so they fit
+  // the EventPayload shape (string-only fields). The legacy shell hook path
+  // cannot transmit these — they only flow through cc_stdin.
+  if (Array.isArray(cc.background_tasks)) {
+    payload.background_tasks = JSON.stringify(cc.background_tasks);
+  }
+  if (Array.isArray(cc.session_crons)) {
+    payload.session_crons = JSON.stringify(cc.session_crons);
+  }
+
   return payload;
 }
 

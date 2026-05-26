@@ -53,6 +53,10 @@ export interface EventPayload {
   agent_id?: string;            // CC agent identifier
   owner?: string;               // Task owner — set on TaskCreated hook events (CC 2.1.143+).
   cwd?: string;                 // working directory of the CC process
+  // CC 2.1.145+ Stop / SubagentStop hook input. The shell hook forwards
+  // these arrays as JSON strings via cc_stdin — see issue #730.
+  background_tasks?: string;    // JSON-stringified array of pending background tasks
+  session_crons?: string;       // JSON-stringified array of pending session crons
 }
 
 /** Result returned from processEvent */
@@ -405,6 +409,34 @@ function normalizeEventType(raw: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Background-task normalization (Issue #730)
+// ---------------------------------------------------------------------------
+
+/**
+ * Normalize a JSON-stringified array that CC ships on Stop / SubagentStop
+ * hook input (`background_tasks`, `session_crons`). Returns:
+ *   - the original JSON string when it parses to a non-empty array
+ *   - null when the input is missing, malformed, or parses to an empty array
+ *
+ * Normalizing empty arrays to null lets the stuck-detector use a cheap
+ * `IS NOT NULL` test to decide whether to suppress the idle->stuck
+ * escalation (see issue #730). Malformed JSON is treated as "no work
+ * pending" so a corrupted column never wedges the escalation forever.
+ */
+export function normalizeJsonArray(input: string | undefined): string | null {
+  if (!input) return null;
+  try {
+    const parsed: unknown = JSON.parse(input);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return JSON.stringify(parsed);
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // StopFailure classification (Issue #727)
 // ---------------------------------------------------------------------------
 
@@ -518,10 +550,21 @@ export function processEvent(
   // ── Clean up subagent trackers for teams in terminal states ───────
   // If a team has reached done/failed, any orphaned tracker entries for
   // that team's subagents are removed on the next event for that team.
+  // Also clear any pending background_tasks / session_crons on the row —
+  // the team is terminal so no future suppression applies, but stale JSON
+  // would still surface in TeamDetail and confuse operators (issue #730).
   if (isTerminal) {
     cleanSubagentTrackersForTeam(payload.team);
     lastToolUseByTeam.delete(payload.team);
     clearHookTaskIdsForTeam(teamId);
+    try {
+      db.updateTeamSilent(teamId, {
+        backgroundTasksJson: null,
+        sessionCronsJson: null,
+      });
+    } catch {
+      // Best-effort cleanup — never abort event processing on a clear failure.
+    }
   }
 
   // ── Collect transition data (without writing to DB yet) ──────────
@@ -545,7 +588,19 @@ export function processEvent(
         trigger: 'hook',
         reason: `Activity resumed (${payload.event} event received)`,
       };
-      statusUpdateData = { teamId, fields: { status: 'running' } };
+      // Issue #730: clear any pending background_tasks / session_crons on
+      // resume — once the agent emits a non-dormancy event, the previously
+      // scheduled background work is no longer the reason for dormancy. If
+      // the agent is still genuinely awaiting background completion it will
+      // re-emit these on its next Stop hook.
+      statusUpdateData = {
+        teamId,
+        fields: {
+          status: 'running',
+          backgroundTasksJson: null,
+          sessionCronsJson: null,
+        },
+      };
       previousStatus = freshTeam.status;
     }
   }
@@ -641,6 +696,34 @@ export function processEvent(
             }
           }
         }
+      }
+    }
+  }
+
+  // ── Background tasks / session crons (Issue #730) ─────────────────
+  // CC 2.1.145+ ships `background_tasks` (Stop) and `session_crons`
+  // (SubagentStop) arrays inside cc_stdin. When non-empty, the agent has
+  // intentionally scheduled work to continue after the current turn ends.
+  // Persist these on the team row so stuck-detector can suppress the
+  // idle->stuck escalation while either array is non-empty. Empty arrays
+  // (and malformed JSON) normalize to NULL so the suppression is a simple
+  // `IS NOT NULL` check downstream.
+  //
+  // We only WRITE these fields here on the relevant dormancy events; we
+  // do NOT write defaults on other events because that would clobber the
+  // values set by a previous Stop hook before the agent has had a chance
+  // to resume (the resume path above clears them explicitly).
+  const BG_DORMANCY_EVENTS = new Set(['stop', 'subagent_stop', 'stop_failure', 'session_end']);
+  if (!isTerminal && BG_DORMANCY_EVENTS.has(eventNameLower)) {
+    const hasBackgroundField = payload.background_tasks !== undefined;
+    const hasCronField = payload.session_crons !== undefined;
+    if (hasBackgroundField || hasCronField) {
+      statusUpdateData ??= { teamId, fields: {} };
+      if (hasBackgroundField) {
+        statusUpdateData.fields.backgroundTasksJson = normalizeJsonArray(payload.background_tasks);
+      }
+      if (hasCronField) {
+        statusUpdateData.fields.sessionCronsJson = normalizeJsonArray(payload.session_crons);
       }
     }
   }
