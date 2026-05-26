@@ -894,6 +894,111 @@ describe('Team lifecycle via events', () => {
     const after = afterRes.json();
     expect(after.lastEventAt).toBeTruthy();
   });
+
+  // Issue #730: persist CC 2.1.145+ background_tasks / session_crons from
+  // cc_stdin onto the team row so stuck-detector can suppress idle->stuck.
+  it('POST /api/events persists background_tasks_json from cc_stdin on stop event', async () => {
+    const team = seedTeam({
+      issueNumber: 730,
+      worktreeName: 'kea-730',
+      status: 'running',
+    });
+
+    const ccStdin = JSON.stringify({
+      session_id: 'sess-bg-1',
+      background_tasks: [
+        { shell_command_id: 'sc_1', description: 'long-running build' },
+      ],
+    });
+
+    const eventRes = await server.inject({
+      method: 'POST',
+      url: '/api/events',
+      payload: {
+        event: 'stop',
+        team: 'kea-730',
+        timestamp: new Date().toISOString(),
+        cc_stdin: ccStdin,
+      },
+    });
+    expect(eventRes.statusCode).toBe(200);
+
+    // The team row should now have the normalized JSON string persisted.
+    const updated = getDatabase().getTeam(team.id);
+    expect(updated).toBeDefined();
+    expect(updated!.backgroundTasksJson).toBe(
+      JSON.stringify([{ shell_command_id: 'sc_1', description: 'long-running build' }]),
+    );
+  });
+
+  it('POST /api/events persists session_crons_json from cc_stdin on subagent_stop event', async () => {
+    const team = seedTeam({
+      issueNumber: 731,
+      worktreeName: 'kea-731',
+      status: 'running',
+    });
+
+    const ccStdin = JSON.stringify({
+      session_id: 'sess-cron-1',
+      session_crons: [{ cron_id: 'c1', schedule: '*/5 * * * *' }],
+    });
+
+    const eventRes = await server.inject({
+      method: 'POST',
+      url: '/api/events',
+      payload: {
+        event: 'subagent_stop',
+        team: 'kea-731',
+        timestamp: new Date().toISOString(),
+        cc_stdin: ccStdin,
+      },
+    });
+    expect(eventRes.statusCode).toBe(200);
+
+    const updated = getDatabase().getTeam(team.id);
+    expect(updated).toBeDefined();
+    expect(updated!.sessionCronsJson).toBe(
+      JSON.stringify([{ cron_id: 'c1', schedule: '*/5 * * * *' }]),
+    );
+  });
+
+  it('POST /api/events normalizes an empty background_tasks array to null', async () => {
+    const team = seedTeam({
+      issueNumber: 732,
+      worktreeName: 'kea-732',
+      status: 'running',
+    });
+
+    // First seed a non-empty value so we can verify the null overwrite.
+    await server.inject({
+      method: 'POST',
+      url: '/api/events',
+      payload: {
+        event: 'stop',
+        team: 'kea-732',
+        timestamp: new Date().toISOString(),
+        cc_stdin: JSON.stringify({ background_tasks: [{ shell_command_id: 'sc_x' }] }),
+      },
+    });
+
+    let updated = getDatabase().getTeam(team.id);
+    expect(updated!.backgroundTasksJson).toBeTruthy();
+
+    // Now send an empty array — must normalize to NULL.
+    await server.inject({
+      method: 'POST',
+      url: '/api/events',
+      payload: {
+        event: 'stop',
+        team: 'kea-732',
+        timestamp: new Date().toISOString(),
+        cc_stdin: JSON.stringify({ background_tasks: [] }),
+      },
+    });
+
+    updated = getDatabase().getTeam(team.id);
+    expect(updated!.backgroundTasksJson).toBeNull();
+  });
 });
 
 // =============================================================================
