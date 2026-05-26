@@ -19,13 +19,15 @@ interface CleanupModalProps {
 
 const TYPE_ORDER: Record<CleanupItem['type'], number> = {
   worktree: 0,
-  signal_file: 1,
-  stale_branch: 2,
-  team_record: 3,
+  cc_subworktree: 1,
+  signal_file: 2,
+  stale_branch: 3,
+  team_record: 4,
 };
 
 const TYPE_LABELS: Record<CleanupItem['type'], string> = {
   worktree: 'Worktrees',
+  cc_subworktree: 'CC Subworktrees',
   signal_file: 'Signal Files',
   stale_branch: 'Branches',
   team_record: 'Database Records',
@@ -33,6 +35,7 @@ const TYPE_LABELS: Record<CleanupItem['type'], string> = {
 
 const TYPE_ICONS: Record<CleanupItem['type'], string> = {
   worktree: '\uD83D\uDCC1',   // folder icon
+  cc_subworktree: '\uD83D\uDCC1', // folder icon (same kind of artifact, nested)
   signal_file: '\uD83D\uDCC4', // page icon
   stale_branch: '\uD83C\uDF3F', // leaf icon
   team_record: '\uD83D\uDDD1\uFE0F',  // database/wastebasket icon
