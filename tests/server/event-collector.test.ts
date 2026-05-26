@@ -950,7 +950,7 @@ describe('StopFailure event', () => {
     expect(storedPayload.last_assistant_message).toBe('I was about to run the tests when...');
   });
 
-  it('is treated as a dormancy event (does not transition idle -> running)', () => {
+  it('transitions idle -> failed on stop_failure (Issue #727)', () => {
     const db = createMockDb({
       getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
     });
@@ -959,15 +959,21 @@ describe('StopFailure event', () => {
 
     processEvent(payload, db, sse);
 
-    // Should NOT have called updateTeam with status: 'running'
-    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    // Should have called updateTeam with status: 'failed'
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'failed' }),
     );
-    expect(statusCalls).toHaveLength(0);
-    expect(db.insertTransition).not.toHaveBeenCalled();
+    expect(db.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromStatus: 'idle',
+        toStatus: 'failed',
+        trigger: 'hook',
+      }),
+    );
   });
 
-  it('is treated as a dormancy event (does not transition stuck -> running)', () => {
+  it('transitions stuck -> failed on stop_failure (Issue #727)', () => {
     const db = createMockDb({
       getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'stuck', phase: 'implementing' }),
     });
@@ -976,14 +982,20 @@ describe('StopFailure event', () => {
 
     processEvent(payload, db, sse);
 
-    const statusCalls = (db.updateTeam as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (call: unknown[]) => (call[1] as Record<string, unknown>).status !== undefined,
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'failed' }),
     );
-    expect(statusCalls).toHaveLength(0);
-    expect(db.insertTransition).not.toHaveBeenCalled();
+    expect(db.insertTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromStatus: 'stuck',
+        toStatus: 'failed',
+        trigger: 'hook',
+      }),
+    );
   });
 
-  it('still updates lastEventAt for stop_failure events', () => {
+  it('still updates lastEventAt for stop_failure events and transitions to failed', () => {
     const db = createMockDb({
       getTeamByWorktree: vi.fn().mockReturnValue({ id: 1, status: 'idle', phase: 'implementing' }),
     });
@@ -995,6 +1007,10 @@ describe('StopFailure event', () => {
     expect(db.updateTeam).toHaveBeenCalledWith(
       1,
       expect.objectContaining({ lastEventAt: expect.any(String) }),
+    );
+    expect(db.updateTeam).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({ status: 'failed' }),
     );
   });
 

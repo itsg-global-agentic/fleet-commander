@@ -194,6 +194,23 @@ export const STATE_MACHINE_TRANSITIONS: StateMachineTransition[] = [
     hookEvent: null,
   },
   {
+    id: 'running-failed-api',
+    from: 'running',
+    to: 'failed',
+    trigger: 'hook',
+    triggerLabel: 'API failure (StopFailure hook)',
+    description:
+      "Claude Code's StopFailure hook fired — the turn ended due to an API " +
+      'error (rate limit, auth failure, server error, etc.) rather than ' +
+      'normal completion. The team is marked failed immediately; the ' +
+      'transition reason carries the error_details string. If the failure ' +
+      'is classified as transient (rate limit, server error, network), the ' +
+      'normal failed-queued-auto auto-retry path applies; fatal classifications ' +
+      '(auth, permission) suppress retry by exhausting the retry budget.',
+    condition: 'StopFailure hook event received while team is in running state',
+    hookEvent: 'stop_failure',
+  },
+  {
     id: 'launching-failed',
     from: 'launching',
     to: 'failed',
