@@ -15,6 +15,7 @@ import type { Team, Project } from '../../src/shared/types.js';
 
 const mockDb = {
   getProject: vi.fn(),
+  getTeam: vi.fn(),
   getTeams: vi.fn().mockReturnValue([]),
   getTeamByWorktree: vi.fn(),
   deleteTeamAndRelated: vi.fn(),
@@ -57,7 +58,7 @@ vi.mock('fs', () => ({
 }));
 
 // Import after mocks
-const { getCleanupPreview, executeCleanup } = await import(
+const { getCleanupPreview, executeCleanup, cleanupTeamCcSubworktrees } = await import(
   '../../src/server/services/cleanup.js'
 );
 
@@ -829,5 +830,238 @@ describe('cc_subworktree execute', () => {
     );
     expect(removeCalls.length).toBe(0);
     expect(mockDb.recordCcSubworktreeRemove).not.toHaveBeenCalled();
+  });
+});
+
+// =============================================================================
+// cleanupTeamCcSubworktrees (issue #737)
+// =============================================================================
+
+describe('cleanupTeamCcSubworktrees', () => {
+  it('removes active CC subworktrees and marks them in DB', () => {
+    const team = makeTeam({ id: 10, status: 'done', projectId: 1 });
+    const project = makeProject();
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeamSubworktrees.mockReturnValue([
+      {
+        id: 1,
+        teamId: 10,
+        path: '/tmp/repo/sub-1',
+        branch: null,
+        createdVia: 'cc',
+        createdAt: '2025-01-01T00:00:00Z',
+        removedAt: null,
+      },
+    ]);
+    mockExecSync.mockReturnValue('');
+
+    const result = cleanupTeamCcSubworktrees(10);
+
+    expect(result.removed).toEqual(['/tmp/repo/sub-1']);
+    expect(result.failed).toEqual([]);
+
+    // Verify git worktree remove was called with the subworktree path
+    const removeCalls = mockExecSync.mock.calls.filter(
+      (call) =>
+        typeof call[0] === 'string' &&
+        call[0].includes('worktree remove') &&
+        call[0].includes('/tmp/repo/sub-1'),
+    );
+    expect(removeCalls.length).toBe(1);
+
+    // activeOnly filter was passed so historical removed_at rows are skipped
+    expect(mockDb.getTeamSubworktrees).toHaveBeenCalledWith(10, { activeOnly: true });
+
+    // DB row marked removed even though the path was deleted via git
+    expect(mockDb.recordCcSubworktreeRemove).toHaveBeenCalledWith({
+      teamId: 10,
+      path: '/tmp/repo/sub-1',
+    });
+  });
+
+  it('falls back to fs.rmSync when git worktree remove fails', () => {
+    const team = makeTeam({ id: 10, status: 'failed', projectId: 1 });
+    const project = makeProject();
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeamSubworktrees.mockReturnValue([
+      {
+        id: 2,
+        teamId: 10,
+        path: '/tmp/repo/sub-locked',
+        branch: null,
+        createdVia: 'cc',
+        createdAt: '2025-01-01T00:00:00Z',
+        removedAt: null,
+      },
+    ]);
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (typeof cmd === 'string' && cmd.includes('worktree remove')) {
+        throw new Error('worktree locked');
+      }
+      return '';
+    });
+
+    const result = cleanupTeamCcSubworktrees(10);
+
+    expect(result.removed).toEqual(['/tmp/repo/sub-locked']);
+    expect(mockFs.rmSync).toHaveBeenCalledWith('/tmp/repo/sub-locked', {
+      recursive: true,
+      force: true,
+    });
+    // Even on git failure, the DB row should be marked removed so retries are bounded
+    expect(mockDb.recordCcSubworktreeRemove).toHaveBeenCalledWith({
+      teamId: 10,
+      path: '/tmp/repo/sub-locked',
+    });
+  });
+
+  it('skips subworktree rows with createdVia=fc', () => {
+    const team = makeTeam({ id: 10, status: 'done', projectId: 1 });
+    const project = makeProject();
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeamSubworktrees.mockReturnValue([
+      {
+        id: 3,
+        teamId: 10,
+        path: '/tmp/repo/.claude/worktrees/proj-10',
+        branch: 'worktree-proj-10',
+        createdVia: 'fc',
+        createdAt: '2025-01-01T00:00:00Z',
+        removedAt: null,
+      },
+    ]);
+    mockExecSync.mockReturnValue('');
+
+    const result = cleanupTeamCcSubworktrees(10);
+
+    expect(result.removed).toEqual([]);
+    expect(result.failed).toEqual([]);
+
+    // git worktree remove must NEVER have been called for an FC-created row
+    const removeCalls = mockExecSync.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('worktree remove'),
+    );
+    expect(removeCalls.length).toBe(0);
+    expect(mockDb.recordCcSubworktreeRemove).not.toHaveBeenCalled();
+  });
+
+  it('no active rows is a no-op', () => {
+    const team = makeTeam({ id: 10, status: 'done', projectId: 1 });
+    const project = makeProject();
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeamSubworktrees.mockReturnValue([]);
+    mockExecSync.mockReturnValue('');
+
+    const result = cleanupTeamCcSubworktrees(10);
+
+    expect(result).toEqual({ removed: [], failed: [] });
+    const removeCalls = mockExecSync.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('worktree remove'),
+    );
+    expect(removeCalls.length).toBe(0);
+    expect(mockDb.recordCcSubworktreeRemove).not.toHaveBeenCalled();
+  });
+
+  it('returns early when team is not found', () => {
+    mockDb.getTeam.mockReturnValue(undefined);
+
+    const result = cleanupTeamCcSubworktrees(999);
+
+    expect(result).toEqual({ removed: [], failed: [] });
+    expect(mockDb.getProject).not.toHaveBeenCalled();
+    expect(mockDb.getTeamSubworktrees).not.toHaveBeenCalled();
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('returns early when project is not found', () => {
+    const team = makeTeam({ id: 10, status: 'done', projectId: 7 });
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getProject.mockReturnValue(undefined);
+
+    const result = cleanupTeamCcSubworktrees(10);
+
+    expect(result).toEqual({ removed: [], failed: [] });
+    expect(mockDb.getProject).toHaveBeenCalledWith(7);
+    expect(mockDb.getTeamSubworktrees).not.toHaveBeenCalled();
+    expect(mockExecSync).not.toHaveBeenCalled();
+  });
+
+  it('returns early when team has no projectId', () => {
+    const team = makeTeam({ id: 10, status: 'done', projectId: null });
+    mockDb.getTeam.mockReturnValue(team);
+
+    const result = cleanupTeamCcSubworktrees(10);
+
+    expect(result).toEqual({ removed: [], failed: [] });
+    expect(mockDb.getProject).not.toHaveBeenCalled();
+    expect(mockDb.getTeamSubworktrees).not.toHaveBeenCalled();
+  });
+
+  it('reports failed entries when both git and fs.rmSync throw', () => {
+    const team = makeTeam({ id: 10, status: 'done', projectId: 1 });
+    const project = makeProject();
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeamSubworktrees.mockReturnValue([
+      {
+        id: 4,
+        teamId: 10,
+        path: '/tmp/repo/sub-stuck',
+        branch: null,
+        createdVia: 'cc',
+        createdAt: '2025-01-01T00:00:00Z',
+        removedAt: null,
+      },
+    ]);
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (typeof cmd === 'string' && cmd.includes('worktree remove')) {
+        throw new Error('worktree locked');
+      }
+      return '';
+    });
+    mockFs.rmSync.mockImplementation(() => {
+      throw new Error('EBUSY');
+    });
+
+    const result = cleanupTeamCcSubworktrees(10);
+
+    expect(result.removed).toEqual([]);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.path).toBe('/tmp/repo/sub-stuck');
+    expect(result.failed[0]!.error).toContain('EBUSY');
+    // Row still marked removed so we don't retry forever
+    expect(mockDb.recordCcSubworktreeRemove).toHaveBeenCalledWith({
+      teamId: 10,
+      path: '/tmp/repo/sub-stuck',
+    });
+  });
+
+  it('never throws even when recordCcSubworktreeRemove throws', () => {
+    const team = makeTeam({ id: 10, status: 'done', projectId: 1 });
+    const project = makeProject();
+    mockDb.getTeam.mockReturnValue(team);
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeamSubworktrees.mockReturnValue([
+      {
+        id: 5,
+        teamId: 10,
+        path: '/tmp/repo/sub-db-fail',
+        branch: null,
+        createdVia: 'cc',
+        createdAt: '2025-01-01T00:00:00Z',
+        removedAt: null,
+      },
+    ]);
+    mockExecSync.mockReturnValue('');
+    mockDb.recordCcSubworktreeRemove.mockImplementation(() => {
+      throw new Error('DB locked');
+    });
+
+    // Must not throw — auto-cleanup is best-effort
+    expect(() => cleanupTeamCcSubworktrees(10)).not.toThrow();
   });
 });
