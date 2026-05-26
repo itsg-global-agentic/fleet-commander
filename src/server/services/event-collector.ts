@@ -19,6 +19,7 @@ import type { TeamStatus, TeamPhase } from '../../shared/types.js';
 import { TERMINAL_STATUSES } from '../../shared/types.js';
 import type { SSEEventType, SSEEventPayloads } from './sse-broker.js';
 import config from '../config.js';
+import { recordHookTaskId, clearHookTaskIdsForTeam } from './task-dedup.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,6 +51,7 @@ export interface EventPayload {
   source?: string;              // e.g. "tool_use", "user"
   notification_type?: string;   // e.g. "stuck", "idle"
   agent_id?: string;            // CC agent identifier
+  owner?: string;               // Task owner — set on TaskCreated hook events (CC 2.1.143+).
   cwd?: string;                 // working directory of the CC process
 }
 
@@ -433,6 +435,7 @@ export function processEvent(
   if (isTerminal) {
     cleanSubagentTrackersForTeam(payload.team);
     lastToolUseByTeam.delete(payload.team);
+    clearHookTaskIdsForTeam(teamId);
   }
 
   // ── Collect transition data (without writing to DB yet) ──────────
@@ -768,6 +771,9 @@ export function processEvent(
 
   // ── Task extraction from TaskCreated events ─────────────────────
   // Parse TaskCreated hook events and upsert task data into team_tasks.
+  // CC 2.1.143+ ships native `owner` and `agent_id` fields in cc_stdin; we
+  // prefer those over the event-level `agent_type` (which identifies the
+  // emitter, not necessarily the task's owner).
   if (eventType === 'TaskCreated' && db.upsertTeamTask) {
     try {
       // Parse cc_stdin for task fields (hook sends raw CC stdin JSON)
@@ -789,7 +795,17 @@ export function processEvent(
       const taskId = (ccData.task_id ?? `task-${teamId}-${subjectSlug}`) as string;
       const description = (ccData.description ?? null) as string | null;
       const status = (ccData.status ?? 'pending') as string;
-      const owner = normalizeAgentName(payload.agent_type);
+      // Owner priority: explicit owner from CC hook > agent_id of creating subagent
+      // > event-level agent_type. The route handler lifts cc.owner onto
+      // payload.owner; we also accept ccData.owner directly for callers that
+      // bypass the route (e.g., direct processEvent calls). All routed through
+      // normalizeAgentName for consistency with subagent/agent_messages
+      // attribution.
+      const ccOwner = typeof ccData.owner === 'string' ? ccData.owner : undefined;
+      const ccAgentId = typeof ccData.agent_id === 'string' ? ccData.agent_id : undefined;
+      const ownerRaw =
+        payload.owner ?? ccOwner ?? payload.agent_id ?? ccAgentId ?? payload.agent_type;
+      const owner = normalizeAgentName(ownerRaw);
 
       const task = db.upsertTeamTask({
         teamId,
@@ -799,6 +815,10 @@ export function processEvent(
         status,
         owner,
       });
+
+      // Record this taskId so the legacy stream-event TodoWrite parser in
+      // team-manager.ts skips redundant upserts/broadcasts for the same task.
+      recordHookTaskId(teamId, taskId);
 
       sse.broadcast('task_updated', {
         team_id: teamId,
