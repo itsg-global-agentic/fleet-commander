@@ -225,6 +225,18 @@ describe('cc-spawn', () => {
 
       expect(env['ENABLE_PROMPT_CACHING_1H']).toBeUndefined();
     });
+
+    it("always sets CLAUDE_CODE_DISABLE_AUTO_MEMORY='1' (with fleet context)", () => {
+      const env = buildEnv(makeFleetContext());
+
+      expect(env['CLAUDE_CODE_DISABLE_AUTO_MEMORY']).toBe('1');
+    });
+
+    it("always sets CLAUDE_CODE_DISABLE_AUTO_MEMORY='1' (query mode, no context)", () => {
+      const env = buildEnv();
+
+      expect(env['CLAUDE_CODE_DISABLE_AUTO_MEMORY']).toBe('1');
+    });
   });
 
   // =========================================================================
@@ -734,6 +746,8 @@ describe('cc-spawn', () => {
       expect(opts.env['FLEET_TEAM_ID']).toBe('proj-42');
       expect(opts.env['FLEET_PROJECT_ID']).toBe('5');
       expect(opts.env['FLEET_GITHUB_REPO']).toBe('acme/lib');
+      // Auto-memory disable applies to headless spawns too
+      expect(opts.env['CLAUDE_CODE_DISABLE_AUTO_MEMORY']).toBe('1');
     });
 
     it('returns the subprocess (cast to ChildProcess)', () => {
@@ -1012,6 +1026,21 @@ describe('cc-spawn', () => {
       const [, content] = mockWriteFileSync.mock.calls[0];
       expect(content).toContain('SET "CLAUDE_CODE_GIT_BASH_PATH=C:\\Program Files\\Git\\bin\\bash.exe"');
     });
+
+    it('includes CLAUDE_CODE_DISABLE_AUTO_MEMORY SET in launcher', async () => {
+      await spawnInteractive({
+        mode: 'interactive',
+        cwd: 'C:\\repos\\proj',
+        worktreeName: 'proj-42',
+        windowTitle: 'Team proj-42',
+        fleetContext: makeFleetContext(),
+        prompt: 'Fix it',
+        terminalPref: 'cmd',
+      });
+
+      const [, content] = mockWriteFileSync.mock.calls[0];
+      expect(content).toContain('SET "CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"');
+    });
   });
 
   // =========================================================================
@@ -1246,6 +1275,8 @@ describe('cc-spawn', () => {
       expect(opts.env['FLEET_PROJECT_ID']).toBeUndefined();
       // But should still have agent teams flag
       expect(opts.env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS']).toBe('1');
+      // And the auto-memory disable
+      expect(opts.env['CLAUDE_CODE_DISABLE_AUTO_MEMORY']).toBe('1');
     });
 
     it('skips taskkill when child.pid is undefined on timeout', async () => {

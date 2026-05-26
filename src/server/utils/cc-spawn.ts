@@ -97,6 +97,14 @@ export function buildEnv(fleetContext?: FleetEnvContext): SpawnEnv {
   // var instead of computing a fragile relative path from their own location.
   env['FLEET_HOOK_LOG'] = config.hookLogPath;
 
+  // FC teams are single-issue ephemeral agents — they must never read from or
+  // write to the user's auto-memory directory (~/.claude/projects/<cwd>/memory/).
+  // Belt-and-braces with `autoMemoryEnabled: false` in the worktree's
+  // .claude/settings.json (see hooks/settings.json.example, deployed via
+  // team-manager.copyFCFiles). Applies unconditionally to all spawn modes
+  // (headless team agents, interactive windows, and query mode).
+  env['CLAUDE_CODE_DISABLE_AUTO_MEMORY'] = '1';
+
   // Windows: CC requires git-bash for hook execution. Auto-detect the path
   // so CC can find bash.exe even when Fleet Commander is started from a
   // non-Git-Bash terminal (e.g. cmd.exe or PowerShell).
