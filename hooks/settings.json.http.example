@@ -117,6 +117,26 @@
         ]
       }
     ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:{{FLEET_PORT}}/api/hooks/WorktreeCreate"
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:{{FLEET_PORT}}/api/hooks/WorktreeRemove"
+          }
+        ]
+      }
+    ],
     "PostToolUseFailure": [
       {
         "hooks": [

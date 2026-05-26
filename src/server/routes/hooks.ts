@@ -69,6 +69,10 @@ const PASCAL_TO_SNAKE: Record<string, string> = {
   PostToolUseFailure: 'tool_error',
   TeammateIdle: 'teammate_idle',
   TaskCreated: 'task_created',
+  // CC 2.1.49+ — fired when CC creates/removes a subworktree
+  // via --worktree, EnterWorktree, or subagent isolation=worktree (issue #731).
+  WorktreeCreate: 'worktree_create',
+  WorktreeRemove: 'worktree_remove',
 };
 
 const VALID_EVENT_TYPES = new Set(Object.keys(PASCAL_TO_SNAKE));
