@@ -319,13 +319,42 @@ describe('PUT /api/projects/:id', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it("should reject deprecated effort='max' with 400 (CC removed it in 2.1.68)", async () => {
+    const project = seedProject();
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: { effort: 'max' },
+    });
+
+    expect(res.statusCode).toBe(400);
+    // Error message must point users at the replacement so they know what to do.
+    const body = res.json();
+    const message = body?.message ?? body?.error?.message ?? JSON.stringify(body);
+    expect(String(message)).toContain('xhigh');
+  });
+
+  it("should accept effort='xhigh' (replacement for 'max')", async () => {
+    const project = seedProject();
+
+    const res = await server.inject({
+      method: 'PUT',
+      url: `/api/projects/${project.id}`,
+      payload: { effort: 'xhigh' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().effort).toBe('xhigh');
+  });
+
   it('should coerce empty-string effort to null', async () => {
     const project = seedProject();
     // First set it to something non-null
     await server.inject({
       method: 'PUT',
       url: `/api/projects/${project.id}`,
-      payload: { effort: 'max' },
+      payload: { effort: 'xhigh' },
     });
 
     // Now clear with empty string

@@ -953,14 +953,13 @@ function ProjectCard({
                   onChange={(e) => onSaveEffort(project.id, e.target.value)}
                   onClick={(e) => e.stopPropagation()}
                   className="shrink-0 px-1 py-0 text-xs rounded border border-dark-border bg-dark-base text-dark-muted hover:text-dark-text focus:outline-none cursor-pointer"
-                  title="Effort level (Opus 4.7 adaptive reasoning)"
+                  title="Effort level (Opus 4.7 adaptive reasoning; xhigh is Opus 4.7 only)"
                 >
                   <option value="">default</option>
                   <option value="low">low</option>
                   <option value="medium">medium</option>
                   <option value="high">high</option>
                   <option value="xhigh">xhigh</option>
-                  <option value="max">max</option>
                 </select>
               </span>
 

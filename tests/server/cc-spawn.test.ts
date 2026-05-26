@@ -298,11 +298,11 @@ describe('cc-spawn', () => {
     });
 
     it('includes --effort when provided', () => {
-      const args = buildHeadlessArgs({ worktreeName: 'test-wt', effort: 'max' });
+      const args = buildHeadlessArgs({ worktreeName: 'test-wt', effort: 'xhigh' });
 
       expect(args).toContain('--effort');
       const effortIdx = args.indexOf('--effort');
-      expect(args[effortIdx + 1]).toBe('max');
+      expect(args[effortIdx + 1]).toBe('xhigh');
     });
 
     it('excludes --effort when not provided', () => {
@@ -315,6 +315,42 @@ describe('cc-spawn', () => {
       const args = buildHeadlessArgs({ worktreeName: 'test-wt', effort: null });
 
       expect(args).not.toContain('--effort');
+    });
+
+    it("logs a deprecation warning when effort='max' reaches the spawn layer (headless)", () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* swallow */ });
+      try {
+        const args = buildHeadlessArgs({ worktreeName: 'test-wt', effort: 'max' });
+
+        // Argument is still forwarded — CC will surface its own error; we just warn.
+        expect(args).toContain('--effort');
+        expect(args[args.indexOf('--effort') + 1]).toBe('max');
+
+        // Warning fires exactly once and mentions 'max', 'xhigh', and the worktree name.
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const firstCall = warnSpy.mock.calls[0]?.[0];
+        expect(firstCall).toBeTypeOf('string');
+        const msg = String(firstCall);
+        expect(msg).toContain("effort='max'");
+        expect(msg).toContain("xhigh");
+        expect(msg).toContain('test-wt');
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("does NOT log a deprecation warning for non-'max' effort values", () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* swallow */ });
+      try {
+        buildHeadlessArgs({ worktreeName: 'test-wt', effort: 'xhigh' });
+        buildHeadlessArgs({ worktreeName: 'test-wt', effort: 'high' });
+        buildHeadlessArgs({ worktreeName: 'test-wt', effort: 'medium' });
+        buildHeadlessArgs({ worktreeName: 'test-wt', effort: 'low' });
+
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
     it('includes --resume when resume is true', () => {
@@ -408,6 +444,24 @@ describe('cc-spawn', () => {
       const args = buildInteractiveArgs({ worktreeName: 'proj-99', effort: null });
 
       expect(args).not.toContain('--effort');
+    });
+
+    it("logs a deprecation warning when effort='max' reaches the spawn layer (interactive)", () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* swallow */ });
+      try {
+        const args = buildInteractiveArgs({ worktreeName: 'proj-99', effort: 'max' });
+
+        expect(args).toContain('--effort');
+        expect(args[args.indexOf('--effort') + 1]).toBe('max');
+
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const msg = String(warnSpy.mock.calls[0]?.[0]);
+        expect(msg).toContain("effort='max'");
+        expect(msg).toContain("xhigh");
+        expect(msg).toContain('proj-99');
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
     it('does NOT include stream-json flags (interactive mode)', () => {

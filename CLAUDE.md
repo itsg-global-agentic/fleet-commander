@@ -246,7 +246,7 @@ The SSE broker emits 18 event types:
 | `FLEET_MAX_PR_POLL_CALLS` | `5` | Max gh pr view/checks calls per team per 10-minute window before sending a poll_warning |
 | `FLEET_MERGE_SHUTDOWN_GRACE_MS` | `600000` | Grace period (ms) after PR merge before stopping the team |
 | `FLEET_DEFAULT_MODEL` | `opus` | Default model name shown when neither the team nor the project specifies a model |
-| `FLEET_DEFAULT_EFFORT` | (unset) | Default adaptive-reasoning effort level (`low\|medium\|high\|xhigh\|max`) applied when a project has no `effort` set. Unset = let CC decide. |
+| `FLEET_DEFAULT_EFFORT` | (unset) | Default adaptive-reasoning effort level (`low\|medium\|high\|xhigh`) applied when a project has no `effort` set. Unset = let CC decide. Claude Code removed the legacy `max` level in 2.1.68 (`xhigh`, added in 2.1.111, is the new top tier and Opus 4.7 default); existing `effort='max'` project rows are auto-migrated to `xhigh` on startup. |
 | `FLEET_CC_QUERY_MODEL` | `sonnet` | Claude model for CC query operations (e.g. `sonnet`, `opus`) |
 | `FLEET_CC_QUERY_TIMEOUT_MS` | `30000` | Timeout (ms) for individual CC query calls |
 | `FLEET_CC_QUERY_PRIORITIZE_TIMEOUT_MS` | `300000` | Timeout (ms) for AI issue prioritization |

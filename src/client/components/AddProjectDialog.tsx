@@ -681,10 +681,9 @@ export function AddProjectDialog({ open, onClose, onAdded }: AddProjectDialogPro
               <option value="medium">medium</option>
               <option value="high">high</option>
               <option value="xhigh">xhigh (Opus 4.7 default)</option>
-              <option value="max">max (Opus 4.7 only)</option>
             </select>
             <p className="mt-1 text-xs text-dark-muted/60">
-              Adaptive-reasoning effort level. xhigh/max apply only to Opus 4.7+; other models silently fall back.
+              Adaptive-reasoning effort level. xhigh applies only to Opus 4.7+; other models silently fall back.
             </p>
           </div>
 

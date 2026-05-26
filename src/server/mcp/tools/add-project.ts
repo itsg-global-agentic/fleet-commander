@@ -31,8 +31,8 @@ export function registerAddProjectTool(server: McpServer): void {
       githubRepo: z.string().optional().describe('GitHub repo in owner/name format (auto-detected if omitted)'),
       maxActiveTeams: z.number().optional().describe('Maximum concurrent active teams (default 5)'),
       model: z.string().optional().describe('Claude model to use for this project'),
-      effort: z.enum(['low', 'medium', 'high', 'xhigh', 'max']).optional()
-        .describe('Adaptive-reasoning effort level (Opus 4.7+). xhigh/max are Opus-4.7-only.'),
+      effort: z.enum(['low', 'medium', 'high', 'xhigh']).optional()
+        .describe("Adaptive-reasoning effort level. 'xhigh' is the Opus 4.7 default (other models silently fall back). 'max' was removed by Claude Code in 2.1.68 — use 'xhigh' instead."),
     },
     async ({ repoPath, name, githubRepo, maxActiveTeams, model, effort }) => {
       try {
