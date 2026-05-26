@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyPluginCallback, FastifyRequest, FastifyReply } from 'fastify';
 import { processEvent, EventCollectorError } from '../services/event-collector.js';
-import type { EventPayload, EventCollectorDb, SseBroker, TeamMessageSender } from '../services/event-collector.js';
+import type { EventPayload, EventCollectorDb, SseBroker, TeamMessageSender, LastAssistantMessageSink } from '../services/event-collector.js';
 import { getDatabase } from '../db.js';
 import { sseBroker } from '../services/sse-broker.js';
 import { getTeamManager } from '../services/team-manager.js';
@@ -142,7 +142,13 @@ const eventsRoutes: FastifyPluginCallback = (
 
         const db = getDatabase();
         const manager = getTeamManager();
-        const result = processEvent(payload, db as unknown as EventCollectorDb, sseBroker as unknown as SseBroker, manager as unknown as TeamMessageSender);
+        const result = processEvent(
+          payload,
+          db as unknown as EventCollectorDb,
+          sseBroker as unknown as SseBroker,
+          manager as unknown as TeamMessageSender,
+          manager as unknown as LastAssistantMessageSink,
+        );
 
         // When a stop event is received, a team may be finishing —
         // trigger queue processing so queued teams can launch.

@@ -128,6 +128,19 @@ export interface TeamMessageSender {
   sendMessage(teamId: number, message: string, source?: 'user' | 'fc', subtype?: string): boolean;
 }
 
+/**
+ * Optional sink for capturing the team-lead's `last_assistant_message` field
+ * from Stop / SubagentStop / StopFailure hook input (CC 2.1.46+). Issue #729.
+ *
+ * The captured value is consumed by `TeamManager.handleProcessExit` as the
+ * authoritative source for the merge-claim cross-check, falling back to the
+ * existing `parsedEvents` buffer extraction for older CC versions or when the
+ * field is absent.
+ */
+export interface LastAssistantMessageSink {
+  noteLastAssistantMessage(teamId: number, text: string): void;
+}
+
 // ---------------------------------------------------------------------------
 // Throttle state — module-level, persists across requests
 // ---------------------------------------------------------------------------
@@ -161,6 +174,18 @@ const DEDUP_EVENT_TYPES = new Set<string>([
   'stop_failure',
   'session_end',
   'subagent_stop',
+]);
+
+/**
+ * Hook event types that may carry `last_assistant_message` from CC 2.1.46+
+ * stdin. The team-lead's exit chatter on any of these is the authoritative
+ * source for the merge-claim cross-check (issue #729). Subagent stops are
+ * ignored because the cross-check only inspects the TL's shutdown reason.
+ */
+const TL_TERMINAL_EVENTS = new Set<string>([
+  'stop',
+  'subagent_stop',
+  'stop_failure',
 ]);
 
 interface DedupEntry {
@@ -401,6 +426,7 @@ export function processEvent(
   db: EventCollectorDb,
   sse: SseBroker,
   messageSender?: TeamMessageSender,
+  lastAssistantSink?: LastAssistantMessageSink,
 ): ProcessEventResult {
   // ── Validate required fields ─────────────────────────────────────
   if (!payload.event || !payload.team) {
@@ -666,6 +692,28 @@ export function processEvent(
       for (const [k, v] of lastEventFingerprint) {
         if (now - v.at > DEDUP_WINDOW_MS * 20) lastEventFingerprint.delete(k);
       }
+    }
+  }
+
+  // ── Capture TL's last_assistant_message for merge-claim cross-check ──
+  // Issue #729: CC 2.1.46+ emits `last_assistant_message` on Stop /
+  // SubagentStop / StopFailure hook stdin. The merge-claim cross-check in
+  // team-manager.handleProcessExit prefers this value over the parsedEvents
+  // buffer extraction. Filter on agentName === 'team-lead' so subagent stops
+  // don't shadow the TL message in the cache. Non-empty string only.
+  if (
+    lastAssistantSink &&
+    TL_TERMINAL_EVENTS.has(eventNameLower) &&
+    agentName === 'team-lead' &&
+    typeof payload.last_assistant_message === 'string' &&
+    payload.last_assistant_message.length > 0
+  ) {
+    try {
+      lastAssistantSink.noteLastAssistantMessage(teamId, payload.last_assistant_message);
+    } catch (err) {
+      console.warn(
+        `[EventCollector] noteLastAssistantMessage failed for team=${payload.team}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

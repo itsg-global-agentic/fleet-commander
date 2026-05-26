@@ -221,6 +221,16 @@ export class TeamManager {
     Map<string, { lastEventAt: number; toolUseId: string; startedAt: number }>
   > = new Map();
 
+  /**
+   * Per-team cache of the team-lead's most recent `last_assistant_message`
+   * captured from Stop / SubagentStop / StopFailure hook input (CC 2.1.46+,
+   * issue #729). Populated by event-collector via the `LastAssistantMessageSink`
+   * interface and consumed by `handleProcessExit` as the authoritative source
+   * for the merge-claim cross-check. Falls back to parsedEvents extraction
+   * when empty (older CC versions). Values are capped at 16KB to bound memory.
+   */
+  private lastAssistantMessages: Map<number, string> = new Map();
+
   // -------------------------------------------------------------------------
   // syncWithOrigin — fetch + pull before creating a worktree
   // -------------------------------------------------------------------------
@@ -848,6 +858,7 @@ export class TeamManager {
     this.thinkingTeams.clear();
     this.thinkingStartTimes.clear();
     this.thinkingBlockIndex.clear();
+    this.lastAssistantMessages.clear();
   }
 
   // -------------------------------------------------------------------------
@@ -1628,6 +1639,26 @@ export class TeamManager {
   }
 
   // -------------------------------------------------------------------------
+  // noteLastAssistantMessage — cache TL's last_assistant_message (issue #729)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Cache the team-lead's most recent `last_assistant_message` value captured
+   * by event-collector from a Stop / SubagentStop / StopFailure hook payload
+   * (CC 2.1.46+). The cached value is consumed by `handleProcessExit` as the
+   * authoritative source for the merge-claim cross-check, with a fallback to
+   * `parsedEvents` buffer extraction when the cache is empty.
+   *
+   * Empty / non-string inputs are ignored. Values larger than 16KB are
+   * truncated to bound memory. Implements `LastAssistantMessageSink`.
+   */
+  noteLastAssistantMessage(teamId: number, text: string): void {
+    if (typeof text !== 'string' || text.length === 0) return;
+    const capped = text.length > 16384 ? text.slice(0, 16384) : text;
+    this.lastAssistantMessages.set(teamId, capped);
+  }
+
+  // -------------------------------------------------------------------------
   // getStdinPipe — expose stdin pipe for external graceful shutdown
   // -------------------------------------------------------------------------
 
@@ -1952,13 +1983,19 @@ export class TeamManager {
    * @param code The process exit code (0 = normal, non-zero = failure).
    * @param signal The signal that killed the process, if any.
    * @param tlTextSnapshot Concatenated recent team-lead assistant text,
-   *   captured before purgeTeamMaps cleared the parsed-event buffer.
+   *   captured before purgeTeamMaps cleared the parsed-event buffer. Used as
+   *   fallback when `cachedLastAssistantMessage` is empty.
+   * @param cachedLastAssistantMessage The TL's `last_assistant_message` from
+   *   the most recent Stop / SubagentStop / StopFailure hook input (CC 2.1.46+,
+   *   issue #729). Preferred over `tlTextSnapshot` for the merge-claim
+   *   cross-check; falls back to `tlTextSnapshot` when empty.
    */
   private async handleProcessExit(
     teamId: number,
     code: number | null,
     signal: NodeJS.Signals | null,
     tlTextSnapshot: string,
+    cachedLastAssistantMessage: string,
   ): Promise<void> {
     const db = getDatabase();
     const currentTeam = db.getTeam(teamId);
@@ -2015,7 +2052,12 @@ export class TeamManager {
       const freshPr = db.getPullRequest(currentTeam.prNumber);
       const prStillOpen =
         freshPr !== undefined && (freshPr.state === 'open' || freshPr.state === 'draft');
-      const claimsMerge = containsMergeClaim(tlTextSnapshot);
+      // Issue #729: prefer the cached `last_assistant_message` from CC 2.1.46+
+      // Stop / SubagentStop hook input over the parsedEvents extraction. The
+      // hook field is the authoritative source; the buffer extraction stays
+      // as fallback for older CC versions or when the field is empty.
+      const tlTextForCheck = cachedLastAssistantMessage || tlTextSnapshot;
+      const claimsMerge = containsMergeClaim(tlTextForCheck);
 
       if (prStillOpen && claimsMerge) {
         // Reject the done transition. Keep the team in its current live
@@ -2024,7 +2066,7 @@ export class TeamManager {
           `[TeamManager] REJECTING done transition for team ${teamId}: ` +
             `TL claims PR #${currentTeam.prNumber} merged but github-poller ` +
             `reports state=${freshPr?.state ?? 'unknown'}. TL text snippet: ` +
-            `"${tlTextSnapshot.slice(0, 200).replace(/\s+/g, ' ')}"`,
+            `"${tlTextForCheck.slice(0, 200).replace(/\s+/g, ' ')}"`,
         );
 
         db.insertTransition({
@@ -2107,6 +2149,12 @@ export class TeamManager {
         this.parsedEvents.get(teamId)?.toArray(),
       );
 
+      // Snapshot the cached `last_assistant_message` from CC 2.1.46+ Stop /
+      // SubagentStop hook input BEFORE purgeTeamMaps clears it (issue #729).
+      // Preferred over `tlTextSnapshot` in the merge-claim cross-check; falls
+      // back to the parsedEvents extraction when empty.
+      const cachedLastAssistantMessage = this.lastAssistantMessages.get(teamId) ?? '';
+
       this.purgeTeamMaps(teamId);
 
       // Offload the (potentially async) transition decision. The exit event
@@ -2114,7 +2162,13 @@ export class TeamManager {
       // and let it resolve in the background. All DB work inside the IIFE is
       // sync (better-sqlite3); the only async step is the forced poller
       // reconcile, which we MUST await before committing the done state.
-      void this.handleProcessExit(teamId, code, signal, tlTextSnapshot).catch((err) => {
+      void this.handleProcessExit(
+        teamId,
+        code,
+        signal,
+        tlTextSnapshot,
+        cachedLastAssistantMessage,
+      ).catch((err) => {
         console.error(
           `[TeamManager] handleProcessExit error for team ${teamId}:`,
           err instanceof Error ? err.message : err,
@@ -2900,7 +2954,8 @@ export class TeamManager {
   // corresponding .delete() call here. The maps cleaned are:
   //   outputBuffers, childProcesses, stdinPipes, parsedEvents, tokenCounters,
   //   agentMaps, lastStreamAt, shutdownTimers, thinkingTeams,
-  //   thinkingStartTimes, thinkingBlockIndex, subagentActivity
+  //   thinkingStartTimes, thinkingBlockIndex, subagentActivity,
+  //   lastAssistantMessages (issue #729)
   // -------------------------------------------------------------------------
 
   /**
@@ -2928,6 +2983,7 @@ export class TeamManager {
     this.agentMaps.delete(teamId);
     this.lastStreamAt.delete(teamId);
     this.subagentActivity.delete(teamId);
+    this.lastAssistantMessages.delete(teamId);
   }
 
   // -------------------------------------------------------------------------
@@ -2980,6 +3036,7 @@ export class TeamManager {
     for (const id of this.thinkingStartTimes.keys()) allTeamIds.add(id);
     for (const id of this.thinkingBlockIndex.keys()) allTeamIds.add(id);
     for (const id of this.subagentActivity.keys()) allTeamIds.add(id);
+    for (const id of this.lastAssistantMessages.keys()) allTeamIds.add(id);
 
     let purged = 0;
     for (const teamId of allTeamIds) {
