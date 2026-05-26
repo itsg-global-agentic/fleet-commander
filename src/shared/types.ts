@@ -338,7 +338,7 @@ export interface UsageSnapshot {
 
 /** A single item that could be cleaned up */
 export interface CleanupItem {
-  type: 'worktree' | 'signal_file' | 'stale_branch' | 'team_record';
+  type: 'worktree' | 'signal_file' | 'stale_branch' | 'team_record' | 'cc_subworktree';
   name: string;
   path: string;
   reason: string;
@@ -479,6 +479,25 @@ export interface HandoffFile {
   content: string;
   agentName: string | null;
   capturedAt: string;
+}
+
+/**
+ * A CC-initiated subworktree created via WorktreeCreate hook (--worktree,
+ * EnterWorktree, or subagent isolation=worktree). FC tracks these so they
+ * can be cleaned up alongside the team's main worktree when the team
+ * finishes. `removedAt` is set when CC fires WorktreeRemove for the path
+ * (or when cleanup explicitly removes it); the row is never deleted so
+ * the audit trail survives.
+ */
+export interface TeamSubworktree {
+  id: number;
+  teamId: number;
+  path: string;
+  branch: string | null;
+  /** `'cc'` for hook-tracked CC subworktrees, `'fc'` reserved for future FC-side tracking. */
+  createdVia: 'cc' | 'fc';
+  createdAt: string;
+  removedAt: string | null;
 }
 
 /** Aggregated edge for the communication graph (sender -> recipient) */

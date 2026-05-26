@@ -422,5 +422,29 @@ CREATE TABLE IF NOT EXISTS provider_state (
   updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- ---------------------------------------------------------------------------
+-- TEAM SUBWORKTREES — CC-initiated subworktrees from WorktreeCreate hook
+-- ---------------------------------------------------------------------------
+-- Tracks subworktrees CC creates within a team's main worktree (or anywhere
+-- CC chose), so cleanup can remove them when the team finishes and so the UI
+-- can surface nested worktrees per team. `created_via='cc'` rows come from
+-- the WorktreeCreate hook handler; `created_via='fc'` is reserved for any
+-- future FC-side worktree-tracking integration. Removal updates `removed_at`
+-- instead of deleting the row so the audit trail survives.
+CREATE TABLE IF NOT EXISTS team_subworktrees (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  team_id         INTEGER NOT NULL REFERENCES teams(id),
+  path            TEXT NOT NULL,
+  branch          TEXT,
+  created_via     TEXT NOT NULL DEFAULT 'cc',
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  removed_at      TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_subworktrees_team ON team_subworktrees(team_id);
+CREATE INDEX IF NOT EXISTS idx_team_subworktrees_team_active ON team_subworktrees(team_id, removed_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_team_subworktrees_team_path_active
+  ON team_subworktrees(team_id, path) WHERE removed_at IS NULL;
+
 -- Insert schema version (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (23);
+INSERT OR IGNORE INTO schema_version (version) VALUES (24);

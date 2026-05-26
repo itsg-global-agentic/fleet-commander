@@ -33,6 +33,7 @@ import type {
   HandoffFileType,
   SpawnRecord,
   SpawnTerminalStatus,
+  TeamSubworktree,
 } from '../shared/types.js';
 import { encrypt, decrypt, isEncrypted, decryptWithKey } from './utils/crypto.js';
 import config from './config.js';
@@ -452,6 +453,9 @@ export class FleetDatabase {
 
     // Add duration_ms column to events (v23 migration — per-tool timing capture)
     this.addEventsDurationMsColumn();
+
+    // Add team_subworktrees table if missing (v24 migration — CC-initiated subworktrees)
+    this.addTeamSubworktreesTable();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1385,6 +1389,60 @@ export class FleetDatabase {
     } catch (err) {
       // Table may not exist yet (fresh database) — schema.sql will create it
       console.warn('[DB] v23 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * Add team_subworktrees table if it doesn't exist (v24 migration).
+   *
+   * Tracks subworktrees created by CC (via --worktree, EnterWorktree, or
+   * subagent isolation=worktree) so cleanup can remove them when the parent
+   * team finishes. `created_via='cc'` rows are inserted from the
+   * WorktreeCreate hook; `created_via='fc'` is reserved for any future
+   * FC-side worktree-tracking integration. Removal updates `removed_at`
+   * instead of deleting the row to preserve the audit trail.
+   *
+   * The partial unique index prevents double-inserts when CC re-emits
+   * WorktreeCreate for an already-tracked path (e.g., crash-recovery),
+   * while still allowing historical re-creates after a removal.
+   *
+   * Fresh databases get the table via schema.sql; upgraded databases use
+   * this migration. Idempotent across restarts.
+   */
+  private addTeamSubworktreesTable(): void {
+    // Skip on truly fresh DBs — schema.sql will create the table and bump
+    // schema_version. This migration only fires on existing (v23 or older)
+    // databases where the table needs to be added in place.
+    try {
+      const versionRow = this.db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'")
+        .get();
+      if (!versionRow) return;
+    } catch {
+      return;
+    }
+
+    try {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS team_subworktrees (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          team_id         INTEGER NOT NULL REFERENCES teams(id),
+          path            TEXT NOT NULL,
+          branch          TEXT,
+          created_via     TEXT NOT NULL DEFAULT 'cc',
+          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          removed_at      TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_team_subworktrees_team ON team_subworktrees(team_id);
+        CREATE INDEX IF NOT EXISTS idx_team_subworktrees_team_active ON team_subworktrees(team_id, removed_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_team_subworktrees_team_path_active
+          ON team_subworktrees(team_id, path) WHERE removed_at IS NULL;
+      `);
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (24)');
+    } catch (err) {
+      // Table may already exist or referenced teams table may not yet exist —
+      // schema.sql will reconcile. Safe to ignore.
+      console.warn('[DB] v24 migration skipped:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -3138,6 +3196,7 @@ export class FleetDatabase {
       this.stmt('DELETE FROM usage_snapshots WHERE team_id = ?').run(id);
       this.stmt('DELETE FROM team_tasks WHERE team_id = ?').run(id);
       this.stmt('DELETE FROM handoff_files WHERE team_id = ?').run(id);
+      this.stmt('DELETE FROM team_subworktrees WHERE team_id = ?').run(id);
       this.stmt('DELETE FROM pull_requests WHERE team_id = ?').run(id);
       this.stmt('DELETE FROM teams WHERE id = ?').run(id);
     })(teamId);
@@ -3160,6 +3219,7 @@ export class FleetDatabase {
       this.stmt('DELETE FROM events').run();
       this.stmt('DELETE FROM commands').run();
       this.stmt('DELETE FROM usage_snapshots').run();
+      this.stmt('DELETE FROM team_subworktrees').run();
       this.stmt('DELETE FROM pull_requests').run();
       this.stmt('DELETE FROM teams').run();
       this.stmt('DELETE FROM message_templates').run();
@@ -3729,6 +3789,123 @@ export class FleetDatabase {
       content: row.content as string,
       agentName: (row.agent_name as string | null) ?? null,
       capturedAt: utcify(row.captured_at as string),
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Team Subworktrees (CC-initiated nested worktrees — issue #731)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Record a CC-initiated subworktree create (or revive a previously-removed
+   * row for the same path). Idempotent: if a row already exists for the same
+   * (team_id, path), refresh its `branch`, bump `created_at`, and clear
+   * `removed_at` to NULL. This handles both crash-recovery re-emits and the
+   * rare case where a path is re-created after removal.
+   *
+   * Uses the partial unique index `idx_team_subworktrees_team_path_active`
+   * (which only covers rows with `removed_at IS NULL`) as the conflict
+   * target. When a removed row exists for the same path, the partial index
+   * does NOT match it, so we fall through to a plain INSERT and produce a
+   * new row — that's the "historical re-create" case.
+   */
+  recordCcSubworktreeCreate(data: {
+    teamId: number;
+    path: string;
+    branch?: string | null;
+    createdVia?: 'cc' | 'fc';
+  }): TeamSubworktree {
+    const createdVia: 'cc' | 'fc' = data.createdVia ?? 'cc';
+
+    // Try to revive an existing active row first (matches on the partial
+    // unique index). Returns the row id when one already exists.
+    const existing = this.stmt(
+      'SELECT id FROM team_subworktrees WHERE team_id = ? AND path = ? AND removed_at IS NULL'
+    ).get(data.teamId, data.path) as { id: number } | undefined;
+
+    let rowId: number;
+    if (existing) {
+      this.stmt(
+        `UPDATE team_subworktrees
+            SET branch = @branch,
+                created_via = @createdVia,
+                created_at = datetime('now'),
+                removed_at = NULL
+          WHERE id = @id`,
+      ).run({
+        id: existing.id,
+        branch: data.branch ?? null,
+        createdVia,
+      });
+      rowId = existing.id;
+    } else {
+      const result = this.stmt(
+        `INSERT INTO team_subworktrees (team_id, path, branch, created_via)
+         VALUES (@teamId, @path, @branch, @createdVia)`,
+      ).run({
+        teamId: data.teamId,
+        path: data.path,
+        branch: data.branch ?? null,
+        createdVia,
+      });
+      rowId = Number(result.lastInsertRowid);
+    }
+
+    const row = this.stmt(
+      'SELECT * FROM team_subworktrees WHERE id = ?'
+    ).get(rowId) as Record<string, unknown>;
+
+    return this.mapTeamSubworktreeRow(row);
+  }
+
+  /**
+   * Mark a CC-initiated subworktree row as removed (sets `removed_at` to now).
+   * Matches by `team_id` + `path` where `removed_at IS NULL`. Returns the
+   * updated row, or undefined when no matching active row exists. Never
+   * inserts a phantom row — late WorktreeRemove events for unknown paths
+   * are silently dropped.
+   */
+  recordCcSubworktreeRemove(data: { teamId: number; path: string }): TeamSubworktree | undefined {
+    const existing = this.stmt(
+      'SELECT id FROM team_subworktrees WHERE team_id = ? AND path = ? AND removed_at IS NULL'
+    ).get(data.teamId, data.path) as { id: number } | undefined;
+
+    if (!existing) return undefined;
+
+    this.stmt(
+      "UPDATE team_subworktrees SET removed_at = datetime('now') WHERE id = ?",
+    ).run(existing.id);
+
+    const row = this.stmt(
+      'SELECT * FROM team_subworktrees WHERE id = ?'
+    ).get(existing.id) as Record<string, unknown>;
+
+    return this.mapTeamSubworktreeRow(row);
+  }
+
+  /**
+   * Get all subworktree rows for a team, ordered by id ascending (oldest
+   * first). Pass `{ activeOnly: true }` to filter out rows that have a
+   * non-null `removed_at`.
+   */
+  getTeamSubworktrees(teamId: number, opts?: { activeOnly?: boolean }): TeamSubworktree[] {
+    const sql = opts?.activeOnly
+      ? 'SELECT * FROM team_subworktrees WHERE team_id = ? AND removed_at IS NULL ORDER BY id ASC'
+      : 'SELECT * FROM team_subworktrees WHERE team_id = ? ORDER BY id ASC';
+
+    const rows = this.stmt(sql).all(teamId) as Record<string, unknown>[];
+    return rows.map((r) => this.mapTeamSubworktreeRow(r));
+  }
+
+  private mapTeamSubworktreeRow(row: Record<string, unknown>): TeamSubworktree {
+    return {
+      id: row.id as number,
+      teamId: row.team_id as number,
+      path: row.path as string,
+      branch: (row.branch as string | null) ?? null,
+      createdVia: row.created_via as 'cc' | 'fc',
+      createdAt: utcify(row.created_at as string),
+      removedAt: row.removed_at ? utcify(row.removed_at as string) : null,
     };
   }
 
