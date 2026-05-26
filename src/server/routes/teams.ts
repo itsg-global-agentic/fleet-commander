@@ -837,6 +837,37 @@ const teamsRoutes: FastifyPluginCallback = (
   );
 
   // -------------------------------------------------------------------------
+  // GET /api/teams/:id/subworktrees — CC-initiated subworktrees for this team
+  // -------------------------------------------------------------------------
+  // Issue #731: returns rows from team_subworktrees for the given team,
+  // including both active and historical (removed_at non-null) entries.
+  // Consumed by the TeamDetail "Worktrees" panel.
+  fastify.get(
+    '/api/teams/:id/subworktrees',
+    async (
+      request: FastifyRequest<{ Params: TeamIdParams }>,
+      reply: FastifyReply,
+    ) => {
+      try {
+        const teamId = parseIdParam(request.params.id, 'id');
+
+        const service = getTeamService();
+        const subworktrees = service.getSubworktrees(teamId);
+        return reply.code(200).send(subworktrees);
+      } catch (err: unknown) {
+        if (err instanceof ServiceError) {
+          return reply.code(err.statusCode).send({ error: err.code, message: err.message });
+        }
+        request.log.error(err, 'Failed to get team subworktrees');
+        return reply.code(500).send({
+          error: 'Internal Server Error',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+
+  // -------------------------------------------------------------------------
   // GET /api/teams/:id/messages — agent messages for this team
   // -------------------------------------------------------------------------
   // Query params:

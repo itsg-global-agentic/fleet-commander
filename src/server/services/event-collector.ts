@@ -122,6 +122,30 @@ export interface EventCollectorDb {
     taskSubagentType: string | null;
     prompt: string;
   }): boolean;
+  /**
+   * Record a CC-initiated subworktree create. Optional so mock DBs in
+   * existing tests continue to work. Implemented in FleetDatabase for
+   * issue #731 (WorktreeCreate hook).
+   */
+  recordCcSubworktreeCreate?(data: {
+    teamId: number;
+    path: string;
+    branch?: string | null;
+    createdVia?: 'cc' | 'fc';
+  }): { id: number };
+  /**
+   * Mark a CC-initiated subworktree row as removed. Returns the updated
+   * row identifier, or undefined if no matching active row exists.
+   * Optional so mock DBs in existing tests continue to work. Implemented
+   * in FleetDatabase for issue #731 (WorktreeRemove hook).
+   */
+  recordCcSubworktreeRemove?(data: { teamId: number; path: string }): { id: number } | undefined;
+  /**
+   * List subworktree rows for a team. Optional for mock-DB compatibility.
+   * Used by the API route for the TeamDetail "Worktrees" panel
+   * (issue #731).
+   */
+  getTeamSubworktrees?(teamId: number, opts?: { activeOnly?: boolean }): unknown[];
 }
 
 /** SSE broker interface for broadcasting events */
@@ -300,6 +324,111 @@ export function extractSpawnPrompt(payload: EventPayload): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Extract the worktree path from a WorktreeCreate/WorktreeRemove hook payload.
+ *
+ * Priority chain (first non-empty wins):
+ *   1. `cc_stdin.hookSpecificOutput.worktreePath` (CC's documented override field).
+ *   2. `cc_stdin.cwd` (CC's working directory on hook fire).
+ *   3. `payload.worktree_path` (lifted by events.ts from `cc_stdin.worktree_path`).
+ *   4. `payload.tool_input.path` or `tool_input.worktreePath` (EnterWorktree /
+ *      ExitWorktree tool input).
+ *
+ * Returns `null` when no path can be resolved. Normalizes backslashes to forward
+ * slashes for cross-platform consistency. Trailing slashes are preserved.
+ *
+ * Exported for unit testing of the priority chain.
+ */
+export function extractWorktreePath(payload: EventPayload): string | null {
+  const normalize = (raw: unknown): string | null => {
+    if (typeof raw !== 'string' || raw.trim() === '') return null;
+    return raw.trim().replace(/\\/g, '/');
+  };
+
+  // 1. cc_stdin.hookSpecificOutput.worktreePath
+  // 2. cc_stdin.cwd
+  if (payload.cc_stdin && typeof payload.cc_stdin === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(payload.cc_stdin);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+
+        const hso = obj.hookSpecificOutput;
+        if (hso && typeof hso === 'object' && !Array.isArray(hso)) {
+          const candidate = normalize((hso as Record<string, unknown>).worktreePath);
+          if (candidate) return candidate;
+        }
+
+        const cwdCandidate = normalize(obj.cwd);
+        if (cwdCandidate) return cwdCandidate;
+      }
+    } catch {
+      // Malformed cc_stdin — fall through to other sources.
+    }
+  }
+
+  // 3. payload.worktree_path (already lifted by events.ts)
+  const lifted = normalize(payload.worktree_path);
+  if (lifted) return lifted;
+
+  // 4. payload.tool_input (EnterWorktree/ExitWorktree tool input)
+  if (payload.tool_input && typeof payload.tool_input === 'string' && payload.tool_input.trim() !== '') {
+    try {
+      const parsed: unknown = JSON.parse(payload.tool_input);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        const candidate = normalize(obj.path) ?? normalize(obj.worktreePath);
+        if (candidate) return candidate;
+      }
+    } catch {
+      // Non-JSON tool_input — no path available.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Extract a best-effort branch name from a WorktreeCreate/WorktreeRemove
+ * payload. Checks `cc_stdin.branch` then `tool_input.branch`. Returns `null`
+ * when no branch field is present. Branch is purely informational — we never
+ * fail the handler when it's missing.
+ */
+export function extractWorktreeBranch(payload: EventPayload): string | null {
+  const normalize = (raw: unknown): string | null => {
+    if (typeof raw !== 'string' || raw.trim() === '') return null;
+    return raw.trim();
+  };
+
+  if (payload.cc_stdin && typeof payload.cc_stdin === 'string') {
+    try {
+      const parsed: unknown = JSON.parse(payload.cc_stdin);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        const fromStdin = normalize(obj.branch);
+        if (fromStdin) return fromStdin;
+      }
+    } catch {
+      // Fall through to tool_input.
+    }
+  }
+
+  if (payload.tool_input && typeof payload.tool_input === 'string' && payload.tool_input.trim() !== '') {
+    try {
+      const parsed: unknown = JSON.parse(payload.tool_input);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        const obj = parsed as Record<string, unknown>;
+        const fromToolInput = normalize(obj.branch);
+        if (fromToolInput) return fromToolInput;
+      }
+    } catch {
+      // Ignore.
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1078,6 +1207,52 @@ export function processEvent(
       }, teamId);
     } catch {
       // Non-critical — task extraction failure should not break event processing
+    }
+  }
+
+  // ── CC-initiated worktree tracking (issue #731) ─────────────────
+  // WorktreeCreate and WorktreeRemove hooks (CC 2.1.49+) fire when CC
+  // creates or tears down a worktree via --worktree, EnterWorktree, or
+  // subagent isolation=worktree. We record an entry per (team, path) so
+  // cleanup can remove the subworktree when the team finishes and so the
+  // UI can show nested worktrees per team. Path extraction tolerates
+  // multiple stdin shapes via extractWorktreePath.
+  if (eventType === 'WorktreeCreate' && db.recordCcSubworktreeCreate) {
+    try {
+      const wtPath = extractWorktreePath(payload);
+      if (wtPath) {
+        const branch = extractWorktreeBranch(payload);
+        db.recordCcSubworktreeCreate({ teamId, path: wtPath, branch, createdVia: 'cc' });
+      } else {
+        console.warn(
+          `[EventCollector] WorktreeCreate without resolvable path for team=${payload.team}`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[EventCollector] WorktreeCreate handler failed for team=${payload.team}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  if (eventType === 'WorktreeRemove' && db.recordCcSubworktreeRemove) {
+    try {
+      const wtPath = extractWorktreePath(payload);
+      if (wtPath) {
+        // recordCcSubworktreeRemove returns undefined when no matching active
+        // row exists (e.g., WorktreeRemove arriving for a path FC never saw a
+        // Create for). This is expected when hooks were installed mid-lifecycle
+        // — silently no-op rather than insert a phantom row.
+        db.recordCcSubworktreeRemove({ teamId, path: wtPath });
+      } else {
+        console.warn(
+          `[EventCollector] WorktreeRemove without resolvable path for team=${payload.team}`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        `[EventCollector] WorktreeRemove handler failed for team=${payload.team}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
