@@ -2,11 +2,12 @@
 // Fleet Commander — Database Layer Tests
 // =============================================================================
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import Database from 'better-sqlite3';
 import { FleetDatabase, utcify } from '../../src/server/db.js';
 import { isEncrypted, resetEncryptionKey } from '../../src/server/utils/crypto.js';
 
@@ -2082,6 +2083,152 @@ describe('Auto-merge cache columns', () => {
       .prepare('SELECT MAX(version) AS version FROM schema_version')
       .get() as { version: number };
     expect(row.version).toBeGreaterThanOrEqual(20);
+  });
+});
+
+// =============================================================================
+// max -> xhigh effort migration (issue #734)
+// =============================================================================
+
+describe("v21 migration: effort='max' -> 'xhigh'", () => {
+  /**
+   * Build a temp DB containing a projects table with the legacy CHECK
+   * constraint that still permits 'max', insert a row with effort='max',
+   * then re-open via FleetDatabase so initSchema()'s v21 migration runs and
+   * rewrites the row. This mirrors the upgrade path from a pre-issue-#734
+   * database.
+   */
+  function seedLegacyDbWithMaxEffort(): { dbPath: string; rowId: number } {
+    const seedPath = path.join(
+      os.tmpdir(),
+      `fleet-test-max-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+    );
+    const seed = new Database(seedPath);
+    // Mimic the v19-era projects table (CHECK still allows 'max').
+    seed.exec(`
+      CREATE TABLE projects (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT NOT NULL,
+        repo_path       TEXT NOT NULL UNIQUE,
+        github_repo     TEXT,
+        group_id        INTEGER,
+        status          TEXT NOT NULL DEFAULT 'active',
+        hooks_installed INTEGER NOT NULL DEFAULT 0,
+        max_active_teams INTEGER NOT NULL DEFAULT 5,
+        prompt_file     TEXT,
+        model           TEXT,
+        effort          TEXT CHECK(effort IS NULL OR effort IN ('low','medium','high','xhigh','max')),
+        issue_provider  TEXT DEFAULT 'github',
+        project_key     TEXT,
+        provider_config TEXT,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE TABLE schema_version (
+        version     INTEGER PRIMARY KEY,
+        applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO schema_version (version) VALUES (20);
+    `);
+    const info = seed.prepare(
+      "INSERT INTO projects (name, repo_path, effort) VALUES (?, ?, 'max')",
+    ).run('legacy-max', `/tmp/legacy-max-${Date.now()}`);
+    seed.close();
+    return { dbPath: seedPath, rowId: Number(info.lastInsertRowid) };
+  }
+
+  function cleanupSeedDb(p: string): void {
+    for (const f of [p, p + '-wal', p + '-shm']) {
+      try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* best effort */ }
+    }
+  }
+
+  it("rewrites existing effort='max' rows to 'xhigh' on initSchema()", () => {
+    const { dbPath: seedPath, rowId } = seedLegacyDbWithMaxEffort();
+    let upgraded: FleetDatabase | null = null;
+    try {
+      upgraded = new FleetDatabase(seedPath);
+      upgraded.initSchema();
+
+      const row = upgraded.raw
+        .prepare('SELECT effort FROM projects WHERE id = ?')
+        .get(rowId) as { effort: string };
+      expect(row.effort).toBe('xhigh');
+    } finally {
+      try { upgraded?.close(); } catch { /* ignore */ }
+      cleanupSeedDb(seedPath);
+    }
+  });
+
+  it('bumps schema_version to >= 21 after running the migration', () => {
+    const { dbPath: seedPath } = seedLegacyDbWithMaxEffort();
+    let upgraded: FleetDatabase | null = null;
+    try {
+      upgraded = new FleetDatabase(seedPath);
+      upgraded.initSchema();
+
+      const row = upgraded.raw
+        .prepare('SELECT MAX(version) AS version FROM schema_version')
+        .get() as { version: number };
+      expect(row.version).toBeGreaterThanOrEqual(21);
+    } finally {
+      try { upgraded?.close(); } catch { /* ignore */ }
+      cleanupSeedDb(seedPath);
+    }
+  });
+
+  it('is idempotent on restart (second initSchema is a no-op)', () => {
+    const { dbPath: seedPath, rowId } = seedLegacyDbWithMaxEffort();
+    let upgraded: FleetDatabase | null = null;
+    try {
+      // First run — migrates the 'max' row to 'xhigh'.
+      upgraded = new FleetDatabase(seedPath);
+      upgraded.initSchema();
+      const firstUpdatedAt = (upgraded.raw
+        .prepare('SELECT updated_at FROM projects WHERE id = ?')
+        .get(rowId) as { updated_at: string }).updated_at;
+
+      // Capture log output for the second run so we can confirm no migration
+      // log line is emitted (no 'max' rows remain).
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => { /* swallow */ });
+      try {
+        upgraded.initSchema();
+      } finally {
+        logSpy.mockRestore();
+      }
+
+      // Row should still be 'xhigh' and the updated_at should not have moved
+      // (no UPDATE ran because no row matched effort='max').
+      const after = upgraded.raw
+        .prepare('SELECT effort, updated_at FROM projects WHERE id = ?')
+        .get(rowId) as { effort: string; updated_at: string };
+      expect(after.effort).toBe('xhigh');
+      expect(after.updated_at).toBe(firstUpdatedAt);
+
+      // No v21 migration log line should have been emitted on the second run.
+      const v21Logs = logSpy.mock.calls
+        .map((c) => String(c[0] ?? ''))
+        .filter((s) => s.includes('v21 migration'));
+      expect(v21Logs).toEqual([]);
+    } finally {
+      try { upgraded?.close(); } catch { /* ignore */ }
+      cleanupSeedDb(seedPath);
+    }
+  });
+
+  it('is a no-op on a fresh database (no max rows to migrate)', () => {
+    // The standard test db (created by beforeEach) is fresh — no 'max' rows
+    // exist; the migration runs but updates 0 rows. schema_version still
+    // reaches >= 21 via the trailing INSERT OR IGNORE in schema.sql.
+    const count = db.raw
+      .prepare("SELECT COUNT(*) AS n FROM projects WHERE effort = 'max'")
+      .get() as { n: number };
+    expect(count.n).toBe(0);
+
+    const row = db.raw
+      .prepare('SELECT MAX(version) AS version FROM schema_version')
+      .get() as { version: number };
+    expect(row.version).toBeGreaterThanOrEqual(21);
   });
 });
 
