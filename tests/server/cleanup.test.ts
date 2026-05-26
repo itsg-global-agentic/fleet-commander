@@ -18,6 +18,10 @@ const mockDb = {
   getTeams: vi.fn().mockReturnValue([]),
   getTeamByWorktree: vi.fn(),
   deleteTeamAndRelated: vi.fn(),
+  // Issue #731: CC subworktree tracking. Default returns [] so existing tests
+  // see no cc_subworktree items in the preview unless they opt in.
+  getTeamSubworktrees: vi.fn().mockReturnValue([]),
+  recordCcSubworktreeRemove: vi.fn(),
 };
 
 vi.mock('../../src/server/db.js', () => ({
@@ -609,5 +613,221 @@ describe('executeCleanup', () => {
 
     expect(result.removed).toContain('test-project-1');
     expect(result.removed).not.toContain('test-project-2');
+  });
+});
+
+// =============================================================================
+// CC subworktree cleanup (Issue #731)
+// =============================================================================
+
+describe('cc_subworktree preview', () => {
+  it('includes a cc_subworktree item when a done team has an active CC subworktree', () => {
+    const project = makeProject();
+    const team = makeTeam({ id: 10, status: 'done', worktreeName: 'test-project-10' });
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([team]);
+    mockDb.getTeamSubworktrees.mockReturnValue([
+      {
+        id: 1,
+        teamId: 10,
+        path: '/tmp/repo/.claude/worktrees/test-project-10/sub-1',
+        branch: 'feat/x',
+        createdVia: 'cc',
+        createdAt: '2025-01-01T00:00:00Z',
+        removedAt: null,
+      },
+    ]);
+    mockFs.existsSync.mockReturnValue(false);
+    mockExecSync.mockReturnValue('');
+
+    const result = getCleanupPreview(1);
+
+    const ccItems = result.items.filter((i) => i.type === 'cc_subworktree');
+    expect(ccItems.length).toBe(1);
+    expect(ccItems[0]!.name).toBe('sub-1');
+    expect(ccItems[0]!.path).toBe('/tmp/repo/.claude/worktrees/test-project-10/sub-1');
+    expect(ccItems[0]!.reason).toContain('done');
+  });
+
+  it('skips cc_subworktree rows that are already removed', () => {
+    const project = makeProject();
+    const team = makeTeam({ id: 10, status: 'done', worktreeName: 'test-project-10' });
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([team]);
+    mockDb.getTeamSubworktrees.mockReturnValue([
+      {
+        id: 1,
+        teamId: 10,
+        path: '/tmp/repo/sub-1',
+        branch: null,
+        createdVia: 'cc',
+        createdAt: '2025-01-01T00:00:00Z',
+        removedAt: '2025-01-02T00:00:00Z',
+      },
+    ]);
+    mockFs.existsSync.mockReturnValue(false);
+    mockExecSync.mockReturnValue('');
+
+    const result = getCleanupPreview(1);
+
+    const ccItems = result.items.filter((i) => i.type === 'cc_subworktree');
+    expect(ccItems.length).toBe(0);
+  });
+
+  it('skips cc_subworktree rows with createdVia=fc (FC-owned, not in this branch)', () => {
+    const project = makeProject();
+    const team = makeTeam({ id: 10, status: 'done', worktreeName: 'test-project-10' });
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([team]);
+    mockDb.getTeamSubworktrees.mockReturnValue([
+      {
+        id: 1,
+        teamId: 10,
+        path: '/tmp/repo/sub-1',
+        branch: null,
+        createdVia: 'fc',
+        createdAt: '2025-01-01T00:00:00Z',
+        removedAt: null,
+      },
+    ]);
+    mockFs.existsSync.mockReturnValue(false);
+    mockExecSync.mockReturnValue('');
+
+    const result = getCleanupPreview(1);
+
+    const ccItems = result.items.filter((i) => i.type === 'cc_subworktree');
+    expect(ccItems.length).toBe(0);
+  });
+
+  it('skips cc_subworktrees on active teams', () => {
+    const project = makeProject();
+    const activeTeam = makeTeam({ id: 10, status: 'running', worktreeName: 'test-project-10' });
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([activeTeam]);
+    mockDb.getTeamSubworktrees.mockReturnValue([
+      {
+        id: 1,
+        teamId: 10,
+        path: '/tmp/repo/sub-active',
+        branch: null,
+        createdVia: 'cc',
+        createdAt: '2025-01-01T00:00:00Z',
+        removedAt: null,
+      },
+    ]);
+    mockFs.existsSync.mockReturnValue(false);
+    mockExecSync.mockReturnValue('');
+
+    const result = getCleanupPreview(1);
+
+    const ccItems = result.items.filter((i) => i.type === 'cc_subworktree');
+    expect(ccItems.length).toBe(0);
+  });
+});
+
+describe('cc_subworktree execute', () => {
+  it('runs git worktree remove --force and marks removed_at in DB', () => {
+    const project = makeProject();
+    const team = makeTeam({ id: 10, status: 'done', worktreeName: 'test-project-10' });
+    const subworktreeRow = {
+      id: 1,
+      teamId: 10,
+      path: '/tmp/repo/sub-1',
+      branch: null,
+      createdVia: 'cc' as const,
+      createdAt: '2025-01-01T00:00:00Z',
+      removedAt: null,
+    };
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([team]);
+    mockDb.getTeamSubworktrees.mockReturnValue([subworktreeRow]);
+    mockFs.existsSync.mockReturnValue(false);
+    mockExecSync.mockReturnValue('');
+
+    const result = executeCleanup(1, ['/tmp/repo/sub-1']);
+
+    expect(result.removed).toContain('sub-1');
+
+    // Verify git worktree remove was called with the subworktree path
+    const removeCalls = mockExecSync.mock.calls.filter(
+      (call) =>
+        typeof call[0] === 'string' &&
+        call[0].includes('worktree remove') &&
+        call[0].includes('/tmp/repo/sub-1'),
+    );
+    expect(removeCalls.length).toBe(1);
+
+    // Verify recordCcSubworktreeRemove was called with team and path
+    expect(mockDb.recordCcSubworktreeRemove).toHaveBeenCalledWith({
+      teamId: 10,
+      path: '/tmp/repo/sub-1',
+    });
+  });
+
+  it('falls back to fs.rmSync when git worktree remove fails', () => {
+    const project = makeProject();
+    const team = makeTeam({ id: 10, status: 'done', worktreeName: 'test-project-10' });
+    const subworktreeRow = {
+      id: 1,
+      teamId: 10,
+      path: '/tmp/repo/sub-locked',
+      branch: null,
+      createdVia: 'cc' as const,
+      createdAt: '2025-01-01T00:00:00Z',
+      removedAt: null,
+    };
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([team]);
+    mockDb.getTeamSubworktrees.mockReturnValue([subworktreeRow]);
+    mockFs.existsSync.mockReturnValue(false);
+    mockExecSync.mockImplementation((cmd: string) => {
+      if (typeof cmd === 'string' && cmd.includes('worktree remove')) {
+        throw new Error('worktree locked');
+      }
+      return '';
+    });
+
+    const result = executeCleanup(1, ['/tmp/repo/sub-locked']);
+
+    expect(result.removed).toContain('sub-locked');
+    expect(mockFs.rmSync).toHaveBeenCalled();
+    // Even on git failure, the DB row should be marked removed so retries are bounded
+    expect(mockDb.recordCcSubworktreeRemove).toHaveBeenCalled();
+  });
+
+  it('skips when the row is no longer tracked between preview and execute', () => {
+    const project = makeProject();
+    const team = makeTeam({ id: 10, status: 'done', worktreeName: 'test-project-10' });
+    const subworktreeRow = {
+      id: 1,
+      teamId: 10,
+      path: '/tmp/repo/sub-vanished',
+      branch: null,
+      createdVia: 'cc' as const,
+      createdAt: '2025-01-01T00:00:00Z',
+      removedAt: null,
+    };
+    mockDb.getProject.mockReturnValue(project);
+    mockDb.getTeams.mockReturnValue([team]);
+    // First call (during preview) returns the active row; second call (during
+    // execute lookup) returns an empty list — simulates the row being removed
+    // outside FC between preview and execute.
+    let lookupCount = 0;
+    mockDb.getTeamSubworktrees.mockImplementation(() => {
+      lookupCount++;
+      return lookupCount === 1 ? [subworktreeRow] : [];
+    });
+    mockFs.existsSync.mockReturnValue(false);
+    mockExecSync.mockReturnValue('');
+
+    const result = executeCleanup(1, ['/tmp/repo/sub-vanished']);
+
+    expect(result.removed).not.toContain('sub-vanished');
+    // git worktree remove should NOT have been called
+    const removeCalls = mockExecSync.mock.calls.filter(
+      (call) => typeof call[0] === 'string' && call[0].includes('worktree remove'),
+    );
+    expect(removeCalls.length).toBe(0);
+    expect(mockDb.recordCcSubworktreeRemove).not.toHaveBeenCalled();
   });
 });

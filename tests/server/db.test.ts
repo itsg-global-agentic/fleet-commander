@@ -2232,6 +2232,186 @@ describe("v22 migration: effort='max' -> 'xhigh'", () => {
   });
 });
 
+describe('team_subworktrees', () => {
+  let teamId: number;
+
+  beforeEach(() => {
+    const team = db.insertTeam({
+      issueNumber: 731,
+      worktreeName: 'sw-test-731',
+    });
+    teamId = team.id;
+  });
+
+  it('creates the team_subworktrees table on fresh init', () => {
+    const rows = db.raw
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='team_subworktrees'")
+      .all() as Array<{ name: string }>;
+    expect(rows.length).toBe(1);
+  });
+
+  it('includes schema version >= 23 for the team_subworktrees migration', () => {
+    const row = db.raw
+      .prepare('SELECT MAX(version) AS version FROM schema_version')
+      .get() as { version: number };
+    expect(row.version).toBeGreaterThanOrEqual(23);
+  });
+
+  it('recordCcSubworktreeCreate inserts a row with correct fields and default createdVia=cc', () => {
+    const sw = db.recordCcSubworktreeCreate({
+      teamId,
+      path: '/tmp/foo',
+      branch: 'feat/x',
+    });
+
+    expect(sw.id).toBeGreaterThan(0);
+    expect(sw.teamId).toBe(teamId);
+    expect(sw.path).toBe('/tmp/foo');
+    expect(sw.branch).toBe('feat/x');
+    expect(sw.createdVia).toBe('cc');
+    expect(sw.createdAt).toBeTruthy();
+    expect(sw.removedAt).toBeNull();
+  });
+
+  it('recordCcSubworktreeCreate accepts null branch', () => {
+    const sw = db.recordCcSubworktreeCreate({ teamId, path: '/tmp/no-branch' });
+    expect(sw.branch).toBeNull();
+  });
+
+  it('calling recordCcSubworktreeCreate twice for the same (team, path) does not duplicate', () => {
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/dup', branch: 'one' });
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/dup', branch: 'two' });
+
+    const rows = db.getTeamSubworktrees(teamId);
+    expect(rows.length).toBe(1);
+    expect(rows[0]!.branch).toBe('two'); // updated, not duplicated
+  });
+
+  it('recordCcSubworktreeRemove sets removed_at and returns the updated row', () => {
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/bar' });
+
+    const result = db.recordCcSubworktreeRemove({ teamId, path: '/tmp/bar' });
+    expect(result).toBeDefined();
+    expect(result!.path).toBe('/tmp/bar');
+    expect(result!.removedAt).toBeTruthy();
+  });
+
+  it('recordCcSubworktreeRemove returns undefined for a non-existent (team, path)', () => {
+    const result = db.recordCcSubworktreeRemove({ teamId, path: '/tmp/never-created' });
+    expect(result).toBeUndefined();
+  });
+
+  it('recordCcSubworktreeRemove does not match already-removed rows', () => {
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/once' });
+    const first = db.recordCcSubworktreeRemove({ teamId, path: '/tmp/once' });
+    expect(first).toBeDefined();
+
+    // Second call should not find an active row to update.
+    const second = db.recordCcSubworktreeRemove({ teamId, path: '/tmp/once' });
+    expect(second).toBeUndefined();
+  });
+
+  it('re-creating a previously-removed path inserts a fresh row (audit trail preserved)', () => {
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/revive' });
+    db.recordCcSubworktreeRemove({ teamId, path: '/tmp/revive' });
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/revive', branch: 'newbranch' });
+
+    const all = db.getTeamSubworktrees(teamId);
+    expect(all.length).toBe(2);
+    expect(all[0]!.removedAt).toBeTruthy();
+    expect(all[1]!.removedAt).toBeNull();
+    expect(all[1]!.branch).toBe('newbranch');
+  });
+
+  it('getTeamSubworktrees returns rows ordered by id ASC', () => {
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/a' });
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/b' });
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/c' });
+
+    const rows = db.getTeamSubworktrees(teamId);
+    expect(rows.map((r) => r.path)).toEqual(['/tmp/a', '/tmp/b', '/tmp/c']);
+  });
+
+  it('getTeamSubworktrees with activeOnly filters out removed rows', () => {
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/active' });
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/gone' });
+    db.recordCcSubworktreeRemove({ teamId, path: '/tmp/gone' });
+
+    const all = db.getTeamSubworktrees(teamId);
+    expect(all.length).toBe(2);
+
+    const active = db.getTeamSubworktrees(teamId, { activeOnly: true });
+    expect(active.length).toBe(1);
+    expect(active[0]!.path).toBe('/tmp/active');
+  });
+
+  it('deleteTeamAndRelated removes team_subworktrees rows', () => {
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/x' });
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/y' });
+    expect(db.getTeamSubworktrees(teamId).length).toBe(2);
+
+    db.deleteTeamAndRelated(teamId);
+
+    // After cascade delete, no rows should remain for this team.
+    const remaining = db.raw
+      .prepare('SELECT COUNT(*) AS count FROM team_subworktrees WHERE team_id = ?')
+      .get(teamId) as { count: number };
+    expect(remaining.count).toBe(0);
+  });
+
+  it('isolates rows by team_id', () => {
+    const other = db.insertTeam({ issueNumber: 999, worktreeName: 'sw-test-999' });
+
+    db.recordCcSubworktreeCreate({ teamId, path: '/tmp/mine' });
+    db.recordCcSubworktreeCreate({ teamId: other.id, path: '/tmp/yours' });
+
+    const mine = db.getTeamSubworktrees(teamId);
+    const yours = db.getTeamSubworktrees(other.id);
+
+    expect(mine.map((r) => r.path)).toEqual(['/tmp/mine']);
+    expect(yours.map((r) => r.path)).toEqual(['/tmp/yours']);
+  });
+
+  it('createdVia=fc passes through when explicitly set', () => {
+    const sw = db.recordCcSubworktreeCreate({
+      teamId,
+      path: '/tmp/fc-row',
+      createdVia: 'fc',
+    });
+    expect(sw.createdVia).toBe('fc');
+  });
+
+  it('migrates an existing v22 DB to v23 on initSchema', () => {
+    // Simulate an existing DB that's already at v22 (before this issue):
+    // drop the team_subworktrees table this test setup created, reset
+    // schema_version to 22, then re-run initSchema. The migration
+    // should re-create the table and bump version to 23.
+    db.raw.exec('DROP TABLE IF EXISTS team_subworktrees');
+    db.raw.prepare("DELETE FROM schema_version WHERE version >= 23").run();
+    db.raw.prepare("INSERT OR REPLACE INTO schema_version (version) VALUES (22)").run();
+
+    // Sanity-check pre-condition
+    const beforeRow = db.raw
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='team_subworktrees'")
+      .get();
+    expect(beforeRow).toBeUndefined();
+
+    db.initSchema();
+
+    // Table should exist after re-init
+    const afterRow = db.raw
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='team_subworktrees'")
+      .get();
+    expect(afterRow).toBeDefined();
+
+    // Schema version should be bumped
+    const ver = db.raw
+      .prepare('SELECT MAX(version) AS version FROM schema_version')
+      .get() as { version: number };
+    expect(ver.version).toBeGreaterThanOrEqual(23);
+  });
+});
+
 describe('Connection management', () => {
   it('closes the database', () => {
     db.close();

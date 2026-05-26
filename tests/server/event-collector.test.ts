@@ -17,6 +17,8 @@ import {
   PHASE_ORDER,
   EventCollectorError,
   extractSpawnPrompt,
+  extractWorktreePath,
+  extractWorktreeBranch,
   type EventPayload,
   type EventCollectorDb,
   type SseBroker,
@@ -3717,5 +3719,351 @@ describe('Background tasks and session crons (#730)', () => {
     expect(fieldCalls.length).toBeGreaterThan(0);
     const fields = fieldCalls[0]![1] as Record<string, unknown>;
     expect(fields.backgroundTasksJson).toBe(JSON.stringify(tasksArray));
+  });
+});
+
+// =============================================================================
+// Worktree path extraction helpers (Issue #731)
+// =============================================================================
+
+describe('extractWorktreePath', () => {
+  it('prefers cc_stdin.hookSpecificOutput.worktreePath over other fields', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({
+        cwd: '/tmp/cwd',
+        worktree_path: '/tmp/lifted',
+        hookSpecificOutput: { worktreePath: '/tmp/preferred' },
+      }),
+      worktree_path: '/tmp/payload-field',
+      tool_input: JSON.stringify({ path: '/tmp/tool-input' }),
+    };
+
+    expect(extractWorktreePath(payload)).toBe('/tmp/preferred');
+  });
+
+  it('falls back to cc_stdin.cwd when hookSpecificOutput is absent', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ cwd: '/tmp/cwd' }),
+    };
+
+    expect(extractWorktreePath(payload)).toBe('/tmp/cwd');
+  });
+
+  it('falls back to payload.worktree_path when cc_stdin has neither', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ session_id: 'sess-1' }),
+      worktree_path: '/tmp/from-payload',
+    };
+
+    expect(extractWorktreePath(payload)).toBe('/tmp/from-payload');
+  });
+
+  it('falls back to tool_input.path as the lowest-priority source', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      tool_input: JSON.stringify({ path: '/tmp/from-tool-input' }),
+    };
+
+    expect(extractWorktreePath(payload)).toBe('/tmp/from-tool-input');
+  });
+
+  it('falls back to tool_input.worktreePath as an alias', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      tool_input: JSON.stringify({ worktreePath: '/tmp/wt-alias' }),
+    };
+
+    expect(extractWorktreePath(payload)).toBe('/tmp/wt-alias');
+  });
+
+  it('normalizes backslashes to forward slashes', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ cwd: 'C:\\Users\\me\\proj' }),
+    };
+
+    expect(extractWorktreePath(payload)).toBe('C:/Users/me/proj');
+  });
+
+  it('returns null when no source has a path', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ session_id: 'sess-1' }),
+    };
+
+    expect(extractWorktreePath(payload)).toBeNull();
+  });
+
+  it('returns null on malformed cc_stdin (falls through, no throw)', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: 'not-valid-json',
+    };
+
+    expect(extractWorktreePath(payload)).toBeNull();
+  });
+
+  it('ignores empty strings in path fields', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({
+        cwd: '',
+        hookSpecificOutput: { worktreePath: '   ' },
+      }),
+      worktree_path: '/tmp/real',
+    };
+
+    expect(extractWorktreePath(payload)).toBe('/tmp/real');
+  });
+});
+
+describe('extractWorktreeBranch', () => {
+  it('reads cc_stdin.branch when present', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ branch: 'feat/x' }),
+    };
+
+    expect(extractWorktreeBranch(payload)).toBe('feat/x');
+  });
+
+  it('falls back to tool_input.branch when cc_stdin is missing branch', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ session_id: 'sess-1' }),
+      tool_input: JSON.stringify({ branch: 'feat/from-input' }),
+    };
+
+    expect(extractWorktreeBranch(payload)).toBe('feat/from-input');
+  });
+
+  it('returns null when no branch is present', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ session_id: 'sess-1' }),
+    };
+
+    expect(extractWorktreeBranch(payload)).toBeNull();
+  });
+
+  it('returns null on malformed cc_stdin without throwing', () => {
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: '{invalid json',
+    };
+
+    expect(extractWorktreeBranch(payload)).toBeNull();
+  });
+});
+
+// =============================================================================
+// WorktreeCreate / WorktreeRemove hook handlers (Issue #731)
+// =============================================================================
+
+describe('WorktreeCreate / WorktreeRemove hook handlers', () => {
+  it('WorktreeCreate calls recordCcSubworktreeCreate with extracted cwd', () => {
+    const recordCcSubworktreeCreate = vi.fn().mockReturnValue({ id: 1 });
+    const db = createMockDb({ recordCcSubworktreeCreate });
+    const sse = createMockSse();
+
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ cwd: '/tmp/sub-1', branch: 'feat/wt' }),
+    };
+
+    processEvent(payload, db, sse);
+
+    expect(recordCcSubworktreeCreate).toHaveBeenCalledTimes(1);
+    expect(recordCcSubworktreeCreate).toHaveBeenCalledWith({
+      teamId: 1,
+      path: '/tmp/sub-1',
+      branch: 'feat/wt',
+      createdVia: 'cc',
+    });
+  });
+
+  it('WorktreeCreate prefers hookSpecificOutput.worktreePath over cwd', () => {
+    const recordCcSubworktreeCreate = vi.fn().mockReturnValue({ id: 1 });
+    const db = createMockDb({ recordCcSubworktreeCreate });
+    const sse = createMockSse();
+
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({
+        cwd: '/tmp/cwd-value',
+        hookSpecificOutput: { worktreePath: '/tmp/preferred' },
+      }),
+    };
+
+    processEvent(payload, db, sse);
+
+    expect(recordCcSubworktreeCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/tmp/preferred' }),
+    );
+  });
+
+  it('WorktreeCreate works with only payload.worktree_path set', () => {
+    const recordCcSubworktreeCreate = vi.fn().mockReturnValue({ id: 1 });
+    const db = createMockDb({ recordCcSubworktreeCreate });
+    const sse = createMockSse();
+
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      worktree_path: '/tmp/from-lifted-field',
+    };
+
+    processEvent(payload, db, sse);
+
+    expect(recordCcSubworktreeCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/tmp/from-lifted-field' }),
+    );
+  });
+
+  it('WorktreeCreate normalizes backslashes to forward slashes', () => {
+    const recordCcSubworktreeCreate = vi.fn().mockReturnValue({ id: 1 });
+    const db = createMockDb({ recordCcSubworktreeCreate });
+    const sse = createMockSse();
+
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ cwd: 'C:\\Users\\me\\sub-wt' }),
+    };
+
+    processEvent(payload, db, sse);
+
+    expect(recordCcSubworktreeCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'C:/Users/me/sub-wt' }),
+    );
+  });
+
+  it('WorktreeCreate with no resolvable path warns and does NOT call recordCcSubworktreeCreate', () => {
+    const recordCcSubworktreeCreate = vi.fn();
+    const db = createMockDb({ recordCcSubworktreeCreate });
+    const sse = createMockSse();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ session_id: 'sess-1' }),
+    };
+
+    expect(() => processEvent(payload, db, sse)).not.toThrow();
+    expect(recordCcSubworktreeCreate).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
+  it('WorktreeCreate is a no-op when db.recordCcSubworktreeCreate is absent', () => {
+    // Mock DB without the optional method (mimics older test setups).
+    const db = createMockDb();
+    const sse = createMockSse();
+
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ cwd: '/tmp/wt' }),
+    };
+
+    // Should not throw — silently no-ops when method is undefined.
+    expect(() => processEvent(payload, db, sse)).not.toThrow();
+  });
+
+  it('WorktreeRemove with resolvable path calls recordCcSubworktreeRemove', () => {
+    const recordCcSubworktreeRemove = vi.fn().mockReturnValue({ id: 1 });
+    const db = createMockDb({ recordCcSubworktreeRemove });
+    const sse = createMockSse();
+
+    const payload: EventPayload = {
+      event: 'worktree_remove',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ cwd: '/tmp/gone' }),
+    };
+
+    processEvent(payload, db, sse);
+
+    expect(recordCcSubworktreeRemove).toHaveBeenCalledTimes(1);
+    expect(recordCcSubworktreeRemove).toHaveBeenCalledWith({
+      teamId: 1,
+      path: '/tmp/gone',
+    });
+  });
+
+  it('WorktreeRemove tolerates undefined return from recordCcSubworktreeRemove (no error)', () => {
+    const recordCcSubworktreeRemove = vi.fn().mockReturnValue(undefined);
+    const db = createMockDb({ recordCcSubworktreeRemove });
+    const sse = createMockSse();
+
+    const payload: EventPayload = {
+      event: 'worktree_remove',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ cwd: '/tmp/never-created' }),
+    };
+
+    expect(() => processEvent(payload, db, sse)).not.toThrow();
+    expect(recordCcSubworktreeRemove).toHaveBeenCalled();
+  });
+
+  it('WorktreeRemove with no resolvable path warns without calling the recorder', () => {
+    const recordCcSubworktreeRemove = vi.fn();
+    const db = createMockDb({ recordCcSubworktreeRemove });
+    const sse = createMockSse();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const payload: EventPayload = {
+      event: 'worktree_remove',
+      team: 'kea-100',
+    };
+
+    processEvent(payload, db, sse);
+
+    expect(recordCcSubworktreeRemove).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
+  it('handler errors are logged but do not break event processing', () => {
+    const recordCcSubworktreeCreate = vi.fn().mockImplementation(() => {
+      throw new Error('synthetic db failure');
+    });
+    const db = createMockDb({ recordCcSubworktreeCreate });
+    const sse = createMockSse();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const payload: EventPayload = {
+      event: 'worktree_create',
+      team: 'kea-100',
+      cc_stdin: JSON.stringify({ cwd: '/tmp/oops' }),
+    };
+
+    // Should not throw — handler swallows errors and emits a warning.
+    const result = processEvent(payload, db, sse);
+
+    expect(result.processed).toBe(true);
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
   });
 });
