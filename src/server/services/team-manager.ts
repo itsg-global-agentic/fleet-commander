@@ -30,6 +30,7 @@ import { wasTaskSeenByHook } from './task-dedup.js';
 import type { TeamPhase } from '../../shared/types.js';
 import { isValidGithubRepo } from '../utils/exec-gh.js';
 import { generateIssueContext } from './issue-context-generator.js';
+import { cleanupTeamCcSubworktrees } from './cleanup.js';
 
 const execAsync = promisify(execCallback);
 
@@ -632,6 +633,10 @@ export class TeamManager {
     );
 
     this.broadcastSnapshot();
+
+    // Auto-cleanup CC-created subworktrees (issue #737). Fire-and-forget;
+    // any cleanup work must not block the queue or SSE broadcast.
+    this.fireSubworktreeCleanup(teamId);
 
     // Process queue when a slot frees up
     if (team.projectId) {
@@ -2023,6 +2028,9 @@ export class TeamManager {
       sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
       this.broadcastSnapshot();
 
+      // Auto-cleanup CC-created subworktrees (issue #737). Fire-and-forget.
+      this.fireSubworktreeCleanup(teamId);
+
       if (currentTeam.projectId) {
         this.processQueue(currentTeam.projectId).catch((err) => {
           console.error(`[TeamManager] processQueue error after team exit:`, err);
@@ -2122,6 +2130,9 @@ export class TeamManager {
 
     sseBroker.broadcast('team_stopped', { team_id: teamId }, teamId);
     this.broadcastSnapshot();
+
+    // Auto-cleanup CC-created subworktrees (issue #737). Fire-and-forget.
+    this.fireSubworktreeCleanup(teamId);
 
     if (currentTeam.projectId) {
       this.processQueue(currentTeam.projectId).catch((err) => {
@@ -2420,6 +2431,28 @@ export class TeamManager {
     } catch (err) {
       console.error('[TeamManager] Failed to broadcast snapshot:', err);
     }
+  }
+
+  /**
+   * Fire-and-forget auto-cleanup of CC-created subworktrees after a team
+   * transitions to done/failed (issue #737). Runs in a microtask so any
+   * synchronous throw inside `cleanupTeamCcSubworktrees` cannot abort the
+   * caller's transition path; the helper itself already swallows errors,
+   * but the `.catch()` is defensive belt-and-suspenders.
+   *
+   * Extracted into a method so tests can spy on it via
+   * `(tm as any).fireSubworktreeCleanup = vi.fn()` without having to mock
+   * the entire cleanup module.
+   */
+  private fireSubworktreeCleanup(teamId: number): void {
+    void Promise.resolve()
+      .then(() => cleanupTeamCcSubworktrees(teamId))
+      .catch((err) => {
+        console.error(
+          `[TeamManager] cleanupTeamCcSubworktrees failed for team ${teamId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      });
   }
 
   private initOutputBuffer(teamId: number): void {
