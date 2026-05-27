@@ -480,6 +480,9 @@ export class FleetDatabase {
     // Add permission_policy and allowed_domains_json columns to projects (v27 migration — PermissionRequest hook, issue #736)
     this.addPermissionPolicyColumns();
 
+    // Tighten projects.effort CHECK constraint to drop legacy 'max' (v28 migration, issue #754)
+    this.tightenProjectsEffortCheckConstraint();
+
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
 
@@ -1248,6 +1251,10 @@ export class FleetDatabase {
    * adaptive-reasoning effort levels: low, medium, high, xhigh, max.
    * Fresh databases get the column via schema.sql; upgraded databases use this
    * migration. Existing rows will have NULL effort which the CHECK allows.
+   *
+   * Note: the v19 CHECK still includes 'max' on legacy DBs for historical
+   * reasons. The v28 migration recreates the projects table with the tightened
+   * CHECK that drops 'max' (issue #754).
    */
   private addEffortColumn(): void {
     try {
@@ -1582,6 +1589,134 @@ export class FleetDatabase {
     } catch (err) {
       // Table may not exist yet (fresh database) — schema.sql will create it
       console.warn('[DB] v27 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * Tighten the projects.effort CHECK constraint to drop legacy 'max' (v28
+   * migration, issue #754).
+   *
+   * The v19 ALTER added the column with `CHECK(effort IN ('low','medium',
+   * 'high','xhigh','max'))`. The v22 migration rewrote any DATA carrying
+   * 'max' to 'xhigh' but left the CHECK alone, so legacy DBs still accept
+   * `effort='max'` at the DB layer even though no client surface emits it.
+   * This is defense-in-depth: recreate the projects table with the tightened
+   * CHECK that matches schema.sql, so 'max' is rejected at the DB boundary.
+   *
+   * SQLite cannot ALTER a CHECK in place, so we use the standard
+   * "create new, copy, drop, rename" pattern inside a transaction with
+   * foreign keys temporarily disabled (better-sqlite3 ignores the PRAGMA
+   * when set inside a transaction, so we set it outside via try/finally).
+   *
+   * WARNING: keep `CREATE TABLE projects_new` in sync with the projects
+   * definition in src/server/schema.sql (lines 25-47). The migration mirrors
+   * the schema.sql definition character-for-character — bump v28 again (or
+   * add a new vN) if the projects shape changes.
+   *
+   * Idempotent: early-returns on fresh DB (projects table not yet created)
+   * and on databases that already report schema_version >= 28.
+   */
+  private tightenProjectsEffortCheckConstraint(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+      // Fresh DB: projects table doesn't exist yet — schema.sql will create it
+      // with the tightened CHECK already in place. Nothing to migrate.
+      if (cols.length === 0) return;
+
+      // Already migrated — second-run no-op.
+      const versionRow = this.db
+        .prepare('SELECT MAX(version) AS version FROM schema_version')
+        .get() as { version: number | null } | undefined;
+      if ((versionRow?.version ?? 0) >= 28) return;
+
+      // Disable FK enforcement OUTSIDE the transaction (better-sqlite3 ignores
+      // the PRAGMA inside one). The try/finally guarantees we restore FK
+      // enforcement even if the transaction throws.
+      this.db.pragma('foreign_keys = OFF');
+      try {
+        this.db.transaction(() => {
+          // 1. Create projects_new mirroring schema.sql lines 25-47 exactly,
+          //    with the tightened effort CHECK (no 'max').
+          this.db.exec(`
+            CREATE TABLE projects_new (
+              id              INTEGER PRIMARY KEY AUTOINCREMENT,
+              name            TEXT NOT NULL,
+              repo_path       TEXT NOT NULL UNIQUE,
+              github_repo     TEXT,
+              group_id        INTEGER REFERENCES project_groups(id),
+              status          TEXT NOT NULL DEFAULT 'active',
+              hooks_installed INTEGER NOT NULL DEFAULT 0,
+              max_active_teams INTEGER NOT NULL DEFAULT 5,
+              prompt_file     TEXT,
+              model           TEXT,
+              effort          TEXT CHECK(effort IS NULL OR effort IN ('low','medium','high','xhigh')),
+              issue_provider  TEXT DEFAULT 'github',
+              project_key     TEXT,
+              provider_config TEXT,
+              auto_merge_enabled INTEGER,
+              auto_merge_checked_at TEXT,
+              hook_mode       TEXT,
+              permission_policy TEXT CHECK(permission_policy IS NULL OR permission_policy IN ('skip','hook')),
+              allowed_domains_json TEXT,
+              created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+              updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            )
+          `);
+
+          // 2. Copy every row, naming columns explicitly so the migration
+          //    survives a future column re-order in either table.
+          this.db.exec(`
+            INSERT INTO projects_new (
+              id, name, repo_path, github_repo, group_id, status, hooks_installed,
+              max_active_teams, prompt_file, model, effort, issue_provider,
+              project_key, provider_config, auto_merge_enabled,
+              auto_merge_checked_at, hook_mode, permission_policy,
+              allowed_domains_json, created_at, updated_at
+            )
+            SELECT
+              id, name, repo_path, github_repo, group_id, status, hooks_installed,
+              max_active_teams, prompt_file, model, effort, issue_provider,
+              project_key, provider_config, auto_merge_enabled,
+              auto_merge_checked_at, hook_mode, permission_policy,
+              allowed_domains_json, created_at, updated_at
+            FROM projects
+          `);
+
+          // 3. Drop the dashboard view (depends on projects) so the rename
+          //    can proceed; schema.sql will recreate it at the end of
+          //    initSchema().
+          this.db.exec('DROP VIEW IF EXISTS v_team_dashboard');
+
+          // 4. Drop old projects table and rename projects_new -> projects.
+          this.db.exec('DROP TABLE projects');
+          this.db.exec('ALTER TABLE projects_new RENAME TO projects');
+
+          // 5. Recreate the projects indexes (schema.sql lines 49-50).
+          this.db.exec('CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status)');
+          this.db.exec('CREATE INDEX IF NOT EXISTS idx_projects_group ON projects(group_id)');
+
+          // 6. Sanity-check FK integrity before committing — abort the
+          //    transaction if anything broke (teams.project_id /
+          //    project_issue_sources.project_id should still resolve).
+          const fkViolations = this.db.prepare('PRAGMA foreign_key_check').all();
+          if (fkViolations.length > 0) {
+            throw new Error(
+              `v28 migration: foreign_key_check returned ${fkViolations.length} violation(s); aborting`,
+            );
+          }
+        })();
+      } finally {
+        // Always restore FK enforcement, even if the transaction threw.
+        this.db.pragma('foreign_keys = ON');
+      }
+
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (28)');
+      console.log(
+        '[DB] v28 migration: recreated projects table with tightened effort CHECK constraint (max no longer accepted at DB level)',
+      );
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v28 migration skipped:', err instanceof Error ? err.message : err);
     }
   }
 
