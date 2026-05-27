@@ -18,7 +18,7 @@ import os from 'os';
 import path from 'path';
 import { execSync } from 'child_process';
 import { detectHookDrift, checkInstallStatus } from '../../src/server/services/project-service.js';
-import { installHooks } from '../../src/server/utils/hook-installer.js';
+import { getGitBash } from '../../src/server/utils/hook-installer.js';
 import config from '../../src/server/config.js';
 
 // ---------------------------------------------------------------------------
@@ -87,17 +87,74 @@ function loadHttpTemplateTypes(): string[] {
 }
 
 /**
- * Check whether Git Bash is available so the install.sh integration test can
- * skip gracefully on hosts where it is not installed. Matches the pattern used
- * by `tests/server/find-git-bash.test.ts`.
+ * Resolve a bash interpreter path the integration test can invoke explicitly
+ * (i.e. `bash install.sh ...` rather than relying on the script's +x bit,
+ * which is not set in the git index — see `git ls-files --stage`). Returns
+ * undefined when bash cannot be located, in which case the integration tests
+ * skip gracefully. On Windows we reuse the project's `getGitBash()` helper;
+ * on POSIX hosts we probe common locations and `command -v bash`.
  */
-function gitBashAvailable(): boolean {
-  if (process.platform !== 'win32') return true; // POSIX bash is assumed
+function findBashForTest(): string | undefined {
+  if (process.platform === 'win32') {
+    try {
+      const bash = getGitBash();
+      // getGitBash() may return the bare string 'bash' as a last resort —
+      // skip the integration in that case to avoid invoking the wrong shell.
+      if (bash && bash !== 'bash' && fs.existsSync(bash)) return bash;
+    } catch {
+      // fall through to undefined
+    }
+    return undefined;
+  }
+  // POSIX — try common paths first, then PATH lookup via `command -v`.
+  for (const candidate of ['/bin/bash', '/usr/bin/bash', '/usr/local/bin/bash']) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
   try {
-    const out = execSync('where bash.exe', { encoding: 'utf-8', stdio: 'pipe', timeout: 5000 });
-    return out.trim().length > 0;
+    const out = execSync('command -v bash', {
+      encoding: 'utf-8',
+      stdio: 'pipe',
+      timeout: 5000,
+      shell: '/bin/sh',
+    });
+    const resolved = out.trim();
+    if (resolved && fs.existsSync(resolved)) return resolved;
   } catch {
-    return false;
+    // not found
+  }
+  return undefined;
+}
+
+/**
+ * Run scripts/install.sh against the given tmp repo via an explicit `bash`
+ * invocation. Bypassing `installHooks()` lets the integration test work on
+ * Linux CI runners where the script's +x bit is not set in the git index
+ * (file mode 100644). Returns `{ ok, stdout, stderr }` with the same shape
+ * as `installHooks()` so the assertions below can stay identical.
+ */
+function runInstallScript(
+  bash: string,
+  repoPath: string,
+  opts: { mode: 'http' | 'bash'; port: number },
+): { ok: boolean; stdout: string; stderr: string } {
+  const scriptPath = path.join(config.fleetCommanderRoot, 'scripts', 'install.sh');
+  // On Windows, paths must be forward-slashed for Git Bash. On POSIX they
+  // already are. `--login` is only needed on Windows to source /etc/profile
+  // so Git Bash picks up /usr/bin tools — on Linux/macOS it can break in
+  // minimal CI containers where /etc/profile is missing or noisy.
+  const norm = (p: string): string => p.replace(/\\/g, '/');
+  const loginArg = process.platform === 'win32' ? '--login ' : '';
+  const cmd = `"${bash}" ${loginArg}"${norm(scriptPath)}" --mode ${opts.mode} --port ${opts.port} "${norm(repoPath)}"`;
+  try {
+    const stdout = execSync(cmd, { encoding: 'utf-8', stdio: 'pipe', timeout: 30000 });
+    return { ok: true, stdout, stderr: '' };
+  } catch (err: unknown) {
+    const e = err as { stdout?: string; stderr?: string; message?: string; status?: number };
+    return {
+      ok: false,
+      stdout: e.stdout ?? '',
+      stderr: (e.stderr ?? '') || e.message || `exit ${e.status ?? '?'}`,
+    };
   }
 }
 
@@ -236,7 +293,9 @@ describe('checkInstallStatus drift integration', () => {
 // ---------------------------------------------------------------------------
 
 describe('install.sh prunes stale FC entries and reports them on stdout', () => {
-  it.skipIf(!gitBashAvailable())(
+  const bash = findBashForTest();
+
+  it.skipIf(!bash)(
     'removes a stale WorktreeCreate entry and prints "Removed 1 stale hook entries: WorktreeCreate"',
     () => {
       // Initialise a tmp git repo so install.sh can operate (some steps may
@@ -252,21 +311,14 @@ describe('install.sh prunes stale FC entries and reports them on stdout', () => 
         SessionStart: [httpFcEntry('SessionStart')],
       });
 
-      // Minimal noop logger — installHooks expects a FastifyBaseLogger but
-      // only calls .info/.error.
-      const logger = {
-        info: () => undefined,
-        error: () => undefined,
-        warn: () => undefined,
-        debug: () => undefined,
-        trace: () => undefined,
-        fatal: () => undefined,
-        child: () => logger,
-        level: 'info',
-      } as unknown as Parameters<typeof installHooks>[1];
-
-      const result = installHooks(tmpDir, logger, { mode: 'http', port: 4680 });
-      expect(result.ok).toBe(true);
+      const result = runInstallScript(bash!, tmpDir, { mode: 'http', port: 4680 });
+      // If install.sh failed, surface its stderr so CI logs show why rather
+      // than the bare "expected false to be true".
+      if (!result.ok) {
+        throw new Error(
+          `install.sh failed:\n  stderr: ${result.stderr}\n  stdout: ${result.stdout}`,
+        );
+      }
 
       // The "removed N stale hook entries" line must appear in stdout.
       expect(result.stdout).toContain('Removed 1 stale hook entries: WorktreeCreate');
@@ -285,7 +337,7 @@ describe('install.sh prunes stale FC entries and reports them on stdout', () => 
     30_000,
   );
 
-  it.skipIf(!gitBashAvailable())(
+  it.skipIf(!bash)(
     'does NOT print "Removed N stale hook entries" when no stale entries exist',
     () => {
       execSync('git init -q', { cwd: tmpDir, stdio: 'pipe' });
@@ -295,19 +347,12 @@ describe('install.sh prunes stale FC entries and reports them on stdout', () => 
         SessionStart: [httpFcEntry('SessionStart')],
       });
 
-      const logger = {
-        info: () => undefined,
-        error: () => undefined,
-        warn: () => undefined,
-        debug: () => undefined,
-        trace: () => undefined,
-        fatal: () => undefined,
-        child: () => logger,
-        level: 'info',
-      } as unknown as Parameters<typeof installHooks>[1];
-
-      const result = installHooks(tmpDir, logger, { mode: 'http', port: 4680 });
-      expect(result.ok).toBe(true);
+      const result = runInstallScript(bash!, tmpDir, { mode: 'http', port: 4680 });
+      if (!result.ok) {
+        throw new Error(
+          `install.sh failed:\n  stderr: ${result.stderr}\n  stdout: ${result.stdout}`,
+        );
+      }
 
       // No "Removed N stale hook entries" line should appear.
       expect(result.stdout).not.toMatch(/Removed \d+ stale hook entries/);
