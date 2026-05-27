@@ -120,7 +120,9 @@ export function TeamDetail() {
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [quickActionLoading, setQuickActionLoading] = useState<string | null>(null);
   const [quickActionSent, setQuickActionSent] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'session-log' | 'tasks' | 'files' | 'team'>('session-log');
+  const [activeTab, setActiveTab] = useState<
+    'session-log' | 'tasks' | 'files' | 'team' | 'transitions' | 'pr' | 'slowest-tools'
+  >('session-log');
   const [tasks, setTasks] = useState<TeamTask[]>([]);
   const [tasksLoading, setTasksLoading] = useState(false);
   const [handoffFiles, setHandoffFiles] = useState<HandoffFile[]>([]);
@@ -385,6 +387,21 @@ export function TeamDetail() {
       ? getMergeStatusLabel(detail.pr.mergeStatus)
       : null;
 
+  // Issue #762: promoted-tab visibility. PR tab is shown whenever the team has
+  // a PR number (even if `pr` detail is still loading). Slowest tools tab is
+  // shown only when CC supplied at least one duration_ms value. Transitions
+  // tab is always visible.
+  const hasPrTab = detail?.prNumber != null;
+  const hasSlowestToolsTab =
+    Array.isArray(detail?.slowestToolCalls) && detail.slowestToolCalls.length > 0;
+
+  // Auto-redirect to Session Log if the active tab is no longer visible
+  // (e.g. PR closed mid-session, or slowest tools data churned out).
+  useEffect(() => {
+    if (activeTab === 'pr' && !hasPrTab) setActiveTab('session-log');
+    if (activeTab === 'slowest-tools' && !hasSlowestToolsTab) setActiveTab('session-log');
+  }, [activeTab, hasPrTab, hasSlowestToolsTab]);
+
   return (
     <>
       {/* Backdrop overlay */}
@@ -553,205 +570,12 @@ export function TeamDetail() {
                     )}
                   </section>
 
-                  {/* ---- Transition History ---- */}
-                  {transitions.length > 0 && (
-                    <section className="min-w-0">
-                      <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                        State Transitions
-                      </h4>
-                      <div className="flex items-center gap-0 overflow-x-auto pb-1 custom-scrollbar max-w-full">
-                        {transitions.map((t, i) => {
-                          const isFirst = i === 0;
-                          const toColor = STATUS_COLORS[t.toStatus] ?? '#8B949E';
-                          const timeStr = (() => {
-                            try {
-                              const d = new Date(t.createdAt);
-                              return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                            } catch {
-                              return '';
-                            }
-                          })();
-                          return (
-                            <div key={t.id} className="flex items-center shrink-0">
-                              {/* Show from_status pill only for the first transition */}
-                              {isFirst && (
-                                <>
-                                  <div className="flex flex-col items-center">
-                                    <span
-                                      className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-                                      style={{
-                                        color: STATUS_COLORS[t.fromStatus] ?? '#8B949E',
-                                        backgroundColor: (STATUS_COLORS[t.fromStatus] ?? '#8B949E') + '18',
-                                      }}
-                                    >
-                                      {t.fromStatus}
-                                    </span>
-                                  </div>
-                                  <svg className="w-3 h-3 text-dark-muted shrink-0 mx-0.5" viewBox="0 0 12 12" fill="currentColor">
-                                    <path d="M4.5 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" />
-                                  </svg>
-                                </>
-                              )}
-                              <div
-                                className="flex flex-col items-center group relative"
-                              >
-                                <span
-                                  className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-                                  style={{
-                                    color: toColor,
-                                    backgroundColor: toColor + '18',
-                                  }}
-                                >
-                                  {t.toStatus}
-                                </span>
-                                <span className="text-[9px] text-dark-muted mt-0.5 leading-none">
-                                  {timeStr}
-                                </span>
-                                {/* Tooltip with reason */}
-                                {t.reason && (
-                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 bg-dark-surface border border-dark-border rounded text-[10px] text-dark-text whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-lg max-w-[240px] truncate">
-                                    {t.reason}
-                                  </div>
-                                )}
-                              </div>
-                              {i < transitions.length - 1 && (
-                                <svg className="w-3 h-3 text-dark-muted shrink-0 mx-0.5" viewBox="0 0 12 12" fill="currentColor">
-                                  <path d="M4.5 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" />
-                                </svg>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  )}
-
-                  {/* ---- PR Section ---- */}
-                  {detail.pr && (
-                    <section>
-                      <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                        Pull Request
-                      </h4>
-
-                      <div className="flex items-center gap-3 mb-3 text-sm">
-                        {detail.githubRepo ? (
-                          <a
-                            href={`https://github.com/${detail.githubRepo}/pull/${detail.pr.number}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-dark-accent font-medium hover:underline"
-                          >
-                            PR #{detail.pr.number}
-                          </a>
-                        ) : (
-                          <span className="text-dark-accent font-medium">
-                            PR #{detail.pr.number}
-                          </span>
-                        )}
-                        <span
-                          className="text-xs px-1.5 py-0.5 rounded border"
-                          style={{
-                            color:
-                              detail.pr.state === 'merged'
-                                ? '#A371F7'
-                                : detail.pr.state === 'open'
-                                  ? '#3FB950'
-                                  : detail.pr.state === 'closed'
-                                    ? '#F85149'
-                                    : '#8B949E',
-                            borderColor:
-                              (detail.pr.state === 'merged'
-                                ? '#A371F7'
-                                : detail.pr.state === 'open'
-                                  ? '#3FB950'
-                                  : detail.pr.state === 'closed'
-                                    ? '#F85149'
-                                    : '#8B949E') + '40',
-                          }}
-                        >
-                          {detail.pr.state?.toUpperCase() ?? 'UNKNOWN'}
-                        </span>
-                        {mergeStatusLabelText && (
-                          <span className="text-xs text-dark-muted">
-                            Merge: {mergeStatusLabelText}
-                          </span>
-                        )}
-                        {detail.pr.autoMerge && (
-                          <span className="text-xs text-[#3FB950]">Auto-merge</span>
-                        )}
-                      </div>
-
-                      {/* CI Checks */}
-                      <div className="ml-1">
-                        <p className="text-xs text-dark-muted mb-1.5 uppercase tracking-wide">CI Checks</p>
-                        <div className="max-h-[120px] overflow-y-auto custom-scrollbar">
-                          <CIChecks checks={detail.pr.checks ?? []} />
-                        </div>
-                      </div>
-                    </section>
-                  )}
-
-                  {!detail.pr && detail.prNumber && (
-                    <section>
-                      <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                        Pull Request
-                      </h4>
-                      <p className="text-sm text-dark-muted">
-                        {detail.githubRepo ? (
-                          <a
-                            href={`https://github.com/${detail.githubRepo}/pull/${detail.prNumber}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-dark-accent hover:underline"
-                          >
-                            PR #{detail.prNumber}
-                          </a>
-                        ) : (
-                          <>PR #{detail.prNumber}</>
-                        )}
-                        {' '}(details loading...)
-                      </p>
-                    </section>
-                  )}
-
-                  {/* ---- Slowest Tool Calls (issue #732) ---- */}
                   {/*
-                    Renders only when CC supplied at least one duration_ms value
-                    (CC 2.1.119+ PostToolUse / PostToolUseFailure hooks). For
-                    older teams or CC versions the array is empty and the
-                    section is omitted entirely.
+                    Issue #762: State Transitions, Pull Request and Slowest
+                    Tool Calls sections previously rendered inline here have
+                    been promoted to top-level tabs (Transitions / PR /
+                    Slowest tools) in the tab bar below.
                   */}
-                  {Array.isArray(detail.slowestToolCalls) && detail.slowestToolCalls.length > 0 && (
-                    <section>
-                      <h4 className="text-sm font-semibold text-dark-text mb-2 border-b border-dark-border/50 pb-1">
-                        Slowest Tool Calls
-                      </h4>
-                      <ul className="space-y-1.5">
-                        {detail.slowestToolCalls.slice(0, 5).map((evt) => {
-                          const label = parseToolFromPayload(evt.payload, evt.toolName);
-                          const durationLabel = formatMs(evt.durationMs);
-                          return (
-                            <li
-                              key={evt.id}
-                              className="flex items-center gap-2 text-sm"
-                            >
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-dark-border/30 text-dark-text shrink-0">
-                                {durationLabel}
-                              </span>
-                              <span className="text-dark-text truncate" title={label}>
-                                {label}
-                              </span>
-                              {evt.agentName && evt.agentName !== 'team-lead' && (
-                                <span className="text-xs text-dark-muted shrink-0">
-                                  {evt.agentName}
-                                </span>
-                              )}
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </section>
-                  )}
                 </div>
                 </div>
               </div>
@@ -810,6 +634,48 @@ export function TeamDetail() {
                   >
                     Team
                   </button>
+                  <button
+                    onClick={() => setActiveTab('transitions')}
+                    className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                      activeTab === 'transitions'
+                        ? 'border-dark-accent text-dark-text'
+                        : 'border-transparent text-dark-muted hover:text-dark-text'
+                    }`}
+                  >
+                    Transitions
+                    {Array.isArray(transitions) && transitions.length > 0 && (
+                      <span className="ml-1.5 text-xs text-dark-muted">
+                        ({transitions.length})
+                      </span>
+                    )}
+                  </button>
+                  {hasPrTab && (
+                    <button
+                      onClick={() => setActiveTab('pr')}
+                      className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                        activeTab === 'pr'
+                          ? 'border-dark-accent text-dark-text'
+                          : 'border-transparent text-dark-muted hover:text-dark-text'
+                      }`}
+                    >
+                      PR
+                      <span className="ml-1.5 text-xs text-dark-muted">
+                        #{detail.prNumber}
+                      </span>
+                    </button>
+                  )}
+                  {hasSlowestToolsTab && (
+                    <button
+                      onClick={() => setActiveTab('slowest-tools')}
+                      className={`px-3 py-2 text-sm font-medium border-b-2 transition-colors ${
+                        activeTab === 'slowest-tools'
+                          ? 'border-dark-accent text-dark-text'
+                          : 'border-transparent text-dark-muted hover:text-dark-text'
+                      }`}
+                    >
+                      Slowest tools
+                    </button>
+                  )}
                 </div>
 
                 {/* Tab content */}
@@ -1006,6 +872,191 @@ export function TeamDetail() {
                         )}
                       </div>
                     </div>
+                  </div>
+                )}
+
+                {/*
+                  Issue #762: Transitions tab. Always rendered (no visibility
+                  predicate) — when there are no transitions yet, show an
+                  empty-state placeholder rather than hiding the tab.
+                */}
+                {activeTab === 'transitions' && (
+                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 py-3">
+                    {!Array.isArray(transitions) || transitions.length === 0 ? (
+                      <div className="flex flex-col items-center justify-center py-12 text-center">
+                        <p className="text-sm text-dark-muted">No state transitions yet.</p>
+                        <p className="text-xs text-dark-muted/60 mt-1">Transitions appear as the team's status changes.</p>
+                      </div>
+                    ) : (
+                      <ul className="space-y-1.5">
+                        {transitions.map((t) => {
+                          const fromColor = STATUS_COLORS[t.fromStatus] ?? '#8B949E';
+                          const toColor = STATUS_COLORS[t.toStatus] ?? '#8B949E';
+                          const timeStr = (() => {
+                            try {
+                              const d = new Date(t.createdAt);
+                              return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                            } catch {
+                              return '';
+                            }
+                          })();
+                          return (
+                            <li
+                              key={t.id}
+                              className="flex items-center gap-2 px-2 py-1.5 rounded border border-dark-border/40 bg-dark-border/5"
+                            >
+                              <span
+                                className="text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0"
+                                style={{
+                                  color: fromColor,
+                                  backgroundColor: fromColor + '18',
+                                }}
+                              >
+                                {t.fromStatus}
+                              </span>
+                              <svg className="w-3 h-3 text-dark-muted shrink-0" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+                                <path d="M4.5 2l4 4-4 4" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                              </svg>
+                              <span
+                                className="text-[10px] font-medium px-1.5 py-0.5 rounded shrink-0"
+                                style={{
+                                  color: toColor,
+                                  backgroundColor: toColor + '18',
+                                }}
+                              >
+                                {t.toStatus}
+                              </span>
+                              <span className="text-xs text-dark-muted shrink-0 font-mono">
+                                {timeStr}
+                              </span>
+                              {t.reason && (
+                                <span className="flex-1 min-w-0 text-xs text-dark-muted truncate" title={t.reason}>
+                                  {t.reason}
+                                </span>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {/*
+                  Issue #762: Pull Request tab. Shown when detail.prNumber is
+                  set. Renders the "loaded" branch when detail.pr is populated,
+                  and a loading fallback when only prNumber is known.
+                */}
+                {activeTab === 'pr' && hasPrTab && (
+                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 py-3">
+                    {detail.pr ? (
+                      <>
+                        <div className="flex items-center gap-3 mb-3 text-sm flex-wrap">
+                          {detail.githubRepo ? (
+                            <a
+                              href={`https://github.com/${detail.githubRepo}/pull/${detail.pr.number}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-dark-accent font-medium hover:underline"
+                            >
+                              PR #{detail.pr.number}
+                            </a>
+                          ) : (
+                            <span className="text-dark-accent font-medium">
+                              PR #{detail.pr.number}
+                            </span>
+                          )}
+                          <span
+                            className="text-xs px-1.5 py-0.5 rounded border"
+                            style={{
+                              color:
+                                detail.pr.state === 'merged'
+                                  ? '#A371F7'
+                                  : detail.pr.state === 'open'
+                                    ? '#3FB950'
+                                    : detail.pr.state === 'closed'
+                                      ? '#F85149'
+                                      : '#8B949E',
+                              borderColor:
+                                (detail.pr.state === 'merged'
+                                  ? '#A371F7'
+                                  : detail.pr.state === 'open'
+                                    ? '#3FB950'
+                                    : detail.pr.state === 'closed'
+                                      ? '#F85149'
+                                      : '#8B949E') + '40',
+                            }}
+                          >
+                            {detail.pr.state?.toUpperCase() ?? 'UNKNOWN'}
+                          </span>
+                          {mergeStatusLabelText && (
+                            <span className="text-xs text-dark-muted">
+                              Merge: {mergeStatusLabelText}
+                            </span>
+                          )}
+                          {detail.pr.autoMerge && (
+                            <span className="text-xs text-[#3FB950]">Auto-merge</span>
+                          )}
+                        </div>
+
+                        {/* CI Checks — full-height scroll inside the tab pane */}
+                        <div>
+                          <p className="text-xs text-dark-muted mb-1.5 uppercase tracking-wide">CI Checks</p>
+                          <CIChecks checks={detail.pr.checks ?? []} />
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-sm text-dark-muted">
+                        {detail.githubRepo ? (
+                          <a
+                            href={`https://github.com/${detail.githubRepo}/pull/${detail.prNumber}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-dark-accent hover:underline"
+                          >
+                            PR #{detail.prNumber}
+                          </a>
+                        ) : (
+                          <>PR #{detail.prNumber}</>
+                        )}
+                        {' '}(details loading...)
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/*
+                  Issue #762: Slowest Tool Calls tab. Only rendered when CC
+                  supplied at least one duration_ms value (CC 2.1.119+
+                  PostToolUse / PostToolUseFailure hooks). Tab is otherwise
+                  hidden entirely — no empty state needed here.
+                */}
+                {activeTab === 'slowest-tools' && hasSlowestToolsTab && (
+                  <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-5 py-3">
+                    <ul className="space-y-1.5">
+                      {detail.slowestToolCalls.slice(0, 5).map((evt) => {
+                        const label = parseToolFromPayload(evt.payload, evt.toolName);
+                        const durationLabel = formatMs(evt.durationMs);
+                        return (
+                          <li
+                            key={evt.id}
+                            className="flex items-center gap-2 text-sm"
+                          >
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-mono bg-dark-border/30 text-dark-text shrink-0">
+                              {durationLabel}
+                            </span>
+                            <span className="text-dark-text truncate" title={label}>
+                              {label}
+                            </span>
+                            {evt.agentName && evt.agentName !== 'team-lead' && (
+                              <span className="text-xs text-dark-muted shrink-0">
+                                {evt.agentName}
+                              </span>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
                   </div>
                 )}
               </div>

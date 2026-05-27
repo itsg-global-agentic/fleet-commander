@@ -3,7 +3,7 @@
 // =============================================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom';
 
 // ---------------------------------------------------------------------------
@@ -52,6 +52,10 @@ vi.mock('../../src/client/components/CommGraph', () => ({
   CommGraph: () => <div data-testid="comm-graph">CommGraph</div>,
 }));
 
+vi.mock('../../src/client/components/CIChecks', () => ({
+  CIChecks: () => <div data-testid="ci-checks">CIChecks</div>,
+}));
+
 vi.mock('../../src/client/hooks/useFleetSSE', () => ({
   useFleetSSE: vi.fn(),
 }));
@@ -85,6 +89,7 @@ function makeDetail(overrides: Record<string, unknown> = {}) {
     totalCacheReadTokens: 0,
     totalCostUsd: 0.50,
     githubRepo: 'user/repo',
+    slowestToolCalls: [],
     ...overrides,
   };
 }
@@ -237,9 +242,10 @@ describe('TeamDetail', () => {
     });
   });
 
-  it('renders PR section when PR data is present', async () => {
+  it('renders PR link inside PR tab when PR data is present', async () => {
     mockSelectedTeamId = 1;
     mockGet.mockResolvedValue(makeDetail({
+      prNumber: 42,
       githubRepo: 'user/repo',
       pr: {
         number: 42,
@@ -252,19 +258,20 @@ describe('TeamDetail', () => {
       },
     }));
     render(<TeamDetail />);
+    const prTab = await screen.findByRole('button', { name: /^PR\s*#42$/ });
+    fireEvent.click(prTab);
     await waitFor(() => {
-      expect(screen.getByText('Pull Request')).toBeInTheDocument();
-      const link = screen.getByText('PR #42');
-      expect(link.tagName).toBe('A');
+      const link = screen.getByRole('link', { name: 'PR #42' });
       expect(link).toHaveAttribute('href', 'https://github.com/user/repo/pull/42');
       expect(link).toHaveAttribute('target', '_blank');
       expect(link).toHaveAttribute('rel', 'noopener noreferrer');
     });
   });
 
-  it('renders PR number as plain text when githubRepo is null', async () => {
+  it('renders PR number as plain text inside PR tab when githubRepo is null', async () => {
     mockSelectedTeamId = 1;
     mockGet.mockResolvedValue(makeDetail({
+      prNumber: 42,
       githubRepo: null,
       pr: {
         number: 42,
@@ -277,14 +284,19 @@ describe('TeamDetail', () => {
       },
     }));
     render(<TeamDetail />);
+    const prTab = await screen.findByRole('button', { name: /^PR\s*#42$/ });
+    fireEvent.click(prTab);
     await waitFor(() => {
-      const prText = screen.getByText('PR #42');
-      expect(prText.tagName).toBe('SPAN');
-      expect(prText).not.toHaveAttribute('href');
+      // No link should be rendered when githubRepo is null
+      expect(screen.queryByRole('link', { name: 'PR #42' })).not.toBeInTheDocument();
+      // The PR number still renders as plain text inside the tab pane
+      const prMatches = screen.getAllByText('PR #42');
+      // One in the tab button, one in the tab content as a plain span
+      expect(prMatches.some((el) => el.tagName === 'SPAN')).toBe(true);
     });
   });
 
-  it('renders PR link in loading fallback when prNumber is set but pr detail is null', async () => {
+  it('renders PR link loading fallback inside PR tab when prNumber is set but pr detail is null', async () => {
     mockSelectedTeamId = 1;
     mockGet.mockResolvedValue(makeDetail({
       githubRepo: 'user/repo',
@@ -292,12 +304,14 @@ describe('TeamDetail', () => {
       pr: null,
     }));
     render(<TeamDetail />);
+    const prTab = await screen.findByRole('button', { name: /^PR\s*#99$/ });
+    fireEvent.click(prTab);
     await waitFor(() => {
-      const link = screen.getByText('PR #99');
-      expect(link.tagName).toBe('A');
+      const link = screen.getByRole('link', { name: 'PR #99' });
       expect(link).toHaveAttribute('href', 'https://github.com/user/repo/pull/99');
       expect(link).toHaveAttribute('target', '_blank');
       expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+      expect(screen.getByText(/details loading/)).toBeInTheDocument();
     });
   });
 
@@ -318,5 +332,185 @@ describe('TeamDetail', () => {
       expect(screen.getByText('Quick:')).toBeInTheDocument();
       expect(screen.getByText('Status?')).toBeInTheDocument();
     });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Issue #762: Promoted tabs (Transitions / PR / Slowest tools)
+  // ---------------------------------------------------------------------------
+
+  it('renders Transitions tab and always shows it', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail());
+    render(<TeamDetail />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^Transitions/ })).toBeInTheDocument();
+    });
+  });
+
+  it('hides PR tab when team has no PR', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({ prNumber: null, pr: null }));
+    render(<TeamDetail />);
+    // Wait for the panel to render fully (Transitions tab is the marker that
+    // the post-load tab bar is present).
+    await screen.findByRole('button', { name: /^Transitions/ });
+    expect(screen.queryByRole('button', { name: /^PR\s*#/ })).not.toBeInTheDocument();
+  });
+
+  it('shows PR tab when prNumber is set (even with pr detail null)', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({ prNumber: 7, pr: null }));
+    render(<TeamDetail />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^PR\s*#7$/ })).toBeInTheDocument();
+    });
+  });
+
+  it('shows PR tab when prNumber is set and pr detail is loaded', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({
+      prNumber: 8,
+      pr: {
+        number: 8,
+        state: 'open',
+        ciStatus: 'passing',
+        mergeStatus: 'clean',
+        autoMerge: false,
+        ciFailCount: 0,
+        checks: [],
+      },
+    }));
+    render(<TeamDetail />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /^PR\s*#8$/ })).toBeInTheDocument();
+    });
+  });
+
+  it('hides Slowest tools tab when slowestToolCalls is empty', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({ slowestToolCalls: [] }));
+    render(<TeamDetail />);
+    await screen.findByRole('button', { name: /^Transitions/ });
+    expect(screen.queryByRole('button', { name: 'Slowest tools' })).not.toBeInTheDocument();
+  });
+
+  it('shows Slowest tools tab when slowestToolCalls has data', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({
+      slowestToolCalls: [
+        {
+          id: 101,
+          teamId: 1,
+          type: 'tool_use',
+          payload: null,
+          toolName: 'Read',
+          durationMs: 4200,
+          agentName: 'team-lead',
+          createdAt: '2026-03-21T10:05:00Z',
+        },
+      ],
+    }));
+    render(<TeamDetail />);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Slowest tools' })).toBeInTheDocument();
+    });
+  });
+
+  it('renders Slowest tools content after clicking the tab', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({
+      slowestToolCalls: [
+        {
+          id: 102,
+          teamId: 1,
+          type: 'tool_use',
+          payload: null,
+          toolName: 'Glob',
+          durationMs: 1500,
+          agentName: 'planner',
+          createdAt: '2026-03-21T10:06:00Z',
+        },
+      ],
+    }));
+    render(<TeamDetail />);
+    const tab = await screen.findByRole('button', { name: 'Slowest tools' });
+    fireEvent.click(tab);
+    await waitFor(() => {
+      // 1500ms formats to "1.5s"
+      expect(screen.getByText('1.5s')).toBeInTheDocument();
+      expect(screen.getByText('Glob')).toBeInTheDocument();
+    });
+  });
+
+  it('does not render inline State Transitions / Pull Request / Slowest Tool Calls headings', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({
+      prNumber: 42,
+      pr: {
+        number: 42,
+        state: 'open',
+        ciStatus: 'passing',
+        mergeStatus: 'clean',
+        autoMerge: false,
+        ciFailCount: 0,
+        checks: [],
+      },
+      slowestToolCalls: [
+        {
+          id: 1,
+          teamId: 1,
+          type: 'tool_use',
+          payload: null,
+          toolName: 'Read',
+          durationMs: 200,
+          agentName: 'team-lead',
+          createdAt: '2026-03-21T10:05:00Z',
+        },
+      ],
+    }));
+    render(<TeamDetail />);
+    await screen.findByRole('button', { name: /^Transitions/ });
+    // Inline section headings should be gone — they were <h4> in the metadata
+    // panel previously and have no replacement at the same DOM level.
+    expect(screen.queryByText('State Transitions')).not.toBeInTheDocument();
+    expect(screen.queryByText('Pull Request')).not.toBeInTheDocument();
+    expect(screen.queryByText('Slowest Tool Calls')).not.toBeInTheDocument();
+  });
+
+  it('renders the tabs in the documented order after Team', async () => {
+    mockSelectedTeamId = 1;
+    mockGet.mockResolvedValue(makeDetail({
+      prNumber: 42,
+      pr: null,
+      slowestToolCalls: [
+        {
+          id: 1,
+          teamId: 1,
+          type: 'tool_use',
+          payload: null,
+          toolName: 'Read',
+          durationMs: 200,
+          agentName: 'team-lead',
+          createdAt: '2026-03-21T10:05:00Z',
+        },
+      ],
+    }));
+    render(<TeamDetail />);
+    await screen.findByRole('button', { name: /^Transitions/ });
+    const buttons = screen.getAllByRole('button').map((b) => b.textContent ?? '');
+    const sessionLogIdx = buttons.findIndex((t) => t.startsWith('Session Log'));
+    const tasksIdx = buttons.findIndex((t) => t.startsWith('Tasks'));
+    const filesIdx = buttons.findIndex((t) => t.startsWith('Files'));
+    const teamIdx = buttons.findIndex((t) => t === 'Team');
+    const transitionsIdx = buttons.findIndex((t) => t.startsWith('Transitions'));
+    const prIdx = buttons.findIndex((t) => /^PR\s*#/.test(t));
+    const slowestIdx = buttons.findIndex((t) => t === 'Slowest tools');
+    expect(sessionLogIdx).toBeGreaterThanOrEqual(0);
+    expect(tasksIdx).toBeGreaterThan(sessionLogIdx);
+    expect(filesIdx).toBeGreaterThan(tasksIdx);
+    expect(teamIdx).toBeGreaterThan(filesIdx);
+    expect(transitionsIdx).toBeGreaterThan(teamIdx);
+    expect(prIdx).toBeGreaterThan(transitionsIdx);
+    expect(slowestIdx).toBeGreaterThan(prIdx);
   });
 });
