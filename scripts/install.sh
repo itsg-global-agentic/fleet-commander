@@ -209,16 +209,24 @@ if [ -f "$SETTINGS" ]; then
       });
     }
 
+    // Track hook types whose FC entries are being stripped AND that are not
+    // present in the new template — these are "stale" and worth reporting so
+    // operators know the reinstall pruned drift (issue #760).
+    const templateTypes = new Set(Object.keys(example.hooks || {}));
+    const removedStaleTypes = [];
+
     // First pass: strip ALL existing FC entries across every hook type so a
     // reinstall with a different mode (or after a botched previous install)
     // does not leave bash and http entries coexisting (issue #735).
     for (const hookType of Object.keys(existing.hooks)) {
-      const before = existing.hooks[hookType].length;
+      const hadFc = existing.hooks[hookType].some(isFcEntry);
       existing.hooks[hookType] = existing.hooks[hookType].filter(e => !isFcEntry(e));
       if (existing.hooks[hookType].length === 0) {
         delete existing.hooks[hookType];
-      } else if (existing.hooks[hookType].length !== before) {
-        // kept some non-FC entries, removed some FC ones
+      }
+      // Stale = had FC entries before AND the hook type is not in the new template
+      if (hadFc && !templateTypes.has(hookType)) {
+        removedStaleTypes.push(hookType);
       }
     }
 
@@ -238,6 +246,11 @@ if [ -f "$SETTINGS" ]; then
       fs.renameSync(tmpPath, process.argv[1]);
     } finally {
       try { fs.unlinkSync(tmpPath); } catch {}
+    }
+
+    if (removedStaleTypes.length > 0) {
+      removedStaleTypes.sort();
+      console.log('  Removed ' + removedStaleTypes.length + ' stale hook entries: ' + removedStaleTypes.join(', '));
     }
   " "$SETTINGS" "$EXAMPLE" "$FC_VERSION" "$INSTALL_PORT"
   echo "  Merged hook entries into existing settings.json (v${FC_VERSION}, mode=${INSTALL_MODE}, port=${INSTALL_PORT})"

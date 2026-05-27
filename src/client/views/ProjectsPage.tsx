@@ -896,6 +896,18 @@ function ProjectCard({
           </span>
         )}
 
+        {/* Drift badge — FC hook types present in settings.json but absent
+            from current template. Reinstall removes them. Issue #760. */}
+        {(project.installStatus?.driftHookTypes?.length ?? 0) > 0 && (
+          <span
+            className="px-2 py-0.5 text-xs rounded-full bg-[#D29922]/15 text-[#D29922] font-medium shrink-0"
+            title={`Stale hook entries: ${project.installStatus!.driftHookTypes!.join(', ')} — reinstall to remove`}
+          >
+            {project.installStatus!.driftHookTypes!.length} stale hook
+            {project.installStatus!.driftHookTypes!.length === 1 ? '' : 's'}
+          </span>
+        )}
+
         {/* Hook mode picker + Reinstall button (issue #735) — operators can
             flip http <-> bash before triggering a reinstall. Defaults to the
             project's recorded mode, or HTTP for new/unknown projects. */}

@@ -226,6 +226,14 @@ export interface InstallStatus {
   currentVersion: string;
   /** Git commit status for .claude/ files on the default branch */
   gitCommitStatus?: GitCommitStatus;
+  /**
+   * Hook types in .claude/settings.json that contain FC entries but are NOT
+   * present in the current template (e.g. ["WorktreeCreate","WorktreeRemove"]
+   * after the template dropped those entries). A reinstall will remove them.
+   * Empty array / undefined means no drift detected. Informational only —
+   * does not block project readiness. Issue #760.
+   */
+  driftHookTypes?: string[];
 }
 
 /** Result of a project readiness check for launching teams */

@@ -276,6 +276,21 @@ describe('evaluateProjectReadiness', () => {
   // Multiple errors accumulate
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // Drift hook types are informational and MUST NOT block launches (issue #760)
+  // -------------------------------------------------------------------------
+
+  it('does not block launch when driftHookTypes are present (informational only)', () => {
+    const status = makeGreenStatus();
+    status.driftHookTypes = ['WorktreeCreate', 'WorktreeRemove'];
+
+    const result = evaluateProjectReadiness(status);
+
+    expect(result.ready).toBe(true);
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
   it('accumulates multiple errors when multiple checks fail', () => {
     const status = makeGreenStatus();
     status.hooks.installed = false;
