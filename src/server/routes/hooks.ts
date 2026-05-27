@@ -15,9 +15,17 @@
 //
 // Response:
 //   - 204 No Content on success (fire-and-forget — CC ignores the body)
+//   - 200 OK with `{ decision: "ask" | "allow" | "deny" }` for PermissionRequest
 //   - 400 Bad Request for unknown event types, missing cwd, malformed JSON
-//   - 404 Not Found when the cwd does not resolve to a registered team
 //   - 500 Internal Server Error on unexpected exceptions (logged server-side)
+//
+// When the cwd does not resolve to a registered team (e.g. user runs CC
+// interactively in the main checkout, or CC fires WorktreeCreate before the
+// worktree exists), the route still returns success: 204 for fire-and-forget
+// hooks, 200 `{decision:"ask"}` for PermissionRequest. This matches the
+// silent-swallow behavior of the legacy bash hooks; otherwise synchronous
+// hooks (WorktreeCreate, PermissionRequest) would block CC entirely (issue
+// #755).
 //
 // All processing is best-effort: a route-level try/catch ensures failures
 // never propagate to CC, matching the fire-and-forget contract of the legacy
@@ -138,20 +146,31 @@ const hooksRoutes: FastifyPluginCallback = (
           });
         }
 
-        // Verify the team exists before processing so we can return 404
-        // explicitly. processEvent would also throw TEAM_NOT_FOUND, but
-        // checking upfront keeps the error path symmetric with the legacy
-        // /api/events route and yields a cleaner log line.
+        // Look up the team. When no team matches the cwd we still respond
+        // successfully — see header comment. The bash hook path silently
+        // swallows the same case; HTTP hooks would surface a 404 as a
+        // visible CC error, and synchronous hooks (WorktreeCreate,
+        // PermissionRequest) would block the entire CC turn (issue #755).
         const db = getDatabase();
         const teamRow = db.getTeamByWorktree(team);
-        if (!teamRow) {
-          return reply.code(404).send({
-            error: 'Not Found',
-            message: `Team not found for worktree: ${team}`,
-          });
-        }
-
         const snakeEvent = PASCAL_TO_SNAKE[eventType];
+
+        if (!teamRow) {
+          if (snakeEvent === 'permission_request') {
+            // Safe fallback — CC shows its own prompt.
+            return reply
+              .code(200)
+              .header('content-type', 'application/json')
+              .send({ decision: 'ask' });
+          }
+          // Fire-and-forget and synchronous WorktreeCreate / WorktreeRemove:
+          // CC only needs a 2xx. Empty 204 is enough.
+          request.log.debug(
+            { eventType, worktree: team },
+            'HTTP hook: no team for cwd — silently accepting',
+          );
+          return reply.code(204).send();
+        }
 
         // ── PermissionRequest: synchronous gate (CC blocks waiting for a response) ──
         //

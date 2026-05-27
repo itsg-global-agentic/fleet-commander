@@ -276,12 +276,13 @@ describe('POST /api/hooks — error paths', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('returns 404 when the cwd resolves to a team that does not exist', async () => {
+  it('silently accepts (204) when the cwd resolves to a team that does not exist', async () => {
+    // Issue #755: 404 caused WorktreeCreate to block CC turns and PostToolUse
+    // to spam visible errors. Matches bash-hook silent-swallow behavior.
     const res = await postHook('SessionStart', {
       cwd: makeCwd('nonexistent-team-99999'),
     });
-    expect(res.statusCode).toBe(404);
-    expect(JSON.parse(res.payload).message).toMatch(/Team not found/);
+    expect(res.statusCode).toBe(204);
   });
 
   it('returns 400 when the body is null', async () => {
@@ -504,14 +505,18 @@ describe('POST /api/hooks/PermissionRequest', () => {
     expect(body.decision).toBe('deny');
   });
 
-  it('returns 404 when the cwd resolves to an unknown team', async () => {
+  it('returns 200 with decision=ask when the cwd resolves to an unknown team', async () => {
+    // Issue #755: a 404 here would block CC waiting for a synchronous
+    // permission decision. `ask` falls back to CC's own prompt.
     const res = await postHook('PermissionRequest', {
-      session_id: 'sess-perm-404',
+      session_id: 'sess-perm-ask-no-team',
       cwd: makeCwd('nonexistent-perm-team-99998'),
       tool_name: 'Read',
       tool_input: { file_path: '/tmp/foo' },
     });
 
-    expect(res.statusCode).toBe(404);
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.payload) as { decision: string };
+    expect(body.decision).toBe('ask');
   });
 });
