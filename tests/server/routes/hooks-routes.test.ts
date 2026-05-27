@@ -283,6 +283,54 @@ describe('POST /api/hooks — error paths', () => {
       cwd: makeCwd('nonexistent-team-99999'),
     });
     expect(res.statusCode).toBe(204);
+    expect(res.payload).toBe('');
+  });
+
+  it('returns 204 for a PostToolUse with no matching team (regression: issue #755)', async () => {
+    const res = await postHook('PostToolUse', {
+      session_id: 'sess-no-team',
+      cwd: makeCwd('definitely-not-a-team'),
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(res.payload).toBe('');
+  });
+
+  it('returns 204 for a WorktreeCreate with no matching team (launch-blocker regression: issue #755)', async () => {
+    // WorktreeCreate is synchronous — a non-2xx aborts the worktree creation
+    // and breaks every team launch in hook_mode=http.
+    const res = await postHook('WorktreeCreate', {
+      session_id: 'sess-wt-create',
+      cwd: 'C:/Git/some-project',
+      hookSpecificOutput: {
+        worktreePath: 'C:/Git/some-project/.claude/worktrees/foo',
+      },
+    });
+    expect(res.statusCode).toBe(204);
+  });
+
+  it('does not insert an events row when the cwd has no matching team (issue #755)', async () => {
+    // Silent-accept must skip the entire pipeline. If we wrote a row we would
+    // pollute the events table with orphan rows from interactive CC sessions.
+    // We seed a control team and ensure its event count is unchanged after a
+    // no-team hook fires — i.e. the no-team hook neither created a phantom
+    // row nor accidentally attached to a real team.
+    const worktree = `hooks-noteam-control-${Date.now()}`;
+    const controlTeam = seedTeam(worktree);
+    const db = getDatabase();
+    const beforeControl = db.getEventsByTeamCount(controlTeam.id);
+
+    const res = await postHook('PostToolUse', {
+      session_id: 'sess-no-team-no-row',
+      cwd: makeCwd('still-not-a-team-77777'),
+      tool_name: 'Read',
+      tool_input: { file_path: '/tmp/whatever' },
+    });
+    expect(res.statusCode).toBe(204);
+
+    const afterControl = db.getEventsByTeamCount(controlTeam.id);
+    expect(afterControl).toBe(beforeControl);
   });
 
   it('returns 400 when the body is null', async () => {
@@ -507,7 +555,10 @@ describe('POST /api/hooks/PermissionRequest', () => {
 
   it('returns 200 with decision=ask when the cwd resolves to an unknown team', async () => {
     // Issue #755: a 404 here would block CC waiting for a synchronous
-    // permission decision. `ask` falls back to CC's own prompt.
+    // permission decision. `ask` falls back to CC's own native prompt —
+    // exactly the experience the user would get without FC hooks
+    // installed. `allow` would silently auto-approve every tool call in
+    // unrelated user sessions (privilege-escalation foot-gun).
     const res = await postHook('PermissionRequest', {
       session_id: 'sess-perm-ask-no-team',
       cwd: makeCwd('nonexistent-perm-team-99998'),

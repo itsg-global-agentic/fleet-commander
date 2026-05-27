@@ -22,10 +22,14 @@
 // When the cwd does not resolve to a registered team (e.g. user runs CC
 // interactively in the main checkout, or CC fires WorktreeCreate before the
 // worktree exists), the route still returns success: 204 for fire-and-forget
-// hooks, 200 `{decision:"ask"}` for PermissionRequest. This matches the
-// silent-swallow behavior of the legacy bash hooks; otherwise synchronous
-// hooks (WorktreeCreate, PermissionRequest) would block CC entirely (issue
-// #755).
+// hooks, 200 `{decision:"ask"}` for PermissionRequest. The PermissionRequest
+// `ask` fallback hands control back to CC's own native prompt — exactly the
+// experience the user would get without FC hooks installed at all.
+// `allow` would silently auto-approve every tool call in unrelated user
+// sessions (privilege-escalation foot-gun); `deny` would gate the user's
+// own interactive work. This matches the silent-swallow behavior of the
+// legacy bash hooks; otherwise synchronous hooks (WorktreeCreate,
+// PermissionRequest) would block CC entirely (issue #755).
 //
 // All processing is best-effort: a route-level try/catch ensures failures
 // never propagate to CC, matching the fire-and-forget contract of the legacy
@@ -156,8 +160,15 @@ const hooksRoutes: FastifyPluginCallback = (
         const snakeEvent = PASCAL_TO_SNAKE[eventType];
 
         if (!teamRow) {
+          request.log.debug(
+            { eventType, cwd: body['cwd'], resolvedTeam: team },
+            'HTTP hook for cwd with no registered team — silently accepted',
+          );
           if (snakeEvent === 'permission_request') {
-            // Safe fallback — CC shows its own prompt.
+            // Safe fallback — CC shows its own native prompt, exactly the
+            // experience the user would get without FC hooks installed at
+            // all. `allow` would silently auto-approve every tool call in
+            // unrelated user sessions; `deny` would gate their work.
             return reply
               .code(200)
               .header('content-type', 'application/json')
@@ -165,10 +176,6 @@ const hooksRoutes: FastifyPluginCallback = (
           }
           // Fire-and-forget and synchronous WorktreeCreate / WorktreeRemove:
           // CC only needs a 2xx. Empty 204 is enough.
-          request.log.debug(
-            { eventType, worktree: team },
-            'HTTP hook: no team for cwd — silently accepting',
-          );
           return reply.code(204).send();
         }
 
@@ -271,6 +278,10 @@ const hooksRoutes: FastifyPluginCallback = (
           );
         } catch (err) {
           if (err instanceof EventCollectorError) {
+            // Race: team was deleted between the upfront check above and
+            // processEvent's own lookup. This is vanishingly rare; the 404
+            // surfaces a real anomaly (team existed, then vanished mid-
+            // request) that's worth logging loud rather than swallowing.
             const status = err.code === 'TEAM_NOT_FOUND' ? 404 : 400;
             return reply.code(status).send({
               error: status === 404 ? 'Not Found' : 'Bad Request',
