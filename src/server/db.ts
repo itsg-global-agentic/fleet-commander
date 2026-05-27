@@ -4132,7 +4132,7 @@ export class FleetDatabase {
       taskId: row.task_id as string,
       subject: row.subject as string,
       description: (row.description as string | null) ?? null,
-      status: row.status as 'pending' | 'in_progress' | 'completed',
+      status: row.status as 'pending' | 'in_progress' | 'completed' | 'cancelled',
       owner: row.owner as string,
       createdAt: utcify(row.created_at as string),
       updatedAt: utcify(row.updated_at as string),
