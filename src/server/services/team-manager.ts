@@ -2635,6 +2635,98 @@ export class TeamManager {
                         // Non-critical — task extraction failure should not break stream parsing
                       }
                     }
+
+                    // Stream-event handler for CC 2.1.16+ TaskUpdate / TaskStop
+                    // tools (issue #764). There is NO TaskUpdated hook — these
+                    // tool_use events are the ONLY signal we receive for task
+                    // status transitions and stops. Skip the wasTaskSeenByHook
+                    // dedup guard used by TodoWrite (which exists to suppress
+                    // duplicate CREATE events) — for UPDATE/STOP we always flow
+                    // through, otherwise status changes are dropped silently.
+                    if (toolName === 'TaskUpdate' || toolName === 'TaskStop') {
+                      try {
+                        const input = toolBlock.input as Record<string, unknown> | undefined;
+                        const rawTaskId = input?.taskId ?? input?.task_id;
+                        if (typeof rawTaskId !== 'string' || !rawTaskId) {
+                          console.warn(
+                            `[TaskExtraction] ${toolName} without taskId on team=${teamId}`
+                          );
+                        } else {
+                          const taskId = rawTaskId;
+                          const db = getDatabase();
+
+                          const existing = db.getTeamTasks(teamId).find((t) => t.taskId === taskId);
+                          if (!existing) {
+                            console.warn(
+                              `[TaskExtraction] ${toolName} for unknown task_id=${taskId} on team=${teamId} — ` +
+                                `TaskCreated hook may have been missed; upserting with stream-event fields only`
+                            );
+                          }
+
+                          let status: string;
+                          if (toolName === 'TaskStop') {
+                            status = 'cancelled';
+                          } else {
+                            const rawStatus = input?.status;
+                            const allowed = new Set(['pending', 'in_progress', 'completed', 'cancelled']);
+                            if (typeof rawStatus === 'string' && allowed.has(rawStatus)) {
+                              status = rawStatus;
+                            } else if (typeof rawStatus === 'string') {
+                              console.warn(
+                                `[TaskExtraction] TaskUpdate unrecognized status="${rawStatus}" for task=${taskId} team=${teamId}; passing through`
+                              );
+                              status = rawStatus;
+                            } else {
+                              status = existing?.status ?? 'pending';
+                            }
+                          }
+
+                          const subject =
+                            (input?.subject as string | undefined) ??
+                            existing?.subject ??
+                            'Untitled task';
+                          const description =
+                            (input?.description as string | null | undefined) ??
+                            existing?.description ??
+                            null;
+
+                          let owner: string;
+                          if (existing) {
+                            owner = existing.owner;
+                          } else {
+                            const parentId = (ev.parent_tool_use_id as string | null | undefined) ?? null;
+                            owner = parentId ? (agentMap.get(parentId) ?? 'team-lead') : 'team-lead';
+                          }
+
+                          const task = db.upsertTeamTask({
+                            teamId,
+                            taskId,
+                            subject,
+                            description,
+                            status,
+                            owner,
+                          });
+
+                          sseBroker.broadcast(
+                            'task_updated',
+                            {
+                              team_id: teamId,
+                              task_id: task.taskId,
+                              subject: task.subject,
+                              status: task.status,
+                              owner: task.owner,
+                            },
+                            teamId
+                          );
+                        }
+                      } catch (err) {
+                        console.warn(
+                          `[TaskExtraction] ${toolName} handler failed for team=${teamId}: ${
+                            err instanceof Error ? err.message : String(err)
+                          }`
+                        );
+                      }
+                    }
                   }
                 }
               }

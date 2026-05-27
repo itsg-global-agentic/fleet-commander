@@ -499,7 +499,7 @@ export interface TeamTask {
   taskId: string;
   subject: string;
   description: string | null;
-  status: 'pending' | 'in_progress' | 'completed';
+  status: 'pending' | 'in_progress' | 'completed' | 'cancelled';
   owner: string;
   createdAt: string;
   updatedAt: string;
