@@ -1,5 +1,5 @@
 -- =============================================================================
--- Fleet Commander — SQLite Schema (v27, permission_policy + allowed_domains_json on projects)
+-- Fleet Commander — SQLite Schema (v28, projects.effort CHECK tightened — 'max' no longer valid)
 -- =============================================================================
 
 -- Schema version tracking for migrations
@@ -457,4 +457,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_subworktrees_team_path_active
   ON team_subworktrees(team_id, path) WHERE removed_at IS NULL;
 
 -- Insert schema version (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (27);
+INSERT OR IGNORE INTO schema_version (version) VALUES (28);

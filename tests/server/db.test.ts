@@ -2232,6 +2232,295 @@ describe("v22 migration: effort='max' -> 'xhigh'", () => {
   });
 });
 
+// =============================================================================
+// v28 migration: projects.effort CHECK tightened — 'max' rejected at DB level
+// =============================================================================
+
+describe("v28 migration: projects.effort CHECK tightened — 'max' rejected at DB level", () => {
+  /**
+   * Build a fully-migrated FleetDatabase, then revert the projects table to
+   * the pre-v28 shape (CHECK still permits 'max'), bump schema_version DOWN,
+   * and seed a representative row plus a team referencing it. Re-opening as
+   * FleetDatabase drives the v28 migration on the second initSchema().
+   *
+   * This mirrors the recommended seeding strategy from the planner: trust
+   * the live schema for every column except `effort`, where we install the
+   * legacy CHECK that still permits 'max'.
+   */
+  function seedPreV28Db(): {
+    dbPath: string;
+    projectId: number;
+    teamId: number;
+    issueSourceId: number;
+  } {
+    const seedPath = path.join(
+      os.tmpdir(),
+      `fleet-test-v28-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
+    );
+
+    // 1. Run a full initSchema() against the fresh seed DB so every other
+    //    table/index/view is shaped exactly like a live install.
+    {
+      const bootstrap = new FleetDatabase(seedPath);
+      bootstrap.initSchema();
+      bootstrap.close();
+    }
+
+    // 2. Re-open with raw better-sqlite3, drop the live projects table, and
+    //    recreate it with the legacy CHECK that still includes 'max'. Also
+    //    drop the dashboard view (depends on projects) and re-bump
+    //    schema_version DOWN to simulate a pre-v28 database.
+    const seed = new Database(seedPath);
+    seed.pragma('foreign_keys = OFF');
+    try {
+      seed.exec('DROP VIEW IF EXISTS v_team_dashboard');
+      seed.exec('DROP TABLE projects');
+      seed.exec(`
+        CREATE TABLE projects (
+          id              INTEGER PRIMARY KEY AUTOINCREMENT,
+          name            TEXT NOT NULL,
+          repo_path       TEXT NOT NULL UNIQUE,
+          github_repo     TEXT,
+          group_id        INTEGER REFERENCES project_groups(id),
+          status          TEXT NOT NULL DEFAULT 'active',
+          hooks_installed INTEGER NOT NULL DEFAULT 0,
+          max_active_teams INTEGER NOT NULL DEFAULT 5,
+          prompt_file     TEXT,
+          model           TEXT,
+          effort          TEXT CHECK(effort IS NULL OR effort IN ('low','medium','high','xhigh','max')),
+          issue_provider  TEXT DEFAULT 'github',
+          project_key     TEXT,
+          provider_config TEXT,
+          auto_merge_enabled INTEGER,
+          auto_merge_checked_at TEXT,
+          hook_mode       TEXT,
+          permission_policy TEXT CHECK(permission_policy IS NULL OR permission_policy IN ('skip','hook')),
+          allowed_domains_json TEXT,
+          created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+      `);
+      seed.exec('CREATE INDEX IF NOT EXISTS idx_projects_status ON projects(status)');
+      seed.exec('CREATE INDEX IF NOT EXISTS idx_projects_group ON projects(group_id)');
+      seed.exec('DELETE FROM schema_version WHERE version >= 28');
+    } finally {
+      seed.pragma('foreign_keys = ON');
+    }
+
+    // 3. Insert a representative project row (effort='high' — survives the
+    //    migration unchanged) and a team referencing it via FK so the FK
+    //    integrity check has something to validate.
+    const projectInfo = seed.prepare(
+      "INSERT INTO projects (name, repo_path, effort) VALUES (?, ?, 'high')",
+    ).run('legacy-v28', `/tmp/legacy-v28-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const projectId = Number(projectInfo.lastInsertRowid);
+
+    const teamInfo = seed.prepare(
+      'INSERT INTO teams (issue_number, worktree_name, project_id) VALUES (?, ?, ?)',
+    ).run(754, `legacy-v28-team-${Date.now()}-${Math.random().toString(36).slice(2)}`, projectId);
+    const teamId = Number(teamInfo.lastInsertRowid);
+
+    const sourceInfo = seed.prepare(
+      "INSERT INTO project_issue_sources (project_id, provider, config_json) VALUES (?, 'github', '{}')",
+    ).run(projectId);
+    const issueSourceId = Number(sourceInfo.lastInsertRowid);
+
+    seed.close();
+    return { dbPath: seedPath, projectId, teamId, issueSourceId };
+  }
+
+  function cleanupSeedDb(p: string): void {
+    for (const f of [p, p + '-wal', p + '-shm']) {
+      try { if (fs.existsSync(f)) fs.unlinkSync(f); } catch { /* best effort */ }
+    }
+  }
+
+  it("rewrites projects so INSERT effort='max' throws CHECK constraint failed", () => {
+    const { dbPath: seedPath } = seedPreV28Db();
+    let upgraded: FleetDatabase | null = null;
+    try {
+      upgraded = new FleetDatabase(seedPath);
+      upgraded.initSchema();
+
+      // After the migration, the tightened CHECK must reject 'max' at the DB
+      // layer (not just at the service-validator layer).
+      const insertMax = () =>
+        upgraded!.raw
+          .prepare("INSERT INTO projects (name, repo_path, effort) VALUES (?, ?, 'max')")
+          .run('reject-max', `/tmp/reject-max-${Date.now()}`);
+      expect(insertMax).toThrow(/CHECK constraint failed/i);
+    } finally {
+      try { upgraded?.close(); } catch { /* ignore */ }
+      cleanupSeedDb(seedPath);
+    }
+  });
+
+  it('preserves all project rows during the recreate', () => {
+    const { dbPath: seedPath, projectId } = seedPreV28Db();
+    let upgraded: FleetDatabase | null = null;
+    try {
+      upgraded = new FleetDatabase(seedPath);
+      upgraded.initSchema();
+
+      const row = upgraded.raw
+        .prepare('SELECT id, name, repo_path, effort FROM projects WHERE id = ?')
+        .get(projectId) as { id: number; name: string; repo_path: string; effort: string };
+      expect(row.id).toBe(projectId);
+      expect(row.name).toBe('legacy-v28');
+      expect(row.effort).toBe('high');
+      expect(row.repo_path).toContain('/tmp/legacy-v28-');
+    } finally {
+      try { upgraded?.close(); } catch { /* ignore */ }
+      cleanupSeedDb(seedPath);
+    }
+  });
+
+  it('preserves FK references from teams and project_issue_sources', () => {
+    const { dbPath: seedPath, projectId, teamId, issueSourceId } = seedPreV28Db();
+    let upgraded: FleetDatabase | null = null;
+    try {
+      upgraded = new FleetDatabase(seedPath);
+      upgraded.initSchema();
+
+      // FKs from teams.project_id and project_issue_sources.project_id must
+      // still resolve to the recreated projects row.
+      const teamRow = upgraded.raw
+        .prepare('SELECT project_id FROM teams WHERE id = ?')
+        .get(teamId) as { project_id: number };
+      expect(teamRow.project_id).toBe(projectId);
+
+      const sourceRow = upgraded.raw
+        .prepare('SELECT project_id FROM project_issue_sources WHERE id = ?')
+        .get(issueSourceId) as { project_id: number };
+      expect(sourceRow.project_id).toBe(projectId);
+
+      // PRAGMA foreign_key_check returns zero rows = no orphaned references.
+      const violations = upgraded.raw.prepare('PRAGMA foreign_key_check').all();
+      expect(violations).toEqual([]);
+    } finally {
+      try { upgraded?.close(); } catch { /* ignore */ }
+      cleanupSeedDb(seedPath);
+    }
+  });
+
+  it('bumps schema_version to >= 28 after running the migration', () => {
+    const { dbPath: seedPath } = seedPreV28Db();
+    let upgraded: FleetDatabase | null = null;
+    try {
+      upgraded = new FleetDatabase(seedPath);
+      upgraded.initSchema();
+
+      const row = upgraded.raw
+        .prepare('SELECT MAX(version) AS version FROM schema_version')
+        .get() as { version: number };
+      expect(row.version).toBeGreaterThanOrEqual(28);
+    } finally {
+      try { upgraded?.close(); } catch { /* ignore */ }
+      cleanupSeedDb(seedPath);
+    }
+  });
+
+  it('is idempotent on restart (second initSchema is a no-op; log emitted once)', () => {
+    const { dbPath: seedPath, projectId } = seedPreV28Db();
+    let upgraded: FleetDatabase | null = null;
+
+    // Note: we override console.log directly rather than via vi.spyOn because
+    // vi.spyOn(console, 'log') does not reliably intercept module-internal
+    // console.log calls under the vitest "server" project's node environment
+    // on Windows — observed empty mock.calls even though stdout shows the
+    // line. The override-and-restore pattern works deterministically.
+    const captured: string[] = [];
+    const origLog = console.log;
+    const installSpy = () => {
+      console.log = (...args: unknown[]) => {
+        captured.push(String((args[0] as unknown) ?? ''));
+      };
+    };
+    const restoreSpy = () => {
+      console.log = origLog;
+    };
+
+    try {
+      // First run — migrates the projects table.
+      upgraded = new FleetDatabase(seedPath);
+      installSpy();
+      try {
+        upgraded.initSchema();
+      } finally {
+        restoreSpy();
+      }
+      const v28LogsFirst = captured.filter((s) => s.includes('v28 migration: recreated projects table'));
+      expect(v28LogsFirst.length).toBe(1);
+
+      // Capture the projects table's created_at as a recreate proxy — if the
+      // second initSchema accidentally rebuilt the table, the row's created_at
+      // would shift to "now".
+      const firstCreatedAt = (upgraded.raw
+        .prepare('SELECT created_at FROM projects WHERE id = ?')
+        .get(projectId) as { created_at: string }).created_at;
+
+      // Second run — must be a no-op (schema_version >= 28 early-return).
+      captured.length = 0;
+      installSpy();
+      try {
+        upgraded.initSchema();
+      } finally {
+        restoreSpy();
+      }
+      const v28LogsSecond = captured.filter((s) => s.includes('v28 migration: recreated projects table'));
+      expect(v28LogsSecond).toEqual([]);
+
+      const afterCreatedAt = (upgraded.raw
+        .prepare('SELECT created_at FROM projects WHERE id = ?')
+        .get(projectId) as { created_at: string }).created_at;
+      expect(afterCreatedAt).toBe(firstCreatedAt);
+    } finally {
+      // Always restore in case any path threw before restoreSpy was called.
+      console.log = origLog;
+      try { upgraded?.close(); } catch { /* ignore */ }
+      cleanupSeedDb(seedPath);
+    }
+  });
+
+  it('is a no-op on a fresh database (CHECK already tight + schema_version already 28)', () => {
+    // The standard test db (created by beforeEach) is fresh — its projects
+    // table was created via schema.sql with the tightened CHECK already in
+    // place. INSERT effort='max' must throw immediately.
+    const insertMax = () =>
+      db.raw
+        .prepare("INSERT INTO projects (name, repo_path, effort) VALUES (?, ?, 'max')")
+        .run('fresh-no-max', `/tmp/fresh-no-max-${Date.now()}`);
+    expect(insertMax).toThrow(/CHECK constraint failed/i);
+
+    const row = db.raw
+      .prepare('SELECT MAX(version) AS version FROM schema_version')
+      .get() as { version: number };
+    expect(row.version).toBeGreaterThanOrEqual(28);
+  });
+
+  it('keeps v_team_dashboard view queryable after the migration', () => {
+    const { dbPath: seedPath } = seedPreV28Db();
+    let upgraded: FleetDatabase | null = null;
+    try {
+      upgraded = new FleetDatabase(seedPath);
+      upgraded.initSchema();
+
+      // The migration drops v_team_dashboard before renaming projects_new;
+      // schema.sql recreates it. A SELECT against the view must succeed.
+      const viewRows = upgraded.raw
+        .prepare("SELECT name FROM sqlite_master WHERE type='view' AND name='v_team_dashboard'")
+        .all();
+      expect(viewRows.length).toBe(1);
+
+      // Smoke-test: querying the view must not throw.
+      expect(() => upgraded!.raw.prepare('SELECT * FROM v_team_dashboard LIMIT 1').all()).not.toThrow();
+    } finally {
+      try { upgraded?.close(); } catch { /* ignore */ }
+      cleanupSeedDb(seedPath);
+    }
+  });
+});
+
 describe('team_subworktrees', () => {
   let teamId: number;
 

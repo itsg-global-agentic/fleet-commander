@@ -249,6 +249,32 @@ describe('POST /api/projects', () => {
 
     expect(res.statusCode).toBe(400);
   });
+
+  it("should reject deprecated effort='max' with 400 on create (issue #754)", async () => {
+    // validateRepoPath() runs before the effort validator and rejects
+    // non-existent paths, so we need a real temp dir for this POST to reach
+    // the effort check. exec-gh is mocked above so the git-repo check passes.
+    const realRepoPath = fs.mkdtempSync(path.join(os.tmpdir(), 'fc-754-post-'));
+    try {
+      const res = await server.inject({
+        method: 'POST',
+        url: '/api/projects',
+        payload: {
+          name: `reject-max-${Date.now()}`,
+          repoPath: realRepoPath,
+          effort: 'max',
+        },
+      });
+
+      expect(res.statusCode).toBe(400);
+      // Error message must point users at the replacement so they know what to do.
+      const body = res.json();
+      const message = body?.message ?? body?.error?.message ?? JSON.stringify(body);
+      expect(String(message)).toContain('xhigh');
+    } finally {
+      try { fs.rmSync(realRepoPath, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
+  });
 });
 
 // =============================================================================
