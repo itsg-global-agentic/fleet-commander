@@ -403,6 +403,48 @@ describe('POST /api/handoff', () => {
     expect(changesFiles[1].content).toBe('# Changes v2 — updated');
   });
 
+  it('should promote a null-agent row when same content is later uploaded with an agentName (issue #708)', async () => {
+    const team = seedTeam({ worktreeName: `handoff-promote-${Date.now()}` });
+    const content = '# Plan\n\nfrom planner';
+
+    // First upload: PostToolUse-style, no agentName
+    const mp1 = buildMultipart(
+      { team: team.worktreeName, fileType: 'plan.md' },
+      { name: 'plan.md', content },
+    );
+    await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp1.contentType },
+      payload: mp1.body,
+    });
+
+    // Backdate past the 60s window so the unbounded promotion path is exercised.
+    const db = getDatabase();
+    db.raw.exec(`
+      UPDATE handoff_files
+         SET captured_at = datetime('now', '-61 seconds')
+       WHERE team_id = ${team.id} AND file_type = 'plan.md'
+    `);
+
+    // Second upload: SubagentStop-style, with agentName, same content
+    const mp2 = buildMultipart(
+      { team: team.worktreeName, fileType: 'plan.md', agentName: 'fleet-planner' },
+      { name: 'plan.md', content },
+    );
+    await server.inject({
+      method: 'POST',
+      url: '/api/handoff',
+      headers: { 'content-type': mp2.contentType },
+      payload: mp2.body,
+    });
+
+    const files = db.getHandoffFiles(team.id);
+    const planFiles = files.filter((f) => f.fileType === 'plan.md');
+    expect(planFiles).toHaveLength(1);
+    expect(planFiles[0].agentName).toBe('fleet-planner');
+  });
+
   it('should preserve both entries when same content is uploaded 30+ seconds apart', async () => {
     const team = seedTeam({ worktreeName: `handoff-dedup-stale-${Date.now()}` });
     const content = '# Review\n\nSame content but old timestamp';

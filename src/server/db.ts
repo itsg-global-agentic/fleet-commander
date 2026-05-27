@@ -4206,36 +4206,39 @@ export class FleetDatabase {
       }
     }
 
-    // Same content without a row in the dedup window is still a duplicate —
-    // Write→SubagentStop can span several minutes for long subagent turns.
-    // Look further back without a time bound and promote / dedup on exact
-    // content match, again preferring an attributed agent.
-    const sameContent = this.stmt(`
-      SELECT * FROM handoff_files
-       WHERE team_id = @teamId
-         AND file_type = @fileType
-         AND content = @content
-       ORDER BY id DESC
-       LIMIT 1
-    `).get({
-      teamId: data.teamId,
-      fileType: data.fileType,
-      content: cappedContent,
-    }) as Record<string, unknown> | undefined;
+    // Write→SubagentStop can span several minutes for long subagent turns:
+    // PostToolUse fires the file capture first with `agent_name=null`, then
+    // SubagentStop fires later with the proper agent and the same content.
+    // The 60s window above misses this, so look further back — but ONLY to
+    // promote a null-agent row into an attributed one. Same-content uploads
+    // that don't carry promotion intent (null→null, agent→agent, agent→null)
+    // fall through to a normal INSERT, otherwise deliberate re-captures past
+    // the dedup window would be silently dropped (regression of #722).
+    const incomingAgent = data.agentName ?? null;
+    if (incomingAgent) {
+      const promotable = this.stmt(`
+        SELECT * FROM handoff_files
+         WHERE team_id = @teamId
+           AND file_type = @fileType
+           AND content = @content
+           AND agent_name IS NULL
+         ORDER BY id DESC
+         LIMIT 1
+      `).get({
+        teamId: data.teamId,
+        fileType: data.fileType,
+        content: cappedContent,
+      }) as Record<string, unknown> | undefined;
 
-    if (sameContent) {
-      const existingAgent = sameContent.agent_name as string | null;
-      const incomingAgent = data.agentName ?? null;
-      if (incomingAgent && !existingAgent) {
+      if (promotable) {
         this.stmt(
           'UPDATE handoff_files SET agent_name = ? WHERE id = ?'
-        ).run(incomingAgent, sameContent.id);
+        ).run(incomingAgent, promotable.id);
         const updated = this.stmt(
           'SELECT * FROM handoff_files WHERE id = ?'
-        ).get(sameContent.id) as Record<string, unknown>;
+        ).get(promotable.id) as Record<string, unknown>;
         return { file: this.mapHandoffFileRow(updated), deduplicated: true };
       }
-      return { file: this.mapHandoffFileRow(sameContent), deduplicated: true };
     }
 
     // ── Normal insert ─────────────────────────────────────────────────

@@ -19,7 +19,7 @@ import { execSync } from 'child_process';
 import type { ProjectStatus, InstallStatus, InstallFileStatus, RepoSettings, GitCommitStatus, GitCommitFileStatus, GitCommitHealth, ProjectReadiness } from '../../shared/types.js';
 import { ServiceError, validationError, notFoundError, conflictError } from './service-error.js';
 import { getPackageVersion } from '../utils/version.js';
-import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile } from '../utils/fc-manifest.js';
+import { getHookFiles as getManifestHookFiles, getAgentFiles as getManifestAgentFiles, getGuideFiles as getManifestGuideFiles, getWorkflowFile, getSettingsExampleFile } from '../utils/fc-manifest.js';
 import { getCleanupPreview as _getCleanupPreview, executeCleanup as _executeCleanup } from './cleanup.js';
 import type { CleanupPreview, CleanupResult } from '../../shared/types.js';
 
@@ -320,6 +320,93 @@ function extractJsonVersionStamp(filePath: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Detect Fleet Commander hook entries in `<repoPath>/.claude/settings.json` whose
+ * parent hook type is NOT present in the current FC template. These are "stale"
+ * entries left behind when a previous install added a hook type that the
+ * template has since removed (e.g. `WorktreeCreate` / `WorktreeRemove`). A
+ * reinstall will strip them — this function exists so the UI can surface their
+ * presence as a small amber badge so operators know to reinstall. Issue #760.
+ *
+ * The function mirrors the "is FC entry" predicate used by `scripts/install.sh`:
+ * an entry's sub-hook is FC-owned if its `command` contains `fleet-commander`
+ * OR its `url` contains `/api/hooks/`.
+ *
+ * Mode resolution order:
+ *   1. Explicit `mode` argument.
+ *   2. Auto-detect: if any FC entry uses `url`, treat as `'http'`; otherwise `'bash'`.
+ *   3. No FC entries → return `[]` (nothing to drift).
+ *
+ * Drift detection is non-fatal: any I/O or JSON parse error returns `[]`. The
+ * caller already surfaces JSON-corruption issues via `extractJsonVersionStamp`.
+ *
+ * @param repoPath - Absolute path to the target repository
+ * @param mode     - Optional override for the template to compare against
+ * @returns Sorted array of stale FC hook type names (e.g. `['WorktreeCreate']`)
+ */
+export function detectHookDrift(
+  repoPath: string,
+  mode?: 'http' | 'bash',
+): string[] {
+  const settingsPath = path.join(repoPath, '.claude', 'settings.json');
+  if (!fs.existsSync(settingsPath)) return [];
+
+  let existing: { hooks?: Record<string, Array<{ hooks?: Array<{ command?: string; url?: string }> }>> };
+  try {
+    existing = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
+  } catch {
+    return [];
+  }
+
+  const hooksObj = existing?.hooks;
+  if (!hooksObj || typeof hooksObj !== 'object') return [];
+
+  // Matches the predicate in scripts/install.sh — keep in sync.
+  function isFcEntry(entry: { hooks?: Array<{ command?: string; url?: string }> }): boolean {
+    const subHooks = (entry && entry.hooks) || [];
+    return subHooks.some((h) => {
+      if (h && typeof h.command === 'string' && h.command.includes('fleet-commander')) return true;
+      if (h && typeof h.url === 'string' && h.url.includes('/api/hooks/')) return true;
+      return false;
+    });
+  }
+
+  // Compute installed FC hook types and remember whether any used a URL
+  // (signals http mode) for auto-detection below.
+  const installedFcTypes: string[] = [];
+  let sawUrlEntry = false;
+  for (const hookType of Object.keys(hooksObj)) {
+    const entries = hooksObj[hookType];
+    if (!Array.isArray(entries)) continue;
+    let hasFc = false;
+    for (const entry of entries) {
+      if (!isFcEntry(entry)) continue;
+      hasFc = true;
+      const subHooks = (entry && entry.hooks) || [];
+      if (subHooks.some((h) => h && typeof h.url === 'string' && h.url.includes('/api/hooks/'))) {
+        sawUrlEntry = true;
+      }
+    }
+    if (hasFc) installedFcTypes.push(hookType);
+  }
+  if (installedFcTypes.length === 0) return [];
+
+  // Resolve template mode.
+  const effectiveMode: 'http' | 'bash' = mode ?? (sawUrlEntry ? 'http' : 'bash');
+  const templatePath = path.join(config.fcHooksDir, getSettingsExampleFile(effectiveMode));
+
+  let template: { hooks?: Record<string, unknown> };
+  try {
+    if (!fs.existsSync(templatePath)) return [];
+    template = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
+  } catch {
+    return [];
+  }
+
+  const templateTypes = new Set(Object.keys(template?.hooks || {}));
+  return installedFcTypes.filter((t) => !templateTypes.has(t)).sort();
 }
 
 /**
@@ -651,6 +738,11 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
   // Check git commit status for .claude/ files on the default branch
   const gitCommitStatus = checkGitCommitStatus(repoPath);
 
+  // Detect stale FC hook entries (types present in settings.json but absent
+  // from the current template). Informational only — does not block readiness.
+  // Issue #760.
+  const driftHookTypes = detectHookDrift(repoPath);
+
   return {
     hooks: {
       installed: hookFoundCount === hookNames.length && !hookHasCrlf,
@@ -674,6 +766,7 @@ export function checkInstallStatus(repoPath: string): InstallStatus {
     outdatedCount,
     currentVersion,
     gitCommitStatus,
+    driftHookTypes,
   };
 }
 
