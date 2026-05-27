@@ -389,6 +389,45 @@ describe('cc-spawn', () => {
       // Headless mode sends prompt via stdin, not as a CLI arg
       expect(args).not.toContain('-p');
     });
+
+    // -----------------------------------------------------------------------
+    // permissionPolicy (issue #736)
+    // -----------------------------------------------------------------------
+
+    it('omits --dangerously-skip-permissions when permissionPolicy is "hook" regardless of config.skipPermissions', () => {
+      mockConfig.skipPermissions = true;
+      const args = buildHeadlessArgs({ worktreeName: 'test-wt', permissionPolicy: 'hook' });
+
+      expect(args).not.toContain('--dangerously-skip-permissions');
+    });
+
+    it('includes --dangerously-skip-permissions when permissionPolicy is "skip" and config.skipPermissions is true', () => {
+      mockConfig.skipPermissions = true;
+      const args = buildHeadlessArgs({ worktreeName: 'test-wt', permissionPolicy: 'skip' });
+
+      expect(args).toContain('--dangerously-skip-permissions');
+    });
+
+    it('includes --dangerously-skip-permissions when permissionPolicy is null and config.skipPermissions is true', () => {
+      mockConfig.skipPermissions = true;
+      const args = buildHeadlessArgs({ worktreeName: 'test-wt', permissionPolicy: null });
+
+      expect(args).toContain('--dangerously-skip-permissions');
+    });
+
+    it('includes --dangerously-skip-permissions when permissionPolicy is undefined and config.skipPermissions is true', () => {
+      mockConfig.skipPermissions = true;
+      const args = buildHeadlessArgs({ worktreeName: 'test-wt' });
+
+      expect(args).toContain('--dangerously-skip-permissions');
+    });
+
+    it('omits --dangerously-skip-permissions when permissionPolicy is "hook" even if config.skipPermissions is false', () => {
+      mockConfig.skipPermissions = false;
+      const args = buildHeadlessArgs({ worktreeName: 'test-wt', permissionPolicy: 'hook' });
+
+      expect(args).not.toContain('--dangerously-skip-permissions');
+    });
   });
 
   // =========================================================================
@@ -488,6 +527,31 @@ describe('cc-spawn', () => {
       const args = buildInteractiveArgs({ worktreeName: 'proj-99' });
 
       expect(args).not.toContain('--verbose');
+    });
+
+    // -----------------------------------------------------------------------
+    // permissionPolicy (issue #736)
+    // -----------------------------------------------------------------------
+
+    it('omits --dangerously-skip-permissions when permissionPolicy is "hook"', () => {
+      mockConfig.skipPermissions = true;
+      const args = buildInteractiveArgs({ worktreeName: 'proj-99', permissionPolicy: 'hook' });
+
+      expect(args).not.toContain('--dangerously-skip-permissions');
+    });
+
+    it('includes --dangerously-skip-permissions when permissionPolicy is "skip" and config.skipPermissions is true', () => {
+      mockConfig.skipPermissions = true;
+      const args = buildInteractiveArgs({ worktreeName: 'proj-99', permissionPolicy: 'skip' });
+
+      expect(args).toContain('--dangerously-skip-permissions');
+    });
+
+    it('includes --dangerously-skip-permissions when permissionPolicy is null and config.skipPermissions is true', () => {
+      mockConfig.skipPermissions = true;
+      const args = buildInteractiveArgs({ worktreeName: 'proj-99', permissionPolicy: null });
+
+      expect(args).toContain('--dangerously-skip-permissions');
     });
   });
 

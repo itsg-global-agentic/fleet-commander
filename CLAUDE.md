@@ -161,7 +161,7 @@ SQLite with WAL mode, 15 tables:
 
 | Table | Purpose |
 |-------|---------|
-| `projects` | Registered repositories (path, GitHub slug, max teams, prompt file) |
+| `projects` | Registered repositories (path, GitHub slug, max teams, prompt file, permission_policy, allowed_domains_json) |
 | `project_groups` | Logical grouping of projects |
 | `project_issue_sources` | Multiple issue providers per project (provider, config, credentials) |
 | `teams` | Agent team instances (status, phase, PID, session, PR link) |
@@ -228,7 +228,7 @@ The SSE broker emits 18 event types:
 | `FLEET_BROWSE_ROOT` | (user home dir) | Root directory for filesystem browsing |
 | `FLEET_TERMINAL` | `auto` | Windows terminal preference (`auto`/`wt`/`cmd`) |
 | `FLEET_CLAUDE_CMD` | `claude` | Claude Code CLI command |
-| `FLEET_SKIP_PERMISSIONS` | `true` | Skip CC permission prompts (`true`/`false`) |
+| `FLEET_SKIP_PERMISSIONS` | `true` | Skip CC permission prompts (`true`/`false`). Per-project `permission_policy='hook'` overrides this for that project by omitting `--dangerously-skip-permissions` and routing through the PermissionRequest hook instead (CC 2.1.45+, HTTP mode required). |
 | `FLEET_ENABLE_AGENT_TEAMS` | `true` | Enable agent teams feature (`true`/`false`) |
 | `FLEET_PROMPT_CACHE_1H` | `true` | When `true`, set `ENABLE_PROMPT_CACHING_1H=1` on spawned CC processes for 1-hour prompt cache TTL. Set to `false` to use the default 5-minute TTL. |
 | `FLEET_DEBUG_RAW_ISSUE_BODY` | `false` | When `true`, write `.fleet-issue-body-raw.md` next to `.fleet-issue-context.md` containing the unmodified GitHub issue body, for debugging image-preservation discrepancies. |
@@ -313,6 +313,24 @@ and reuses the same `event-collector` pipeline as the legacy `POST /api/events`
 route via the shared `buildEventPayloadFromCc` helper. PascalCase hook names
 (e.g. `SessionStart`, `PostToolUse`) are mapped to snake_case event types
 (`session_start`, `tool_use`) inside the route.
+
+## Per-Project Permission Policy (issue #736)
+
+Projects can opt into fine-grained permission control via `permission_policy` (DB column + `/projects` API field):
+
+| Value | Behaviour |
+|-------|-----------|
+| `null` / `'skip'` (default) | `--dangerously-skip-permissions` is passed to CC. All tool calls are silently allowed. |
+| `'hook'` | `--dangerously-skip-permissions` is **omitted**. CC calls `POST /api/hooks/PermissionRequest` synchronously before each tool call. FC evaluates the request against the policy rules and returns `{ "decision": "allow" \| "deny" \| "ask" }`. Requires HTTP hook mode and CC 2.1.45+. |
+
+Policy rules evaluated in priority order (see `src/server/services/permission-policy.ts`):
+1. **Read-only tools** (`Read`, `Glob`, `Grep`, `LS`, `View`) → always allow
+2. **Network tools** (`WebFetch`, `WebSearch`) → allow only if target hostname is in `allowed_domains_json`; deny otherwise
+3. **Write tools** (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`) → allow only if `file_path` is inside the team's worktree directory; deny if outside
+4. **Bash** → allow (audit-only; FC cannot parse arbitrary shell commands)
+5. **All other tools** → default allow
+
+`allowed_domains_json` is a JSON array of hostname strings stored on the project row (e.g. `["api.github.com","registry.npmjs.org"]`). Wildcards are not supported. The `/projects` UI exposes a textarea when policy='hook' to edit the domain list.
 
 ## Development Workflow
 

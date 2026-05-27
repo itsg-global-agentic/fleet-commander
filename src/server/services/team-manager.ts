@@ -509,6 +509,7 @@ export class TeamManager {
       model: project.model,
       effort: project.effort ?? config.defaultEffort,
       resume: false,
+      permissionPolicy: project.permissionPolicy,
       fleetContext: { teamId: worktreeName, projectId, githubRepo: project.githubRepo ?? '' },
     });
 
@@ -718,6 +719,7 @@ export class TeamManager {
       model: project.model,
       effort: project.effort ?? config.defaultEffort,
       resume: true,
+      permissionPolicy: project.permissionPolicy,
       fleetContext: { teamId: team.worktreeName, projectId: project.id, githubRepo: project.githubRepo ?? '' },
     });
 
@@ -1487,6 +1489,7 @@ export class TeamManager {
       model: project.model,
       effort: project.effort ?? config.defaultEffort,
       resume: false,
+      permissionPolicy: project.permissionPolicy,
       fleetContext: { teamId: team.worktreeName, projectId, githubRepo: project.githubRepo ?? '' },
     });
 
@@ -1943,6 +1946,7 @@ export class TeamManager {
       cwd: worktreeAbsPath,
       model: project.model,
       effort: project.effort ?? config.defaultEffort,
+      permissionPolicy: project.permissionPolicy,
       prompt,
       windowTitle: `Team ${team.worktreeName}`,
       fleetContext: { teamId: team.worktreeName, projectId: team.projectId!, githubRepo: project.githubRepo ?? '' },

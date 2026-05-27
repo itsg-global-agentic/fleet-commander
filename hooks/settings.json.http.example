@@ -146,6 +146,16 @@
           }
         ]
       }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:{{FLEET_PORT}}/api/hooks/PermissionRequest"
+          }
+        ]
+      }
     ]
   }
 }

@@ -31,6 +31,10 @@ interface CreateProjectBody {
   issueProvider?: string;
   projectKey?: string;
   providerConfig?: string;
+  /** Permission policy: null/'skip' = --dangerously-skip-permissions (default); 'hook' = PermissionRequest hook. */
+  permissionPolicy?: 'skip' | 'hook' | null;
+  /** JSON array of allowed hostnames for WebFetch when permissionPolicy='hook'. */
+  allowedDomainsJson?: string | null;
 }
 
 interface UpdateProjectBody {
@@ -45,6 +49,10 @@ interface UpdateProjectBody {
   issueProvider?: string | null;
   projectKey?: string | null;
   providerConfig?: string | null;
+  /** Permission policy: null/'skip' = --dangerously-skip-permissions (default); 'hook' = PermissionRequest hook. */
+  permissionPolicy?: 'skip' | 'hook' | null;
+  /** JSON array of allowed hostnames for WebFetch when permissionPolicy='hook'. */
+  allowedDomainsJson?: string | null;
 }
 
 interface ProjectIdParams {

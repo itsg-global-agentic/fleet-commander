@@ -150,9 +150,13 @@ function seedProject(overrides: {
   githubRepo?: string | null;
 } = {}) {
   const db = getDatabase();
+  // Append a random suffix so multiple seedProject() calls in the same
+  // millisecond (common on fast CI) don't collide on the UNIQUE repo_path
+  // / name constraints — the file has no beforeEach that wipes projects.
+  const uniq = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   return db.insertProject({
-    name: overrides.name ?? `issue-svc-project-${Date.now()}`,
-    repoPath: overrides.repoPath ?? `C:/fake/issue-svc-repo-${Date.now()}`,
+    name: overrides.name ?? `issue-svc-project-${uniq}`,
+    repoPath: overrides.repoPath ?? `C:/fake/issue-svc-repo-${uniq}`,
     githubRepo: 'githubRepo' in overrides ? overrides.githubRepo : 'owner/repo',
   });
 }

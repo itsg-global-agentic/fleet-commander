@@ -82,6 +82,19 @@ export interface Project {
    *            surfaced in the UI as "Unknown" until the operator reinstalls.
    */
   hookMode: 'http' | 'bash' | null;
+  /**
+   * Per-project permission policy (issue #736):
+   *   - null/'skip': pass --dangerously-skip-permissions to spawned CC (default, existing behavior).
+   *   - 'hook': omit --dangerously-skip-permissions; rely on PermissionRequest hook + policy engine.
+   *             Requires CC 2.1.45+ and http hook mode. Older CC falls back to its own UI prompts.
+   */
+  permissionPolicy: 'skip' | 'hook' | null;
+  /**
+   * JSON array of allowed hostnames for WebFetch when permissionPolicy='hook'.
+   * Example: '["api.github.com","registry.npmjs.org"]'.
+   * NULL means no domains are allowed by the policy engine (deny-by-default for network access).
+   */
+  allowedDomainsJson: string | null;
   createdAt: string;
   updatedAt: string;
 }

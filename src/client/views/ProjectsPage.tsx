@@ -124,6 +124,81 @@ function HookModeBadge({ project }: { project: ProjectSummary }) {
 }
 
 // ---------------------------------------------------------------------------
+// Allowed Domains editor (issue #736)
+// ---------------------------------------------------------------------------
+// Shown when permission_policy = 'hook'. Lets operators define which domains
+// WebFetch/WebSearch are allowed to reach. One domain per line, saved as JSON.
+
+function AllowedDomainsEditor({
+  projectId,
+  allowedDomainsJson,
+  onSave,
+}: {
+  projectId: number;
+  allowedDomainsJson: string | null;
+  onSave: (projectId: number, value: string | null) => void;
+}) {
+  const initialValue = useMemo(() => {
+    if (!allowedDomainsJson) return '';
+    try {
+      const parsed = JSON.parse(allowedDomainsJson) as string[];
+      return Array.isArray(parsed) ? parsed.join('\n') : '';
+    } catch {
+      return '';
+    }
+  }, [allowedDomainsJson]);
+
+  const [draft, setDraft] = useState(initialValue);
+  const [saved, setSaved] = useState(false);
+
+  // Sync when project data changes from outside (e.g. after API roundtrip)
+  useEffect(() => { setDraft(initialValue); }, [initialValue]);
+
+  const handleSave = () => {
+    const lines = draft.split('\n').map((l) => l.trim()).filter(Boolean);
+    const value = lines.length > 0 ? JSON.stringify(lines) : null;
+    onSave(projectId, value);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  return (
+    <div className="mt-2">
+      <div className="text-[10px] uppercase tracking-wider text-dark-muted/60 font-medium mb-1">
+        Allowed Domains <span className="normal-case text-dark-muted/40">(one per line — applies to WebFetch/WebSearch)</span>
+      </div>
+      <div className="flex items-start gap-2">
+        <textarea
+          value={draft}
+          onChange={(e) => { setDraft(e.target.value); setSaved(false); }}
+          onClick={(e) => e.stopPropagation()}
+          rows={3}
+          placeholder="api.github.com&#10;registry.npmjs.org"
+          className="flex-1 px-2 py-1 text-xs rounded border border-dark-border bg-dark-base text-dark-text placeholder:text-dark-muted/40 focus:outline-none focus:border-dark-accent resize-y min-h-[56px]"
+        />
+        <div className="flex flex-col gap-1 shrink-0">
+          <button
+            onClick={(e) => { e.stopPropagation(); handleSave(); }}
+            className="px-2 py-1 text-xs rounded border border-dark-accent/40 text-dark-accent bg-dark-accent/10 hover:bg-dark-accent/20 transition-colors"
+          >
+            {saved ? 'Saved' : 'Save'}
+          </button>
+          {!allowedDomainsJson && (
+            <span className="text-[10px] text-[#D29922] mt-0.5" title="No domains set — all WebFetch/WebSearch requests will be denied">
+              No domains
+            </span>
+          )}
+        </div>
+      </div>
+      {/* Callout: hook mode requirement */}
+      <div className="mt-1 text-[10px] text-dark-muted/60">
+        Hook policy requires HTTP hook mode and CC 2.1.45+. Denies requests outside this list.
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Install detail categories (reused from original)
 // ---------------------------------------------------------------------------
 
@@ -694,6 +769,8 @@ function ProjectCard({
   onSaveLimit,
   onSaveModel,
   onSaveEffort,
+  onSavePermissionPolicy,
+  onSaveAllowedDomains,
   onReinstall,
   onCleanup,
   onDelete,
@@ -710,6 +787,8 @@ function ProjectCard({
   onSaveLimit: (projectId: number, value: number) => void;
   onSaveModel: (projectId: number, value: string) => void;
   onSaveEffort: (projectId: number, value: string) => void;
+  onSavePermissionPolicy: (projectId: number, value: 'skip' | 'hook' | null) => void;
+  onSaveAllowedDomains: (projectId: number, value: string | null) => void;
   /**
    * Reinstall callback. Second arg is the hook deployment mode the user
    * selected in the mode picker (issue #735). The card always passes a
@@ -1020,6 +1099,28 @@ function ProjectCard({
                 </select>
               </span>
 
+              {/* Permission Policy (select) — issue #736 */}
+              <span className="shrink-0 inline-flex items-center gap-1">
+                <span>Permissions:</span>
+                <select
+                  value={project.permissionPolicy ?? ''}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    onSavePermissionPolicy(
+                      project.id,
+                      val === 'hook' ? 'hook' : val === 'skip' ? 'skip' : null,
+                    );
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                  className="shrink-0 px-1 py-0 text-xs rounded border border-dark-border bg-dark-base text-dark-muted hover:text-dark-text focus:outline-none cursor-pointer"
+                  title="Permission policy: Skip = --dangerously-skip-permissions (default). Hook = use PermissionRequest hook (requires HTTP mode, CC 2.1.45+)."
+                >
+                  <option value="">skip (default)</option>
+                  <option value="skip">skip</option>
+                  <option value="hook">hook (CC 2.1.45+)</option>
+                </select>
+              </span>
+
               {/* Max teams (editable) */}
               {limitEdit.isEditing ? (
                 <span className="shrink-0 inline-flex items-center gap-1">
@@ -1067,6 +1168,15 @@ function ProjectCard({
                 ))}
               </select>
             </div>
+
+            {/* Allowed Domains — only shown when permission policy is 'hook' (issue #736) */}
+            {project.permissionPolicy === 'hook' && (
+              <AllowedDomainsEditor
+                projectId={project.id}
+                allowedDomainsJson={project.allowedDomainsJson}
+                onSave={onSaveAllowedDomains}
+              />
+            )}
           </div>
 
           {/* Install Health */}
@@ -1542,6 +1652,36 @@ export function ProjectsPage() {
     [api, fetchProjects],
   );
 
+  const handleSavePermissionPolicy = useCallback(
+    async (projectId: number, value: 'skip' | 'hook' | null) => {
+      // Optimistic update
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, permissionPolicy: value } : p)),
+      );
+      try {
+        await api.put(`projects/${projectId}`, { permissionPolicy: value });
+      } catch {
+        await fetchProjects();
+      }
+    },
+    [api, fetchProjects],
+  );
+
+  const handleSaveAllowedDomains = useCallback(
+    async (projectId: number, value: string | null) => {
+      // Optimistic update
+      setProjects((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, allowedDomainsJson: value } : p)),
+      );
+      try {
+        await api.put(`projects/${projectId}`, { allowedDomainsJson: value });
+      } catch {
+        await fetchProjects();
+      }
+    },
+    [api, fetchProjects],
+  );
+
   // --- Computed: group projects by groupId ---
   const { groupedSections, ungroupedProjects } = useMemo(() => {
     const ungrouped = projects.filter((p) => p.groupId == null);
@@ -1570,6 +1710,8 @@ export function ProjectsPage() {
     onSaveLimit: handleSaveLimit,
     onSaveModel: handleSaveModel,
     onSaveEffort: handleSaveEffort,
+    onSavePermissionPolicy: handleSavePermissionPolicy,
+    onSaveAllowedDomains: handleSaveAllowedDomains,
     onReinstall: handleReinstall,
     onCleanup: handleCleanup,
     onDelete: handleDelete,

@@ -867,8 +867,10 @@ export class ProjectService {
     issueProvider?: string;
     projectKey?: string;
     providerConfig?: string;
+    permissionPolicy?: 'skip' | 'hook' | null;
+    allowedDomainsJson?: string | null;
   }): Promise<unknown> {
-    const { name, repoPath, githubRepo, maxActiveTeams, model, effort, issueProvider, projectKey, providerConfig } = data;
+    const { name, repoPath, githubRepo, maxActiveTeams, model, effort, issueProvider, projectKey, providerConfig, permissionPolicy, allowedDomainsJson } = data;
 
     // Validate name
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
@@ -958,6 +960,27 @@ export class ProjectService {
       );
     }
 
+    // Validate permissionPolicy if provided.
+    if (permissionPolicy !== undefined && permissionPolicy !== null &&
+        permissionPolicy !== 'skip' && permissionPolicy !== 'hook') {
+      throw validationError("Invalid permissionPolicy. Must be 'skip', 'hook', or null.");
+    }
+
+    // Validate allowedDomainsJson if provided.
+    if (allowedDomainsJson !== undefined && allowedDomainsJson !== null) {
+      try {
+        const parsed = JSON.parse(allowedDomainsJson);
+        if (!Array.isArray(parsed) || !parsed.every((d) => typeof d === 'string')) {
+          throw validationError('allowedDomainsJson must be a JSON array of strings');
+        }
+      } catch (e) {
+        if (e instanceof SyntaxError) {
+          throw validationError('allowedDomainsJson must be valid JSON');
+        }
+        throw e;
+      }
+    }
+
     // Insert the project (no per-project prompt file — always use prompts/default-prompt.md)
     const project = db.insertProject({
       name: name.trim(),
@@ -970,6 +993,8 @@ export class ProjectService {
       issueProvider: resolvedIssueProvider,
       projectKey: resolvedProjectKey,
       providerConfig: resolvedProviderConfig,
+      permissionPolicy: permissionPolicy ?? null,
+      allowedDomainsJson: allowedDomainsJson ?? null,
     });
 
     // Auto-create a GitHub issue source if githubRepo is resolved
@@ -1336,6 +1361,8 @@ export class ProjectService {
     promptFile?: string | null;
     model?: string | null;
     effort?: string | null;
+    permissionPolicy?: 'skip' | 'hook' | null;
+    allowedDomainsJson?: string | null;
   }): unknown {
     if (isNaN(projectId) || projectId < 1) {
       throw validationError('Invalid project ID');
@@ -1347,7 +1374,7 @@ export class ProjectService {
       throw notFoundError(`Project ${projectId} not found`);
     }
 
-    const { name, status, githubRepo, groupId, hooksInstalled, maxActiveTeams, promptFile, model, effort } = data;
+    const { name, status, githubRepo, groupId, hooksInstalled, maxActiveTeams, promptFile, model, effort, permissionPolicy, allowedDomainsJson } = data;
 
     // Validate status if provided
     if (status !== undefined) {
@@ -1384,6 +1411,27 @@ export class ProjectService {
       }
     }
 
+    // Validate permissionPolicy if provided.
+    if (permissionPolicy !== undefined && permissionPolicy !== null &&
+        permissionPolicy !== 'skip' && permissionPolicy !== 'hook') {
+      throw validationError("Invalid permissionPolicy. Must be 'skip', 'hook', or null.");
+    }
+
+    // Validate allowedDomainsJson if provided.
+    if (allowedDomainsJson !== undefined && allowedDomainsJson !== null) {
+      try {
+        const parsed = JSON.parse(allowedDomainsJson);
+        if (!Array.isArray(parsed) || !parsed.every((d) => typeof d === 'string')) {
+          throw validationError('allowedDomainsJson must be a JSON array of strings');
+        }
+      } catch (e) {
+        if (e instanceof SyntaxError) {
+          throw validationError('allowedDomainsJson must be valid JSON');
+        }
+        throw e;
+      }
+    }
+
     const updated = db.updateProject(projectId, {
       name: name?.trim(),
       status,
@@ -1394,6 +1442,8 @@ export class ProjectService {
       promptFile,
       model: model !== undefined ? (model?.trim() || null) : undefined,
       effort: normalizedEffort,
+      permissionPolicy,
+      allowedDomainsJson,
     });
 
     // Broadcast SSE event

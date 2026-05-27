@@ -247,6 +247,10 @@ export interface ProjectInsert {
   providerConfig?: string | null;
   /** Hook deployment mode: 'http' (default for new projects), 'bash' (legacy), or null (unknown). */
   hookMode?: 'http' | 'bash' | null;
+  /** Permission policy: null/'skip' = --dangerously-skip-permissions (default); 'hook' = PermissionRequest hook-based policy. */
+  permissionPolicy?: 'skip' | 'hook' | null;
+  /** JSON array of allowed hostnames for WebFetch when permissionPolicy='hook'. */
+  allowedDomainsJson?: string | null;
 }
 
 export interface ProjectUpdate {
@@ -266,6 +270,10 @@ export interface ProjectUpdate {
   autoMergeCheckedAt?: string | null;
   /** Hook deployment mode: 'http' / 'bash' / null. Updated on (re)install. */
   hookMode?: 'http' | 'bash' | null;
+  /** Permission policy: null/'skip' = --dangerously-skip-permissions (default); 'hook' = PermissionRequest hook-based policy. */
+  permissionPolicy?: 'skip' | 'hook' | null;
+  /** JSON array of allowed hostnames for WebFetch when permissionPolicy='hook'. */
+  allowedDomainsJson?: string | null;
 }
 
 export interface ProjectGroupInsert {
@@ -468,6 +476,9 @@ export class FleetDatabase {
 
     // Add effort column to teams (v26 migration — runtime effort tracking, issue #733)
     this.addTeamEffortColumn();
+
+    // Add permission_policy and allowed_domains_json columns to projects (v27 migration — PermissionRequest hook, issue #736)
+    this.addPermissionPolicyColumns();
 
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
@@ -1536,6 +1547,45 @@ export class FleetDatabase {
   }
 
   /**
+   * Add permission_policy and allowed_domains_json columns to projects table
+   * if they don't exist (v27 migration — PermissionRequest hook-based policy,
+   * issue #736).
+   *
+   * - permission_policy  TEXT (nullable): null/'skip' = --dangerously-skip-permissions
+   *   (default, existing behavior); 'hook' = drop --dangerously-skip-permissions and
+   *   use the PermissionRequest hook with the policy engine.
+   * - allowed_domains_json TEXT (nullable): JSON array of allowed WebFetch hostnames
+   *   when permission_policy='hook'. NULL means no domains allowed by policy.
+   *
+   * Fresh databases get both columns via schema.sql; upgraded databases use
+   * this migration. Idempotent across restarts.
+   */
+  private addPermissionPolicyColumns(): void {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>;
+      // Fresh DB: projects table doesn't exist yet — schema.sql will create it
+      // with both columns already present. Nothing to migrate.
+      if (cols.length === 0) return;
+      const hasPolicy = cols.some((c) => c.name === 'permission_policy');
+      const hasDomains = cols.some((c) => c.name === 'allowed_domains_json');
+      if (!hasPolicy) {
+        this.db.exec(
+          "ALTER TABLE projects ADD COLUMN permission_policy TEXT CHECK(permission_policy IS NULL OR permission_policy IN ('skip','hook'))"
+        );
+        console.log('[DB] v27 migration: added permission_policy column to projects');
+      }
+      if (!hasDomains) {
+        this.db.exec('ALTER TABLE projects ADD COLUMN allowed_domains_json TEXT');
+        console.log('[DB] v27 migration: added allowed_domains_json column to projects');
+      }
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (27)');
+    } catch (err) {
+      // Table may not exist yet (fresh database) — schema.sql will create it
+      console.warn('[DB] v27 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
    * Migrate branch_behind and branch_behind_resolved message templates
    * from hardcoded 'main' to use {{BASE_BRANCH}} placeholder.
    * Only updates templates that exactly match the old defaults (user edits are preserved).
@@ -1596,8 +1646,8 @@ export class FleetDatabase {
   insertProject(data: ProjectInsert): Project {
     const now = new Date().toISOString();
     const stmt = this.stmt(`
-      INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, effort, issue_provider, project_key, provider_config, hook_mode, created_at, updated_at)
-      VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @effort, @issueProvider, @projectKey, @providerConfig, @hookMode, @createdAt, @updatedAt)
+      INSERT INTO projects (name, repo_path, github_repo, group_id, max_active_teams, prompt_file, model, effort, issue_provider, project_key, provider_config, hook_mode, permission_policy, allowed_domains_json, created_at, updated_at)
+      VALUES (@name, @repoPath, @githubRepo, @groupId, @maxActiveTeams, @promptFile, @model, @effort, @issueProvider, @projectKey, @providerConfig, @hookMode, @permissionPolicy, @allowedDomainsJson, @createdAt, @updatedAt)
     `);
 
     const info = stmt.run({
@@ -1613,6 +1663,8 @@ export class FleetDatabase {
       projectKey: data.projectKey ?? null,
       providerConfig: data.providerConfig ? encrypt(data.providerConfig) : null,
       hookMode: data.hookMode ?? null,
+      permissionPolicy: data.permissionPolicy ?? null,
+      allowedDomainsJson: data.allowedDomainsJson ?? null,
       createdAt: now,
       updatedAt: now,
     });
@@ -1734,6 +1786,14 @@ export class FleetDatabase {
     if (fields.hookMode !== undefined) {
       setClauses.push('hook_mode = @hookMode');
       params.hookMode = fields.hookMode;
+    }
+    if (fields.permissionPolicy !== undefined) {
+      setClauses.push('permission_policy = @permissionPolicy');
+      params.permissionPolicy = fields.permissionPolicy;
+    }
+    if (fields.allowedDomainsJson !== undefined) {
+      setClauses.push('allowed_domains_json = @allowedDomainsJson');
+      params.allowedDomainsJson = fields.allowedDomainsJson;
     }
 
     if (setClauses.length === 0) return this.getProject(id);
@@ -3504,6 +3564,11 @@ export class FleetDatabase {
     const hookMode: 'http' | 'bash' | null =
       rawHookMode === 'http' || rawHookMode === 'bash' ? rawHookMode : null;
 
+    // Coerce permission_policy to the narrowed union; treat unexpected values as null.
+    const rawPermPolicy = row.permission_policy as string | null | undefined;
+    const permissionPolicy: 'skip' | 'hook' | null =
+      rawPermPolicy === 'skip' || rawPermPolicy === 'hook' ? rawPermPolicy : null;
+
     return {
       id: row.id as number,
       name: row.name as string,
@@ -3522,6 +3587,8 @@ export class FleetDatabase {
       autoMergeEnabled,
       autoMergeCheckedAt: (row.auto_merge_checked_at as string | null) ?? null,
       hookMode,
+      permissionPolicy,
+      allowedDomainsJson: (row.allowed_domains_json as string | null) ?? null,
       createdAt: utcify(row.created_at as string),
       updatedAt: utcify(row.updated_at as string),
     };

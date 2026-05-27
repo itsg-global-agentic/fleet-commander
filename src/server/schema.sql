@@ -1,5 +1,5 @@
 -- =============================================================================
--- Fleet Commander — SQLite Schema (v3, headless column on teams)
+-- Fleet Commander — SQLite Schema (v27, permission_policy + allowed_domains_json on projects)
 -- =============================================================================
 
 -- Schema version tracking for migrations
@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS projects (
   auto_merge_enabled INTEGER,                         -- 0|1|NULL (NULL = unknown / not yet detected; non-GitHub projects stay NULL)
   auto_merge_checked_at TEXT,                         -- ISO timestamp of last gh check, or NULL
   hook_mode       TEXT,                               -- 'http' | 'bash' | NULL (NULL = legacy / not yet set; new projects default to 'http' via the install path)
+  permission_policy TEXT CHECK(permission_policy IS NULL OR permission_policy IN ('skip','hook')),  -- NULL/'skip' = --dangerously-skip-permissions (default); 'hook' = PermissionRequest hook-based policy engine (CC 2.1.45+)
+  allowed_domains_json TEXT,                          -- JSON array of allowed hostnames for WebFetch when permission_policy='hook'; NULL means no domains allowed
   created_at      TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -455,4 +457,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_team_subworktrees_team_path_active
   ON team_subworktrees(team_id, path) WHERE removed_at IS NULL;
 
 -- Insert schema version (or upgrade from earlier versions)
-INSERT OR IGNORE INTO schema_version (version) VALUES (26);
+INSERT OR IGNORE INTO schema_version (version) VALUES (27);
