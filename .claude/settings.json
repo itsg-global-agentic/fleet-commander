@@ -116,26 +116,6 @@
         ]
       }
     ],
-    "WorktreeCreate": [
-      {
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://localhost:4680/api/hooks/WorktreeCreate"
-          }
-        ]
-      }
-    ],
-    "WorktreeRemove": [
-      {
-        "hooks": [
-          {
-            "type": "http",
-            "url": "http://localhost:4680/api/hooks/WorktreeRemove"
-          }
-        ]
-      }
-    ],
     "PostToolUseFailure": [
       {
         "hooks": [

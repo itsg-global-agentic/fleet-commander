@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.25
+# fleet-commander v0.0.26
 # Fleet Commander hook: WorktreeRemove
 # Fires when CC removes a worktree via ExitWorktree or subagent isolation teardown.
 # stdin JSON example: {"session_id":"abc123","cwd":"/path/to/worktree","hookSpecificOutput":{"worktreePath":"/path/to/worktree"}}
