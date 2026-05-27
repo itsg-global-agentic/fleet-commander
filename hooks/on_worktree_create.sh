@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.24
+# fleet-commander v0.0.25
 # Fleet Commander hook: WorktreeCreate
 # Fires when CC creates a worktree via --worktree, EnterWorktree, or subagent isolation=worktree.
 # stdin JSON example: {"session_id":"abc123","cwd":"/path/to/worktree","hookSpecificOutput":{"worktreePath":"/path/to/worktree"}}
