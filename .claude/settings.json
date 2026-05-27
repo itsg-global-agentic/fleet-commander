@@ -3,15 +3,15 @@
     "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   },
   "enabledPlugins": {
-    "security-guidance@claude-plugins-official": true
+    "security-guidance@claude-plugins-official": false
   },
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh session_start on_session_start.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/SessionStart"
           }
         ]
       }
@@ -20,8 +20,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh session_end on_session_end.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/SessionEnd"
           }
         ]
       }
@@ -30,8 +30,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh stop on_stop.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/Stop"
           }
         ]
       }
@@ -40,8 +40,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh stop_failure on_stop_failure.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/StopFailure"
           }
         ]
       }
@@ -50,8 +50,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh subagent_start on_subagent_start.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/SubagentStart"
           }
         ]
       }
@@ -60,8 +60,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh subagent_stop on_subagent_stop.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/SubagentStop"
           }
         ]
       }
@@ -70,8 +70,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh notification on_notification.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/Notification"
           }
         ]
       }
@@ -80,8 +80,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh pre_compact on_pre_compact.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/PreCompact"
           }
         ]
       }
@@ -90,8 +90,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh tool_use on_post_tool_use.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/PostToolUse"
           }
         ]
       }
@@ -100,8 +100,8 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh teammate_idle on_teammate_idle.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/TeammateIdle"
           }
         ]
       }
@@ -110,8 +110,28 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh task_created on_task_created.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/TaskCreated"
+          }
+        ]
+      }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/WorktreeCreate"
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/WorktreeRemove"
           }
         ]
       }
@@ -120,8 +140,18 @@
       {
         "hooks": [
           {
-            "type": "command",
-            "command": "bash .claude/hooks/fleet-commander/run-hook.sh tool_error on_tool_error.sh"
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/PostToolUseFailure"
+          }
+        ]
+      }
+    ],
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:4680/api/hooks/PermissionRequest"
           }
         ]
       }

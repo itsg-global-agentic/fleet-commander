@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.24
+# fleet-commander v0.0.25
 # Fleet Commander hook: SubagentStop
 # Tracks internal team agent departure.
 # stdin JSON example: {"session_id":"abc123","teammate_name":"csharp-dev","agent_type":"kea-csharp-dev"}
@@ -40,7 +40,20 @@ if [ -n "$HANDOFF_FILE" ]; then
     FILE_EXISTS=$([ -f "$FULL_PATH" ] && echo yes || echo no)
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HAND  | subagent_stop | ${FLEET_TEAM_ID:-?} | file=$HANDOFF_FILE exists=$FILE_EXISTS cwd=$WORKTREE_ROOT" >> "$_LOG" 2>/dev/null || true
     if [ "$FILE_EXISTS" = "yes" ]; then
-        "$HOOK_DIR/send_handoff.sh" "$HANDOFF_FILE" "$FULL_PATH" "$input" &
+        # ── SNAPSHOT-FIRST PATTERN ───────────────────────
+        # Race: the TL may delete the handoff file before the
+        # backgrounded upload reads it. Snapshot synchronously
+        # in the foreground, then background only the upload.
+        TMPFILE=$(mktemp 2>/dev/null || echo "/tmp/fleet-handoff-snap-$$-$HANDOFF_FILE-$(date +%s%N 2>/dev/null || date +%s)")
+        head -c 51200 < "$FULL_PATH" > "$TMPFILE" 2>/dev/null
+        if [ -s "$TMPFILE" ]; then
+            SNAP_SIZE=$(wc -c < "$TMPFILE" 2>/dev/null || echo 0)
+            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HAND  | subagent_stop | ${FLEET_TEAM_ID:-?} | file=$HANDOFF_FILE snapshot=$TMPFILE size=${SNAP_SIZE}b agent=$AGENT_NAME" >> "$_LOG" 2>/dev/null || true
+            AGENT_NAME="$AGENT_NAME" "$HOOK_DIR/send_handoff.sh" --snapshot "$HANDOFF_FILE" "$TMPFILE" "$FULL_PATH" "$input" &
+        else
+            echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | ERROR | subagent_stop | ${FLEET_TEAM_ID:-?} | snapshot empty for $HANDOFF_FILE (path=$FULL_PATH)" >> "$_LOG" 2>/dev/null || true
+            rm -f "$TMPFILE" 2>/dev/null || true
+        fi
     fi
 else
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HAND  | subagent_stop | ${FLEET_TEAM_ID:-?} | no handoff match for agent_name=$AGENT_NAME" >> "$_LOG" 2>/dev/null || true

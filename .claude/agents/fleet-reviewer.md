@@ -8,7 +8,7 @@ model: inherit
 # whole team. See issue #689 for cost analysis. The model field above stays
 # `inherit` so the operator decides per project.
 color: "#D29922"
-_fleetCommanderVersion: "0.0.24"
+_fleetCommanderVersion: "0.0.25"
 ---
 
 # Fleet Reviewer

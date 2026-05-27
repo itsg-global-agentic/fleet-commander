@@ -1,5 +1,5 @@
 #!/bin/sh
-# fleet-commander v0.0.24
+# fleet-commander v0.0.25
 # Fleet Commander hook: PostToolUse
 # THE primary heartbeat signal. Every tool use proves the team is alive.
 # Dashboard uses this to compute "last_seen" for stuck detection.
@@ -37,8 +37,22 @@ if [ -n "$TOOL_NAME" ] && [ -n "$FILE_PATH" ]; then
             BASENAME=$(basename "$FILE_PATH" 2>/dev/null || true)
             case "$BASENAME" in
                 plan.md|changes.md|review.md)
-                    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HAND  | tool_use | ${FLEET_TEAM_ID:-?} | file=$BASENAME exists=$([ -f "$FILE_PATH" ] && echo yes || echo no)" >> "$_LOG" 2>/dev/null || true
-                    "$HOOK_DIR/send_handoff.sh" "$BASENAME" "$FILE_PATH" "$input" &
+                    # ── SNAPSHOT-FIRST PATTERN ───────────────────────
+                    # Race: the TL deletes plan.md/changes.md/review.md
+                    # immediately after reading, beating any backgrounded
+                    # upload to the file. Fix: copy the content to a temp
+                    # file SYNCHRONOUSLY here (in the foreground), then
+                    # background only the upload from the snapshot.
+                    TMPFILE=$(mktemp 2>/dev/null || echo "/tmp/fleet-handoff-snap-$$-$BASENAME-$(date +%s%N 2>/dev/null || date +%s)")
+                    head -c 51200 < "$FILE_PATH" > "$TMPFILE" 2>/dev/null
+                    if [ -s "$TMPFILE" ]; then
+                        SNAP_SIZE=$(wc -c < "$TMPFILE" 2>/dev/null || echo 0)
+                        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | HAND  | tool_use | ${FLEET_TEAM_ID:-?} | file=$BASENAME snapshot=$TMPFILE size=${SNAP_SIZE}b" >> "$_LOG" 2>/dev/null || true
+                        "$HOOK_DIR/send_handoff.sh" --snapshot "$BASENAME" "$TMPFILE" "$FILE_PATH" "$input" &
+                    else
+                        echo "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown) | ERROR | tool_use | ${FLEET_TEAM_ID:-?} | snapshot empty for $BASENAME (path=$FILE_PATH)" >> "$_LOG" 2>/dev/null || true
+                        rm -f "$TMPFILE" 2>/dev/null || true
+                    fi
                     ;;
             esac
             ;;

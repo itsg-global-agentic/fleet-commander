@@ -1,8 +1,8 @@
-<!-- fleet-commander v0.0.25 -->
+<!-- fleet-commander v0.0.24 -->
 <!-- Fleet Commander workflow template. Installed by Fleet Commander into your project. -->
-<!-- Placeholders fleet-commander, fleet-commander, main, {{ISSUE_NUMBER}} are replaced during installation. -->
+<!-- Placeholders {{PROJECT_NAME}}, {{project_slug}}, {{BASE_BRANCH}}, {{ISSUE_NUMBER}} are replaced during installation. -->
 
-# Diamond Workflow — fleet-commander
+# Diamond Workflow — {{PROJECT_NAME}}
 
 ## About Fleet Commander
 
@@ -18,15 +18,15 @@ Fleet Commander (FC) is the orchestration layer that manages your team. Key fact
 
 You are running inside a **git worktree**, not the main repository checkout. This has critical implications:
 
-- **NEVER run `git checkout main`** — the base branch is already checked out in the main worktree. Attempting to check it out here will fail with "already used by worktree."
-- **Use `git fetch origin main` and reference `origin/main`** whenever you need the latest base branch state. Do not try to switch to it.
-- **Your branch is your branch.** Create it, work on it, push it. Never switch away from it to main.
-- This applies to ALL agents (planner, dev, reviewer) — none of them should ever attempt to checkout main.
+- **NEVER run `git checkout {{BASE_BRANCH}}`** — the base branch is already checked out in the main worktree. Attempting to check it out here will fail with "already used by worktree."
+- **Use `git fetch origin {{BASE_BRANCH}}` and reference `origin/{{BASE_BRANCH}}`** whenever you need the latest base branch state. Do not try to switch to it.
+- **Your branch is your branch.** Create it, work on it, push it. Never switch away from it to {{BASE_BRANCH}}.
+- This applies to ALL agents (planner, dev, reviewer) — none of them should ever attempt to checkout {{BASE_BRANCH}}.
 
 ## Entry Point
 
 ```
-User: claude --worktree fleet-commander-{N}
+User: claude --worktree {{project_slug}}-{N}
 (prompt is sent via stdin from Fleet Commander's prompt file)
 ```
 
@@ -134,7 +134,7 @@ You MAY, however, spawn ad-hoc **read-only research subagents in parallel** if y
 
 - Use this ONLY for subagents that **read** code/docs and return findings — never for code-writing work.
 - Do NOT isolate any of `fleet-planner`, `fleet-dev`, or `fleet-reviewer` — they need access to the team's main worktree to read/write `plan.md`, source files, `changes.md`, and `review.md`.
-- Isolated subagents see `origin/main`, not the dev's in-flight commits or uncommitted work — do not isolate any subagent that must inspect work-in-progress.
+- Isolated subagents see `origin/{{BASE_BRANCH}}`, not the dev's in-flight commits or uncommitted work — do not isolate any subagent that must inspect work-in-progress.
 - Fleet Commander auto-cleans CC subworktrees when the team finishes (see `cleanupTeamCcSubworktrees` in `src/server/services/cleanup.ts`), so you do not need to worry about leaked directories if a parallel subagent crashes.
 
 Default behavior: **do not spawn parallel subagents at all.** The Diamond agents cover every standard implementation flow. Only reach for parallel research when the task explicitly calls for breadth (e.g., a multi-area refactor scoping exercise).
@@ -254,7 +254,7 @@ If `.fleet-issue-context.md` was NOT available, omit the context fields and inst
 
 ### Dev Task Format (sent via TaskCreate at spawn)
 
-Include these fields: ISSUE (`#{N} {title}`), BRANCH (`{feat|fix|test}/{N}-{short-desc}`), BASE (`main`), ISSUE SUMMARY (1-3 sentences), ACCEPTANCE CRITERIA (bulleted), PLAN (full planner plan), GUIDEBOOKS (list of paths from plan). Dev reads CLAUDE.md + guidebooks, implements per plan, runs build + tests, commits atomically (`Issue #{N}: {desc}`), pushes, and pings TL.
+Include these fields: ISSUE (`#{N} {title}`), BRANCH (`{feat|fix|test}/{N}-{short-desc}`), BASE (`{{BASE_BRANCH}}`), ISSUE SUMMARY (1-3 sentences), ACCEPTANCE CRITERIA (bulleted), PLAN (full planner plan), GUIDEBOOKS (list of paths from plan). Dev reads CLAUDE.md + guidebooks, implements per plan, runs build + tests, commits atomically (`Issue #{N}: {desc}`), pushes, and pings TL.
 
 ### Changes Report Format (written by dev to `changes.md`)
 
@@ -289,7 +289,7 @@ Dev writes a summary including: what changed (files list with descriptions), any
 
 ### Reviewer Task Format (sent via TaskCreate at spawn)
 
-Include these fields: ISSUE (`#{N} {title}`), BRANCH, BASE (`main`), ACCEPTANCE CRITERIA (bulleted), CHANGES (full content from dev's `changes.md`), GUIDEBOOKS (list of paths from plan). Reviewer reads CLAUDE.md + guidebooks, verifies the dev's changes report against actual `git diff`, performs two-pass review (code quality + acceptance), sends REJECT feedback directly to dev via SendMessage, and writes final verdict to `review.md` then pings TL. Peer names: dev=`dev`, planner=`planner`. Max 3 review rounds; after 3rd round write `review.md` with CHANGES_NEEDED and wait for shutdown.
+Include these fields: ISSUE (`#{N} {title}`), BRANCH, BASE (`{{BASE_BRANCH}}`), ACCEPTANCE CRITERIA (bulleted), CHANGES (full content from dev's `changes.md`), GUIDEBOOKS (list of paths from plan). Reviewer reads CLAUDE.md + guidebooks, verifies the dev's changes report against actual `git diff`, performs two-pass review (code quality + acceptance), sends REJECT feedback directly to dev via SendMessage, and writes final verdict to `review.md` then pings TL. Peer names: dev=`dev`, planner=`planner`. Max 3 review rounds; after 3rd round write `review.md` with CHANGES_NEEDED and wait for shutdown.
 
 ### TL Reads review.md
 
@@ -327,14 +327,14 @@ After TL reads `review.md` with `Status: APPROVE`:
 
 1. **Branch freshness check** (MANDATORY):
    ```bash
-   git stash --include-untracked && git fetch origin main && git rebase origin/main && git stash pop && git push --force-with-lease
+   git stash --include-untracked && git fetch origin {{BASE_BRANCH}} && git rebase origin/{{BASE_BRANCH}} && git stash pop && git push --force-with-lease
    ```
    The `git stash --include-untracked` is required because the CC runtime may leave unstaged changes (e.g., `.claude/settings.json`) that block rebase.
    If rebase fails (conflicts) → state Blocked.
 
 2. **TL creates PR**:
    ```bash
-   gh pr create --base main --title "Issue #{N}: {description}" --body "Closes #{N}"
+   gh pr create --base {{BASE_BRANCH}} --title "Issue #{N}: {description}" --body "Closes #{N}"
    ```
 
 3. **Set auto-merge immediately** (mandatory, no exceptions):
@@ -448,7 +448,7 @@ TL forwards `ci_red` details to dev. Same failure type does NOT count as a new u
 
 ### Rebase Conflict
 
-If rebase on `origin/main` fails with conflicts, state Blocked, comment on issue, and STOP.
+If rebase on `origin/{{BASE_BRANCH}}` fails with conflicts, state Blocked, comment on issue, and STOP.
 
 ---
 
@@ -480,7 +480,7 @@ Atomic commits — each commit should be a logical unit.
 
 - **One issue at a time** — atomic changes only
 - **CI must be green** — PR CANNOT be merged with red CI
-- **Branch from main** — NEVER commit directly to main
+- **Branch from {{BASE_BRANCH}}** — NEVER commit directly to {{BASE_BRANCH}}
 - **TL creates the PR** — dev pushes code, TL creates the PR and sets auto-merge
 - **P2P for review** — dev and reviewer talk directly, TL does not relay
 - **Idle = normal** — agents waiting for messages are expected to be idle
@@ -488,3 +488,4 @@ Atomic commits — each commit should be a logical unit.
 - **Respond to FC messages promptly** — FC messages arrive via stdin and require action
 - **TL does not implement** — spawn subagents for all work (except planner fallback)
 - **Planner failure is not fatal** — TL can produce a minimal plan if planner fails
+
