@@ -1247,10 +1247,15 @@ export function processEvent(
       // Compute subject first so we can derive a content-based stable fallback taskId.
       // Using tool_use_id or eventId as fallback causes duplicates after context compaction
       // because the same logical task fires a new hook event with a new tool_use_id.
-      const subject = (ccData.subject ?? ccData.title ?? payload.message ?? 'Untitled task') as string;
+      //
+      // CC 2.1.143+ TaskCreated hook ships `task_subject` / `task_description`
+      // (prefixed) in cc_stdin; older / generic CC variants used `subject` /
+      // `title` / `description`. Accept both shapes so the column doesn't
+      // fall through to the "Untitled task" default.
+      const subject = (ccData.task_subject ?? ccData.subject ?? ccData.title ?? payload.message ?? 'Untitled task') as string;
       const subjectSlug = subject.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60);
       const taskId = (ccData.task_id ?? `task-${teamId}-${subjectSlug}`) as string;
-      const description = (ccData.description ?? null) as string | null;
+      const description = (ccData.task_description ?? ccData.description ?? null) as string | null;
       const status = (ccData.status ?? 'pending') as string;
       // Owner priority: explicit owner from CC hook > agent_id of creating subagent
       // > event-level agent_type. The route handler lifts cc.owner onto

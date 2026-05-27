@@ -483,6 +483,16 @@ export class FleetDatabase {
     // Tighten projects.effort CHECK constraint to drop legacy 'max' (v28 migration, issue #754)
     this.tightenProjectsEffortCheckConstraint();
 
+    // Collapse handoff_files duplicates where a null-agent row and an
+    // attributed row share the same content (v29 migration — PostToolUse
+    // capture races SubagentStop).
+    this.collapseHandoffFileDuplicates();
+
+    // Backfill team_tasks.subject from TaskCreated events when stored
+    // subject is "Untitled task" (v30 migration — older event-collector
+    // missed CC's `task_subject` field).
+    this.backfillTaskSubjects();
+
     // Migrate any 'paused' projects to 'active' (paused status removed in #228)
     this.migratePausedProjects();
 
@@ -1717,6 +1727,119 @@ export class FleetDatabase {
     } catch (err) {
       // Table may not exist yet (fresh database) — schema.sql will create it
       console.warn('[DB] v28 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * Collapse duplicate handoff_files rows where a null-agent row and an
+   * attributed row share the same (team_id, file_type, content). The
+   * PostToolUse hook captures the file immediately on write (without
+   * agent context) and SubagentStop captures it again 1-3 min later with
+   * the agent name. Pre-fix the dedup window was 60s so both rows survived;
+   * `insertHandoffFile` now promotes the null-agent row on capture, but
+   * pre-existing rows still need a one-shot cleanup.
+   */
+  private collapseHandoffFileDuplicates(): void {
+    try {
+      const exists = this.db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='handoff_files'"
+        )
+        .get();
+      if (!exists) return;
+      this.db.exec(`
+        DELETE FROM handoff_files
+         WHERE agent_name IS NULL
+           AND EXISTS (
+             SELECT 1 FROM handoff_files AS h2
+              WHERE h2.team_id = handoff_files.team_id
+                AND h2.file_type = handoff_files.file_type
+                AND h2.content = handoff_files.content
+                AND h2.agent_name IS NOT NULL
+           )
+      `);
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (29)');
+    } catch (err) {
+      console.warn('[DB] v29 migration skipped:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /**
+   * Backfill team_tasks.subject (and description) from TaskCreated event
+   * payloads when the stored subject is the "Untitled task" sentinel.
+   *
+   * Pre-fix the event-collector looked for `subject` / `description` in
+   * cc_stdin, but CC ships `task_subject` / `task_description` (prefixed).
+   * Tasks created before the fix therefore have the sentinel subject and
+   * a null description. The TaskCreated event itself is persisted with the
+   * full cc_stdin JSON, so we can recover the right values by re-parsing
+   * the most recent task_created event for each task.
+   */
+  private backfillTaskSubjects(): void {
+    try {
+      const exists = this.db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='team_tasks'"
+        )
+        .get();
+      if (!exists) return;
+
+      const stale = this.db
+        .prepare(
+          "SELECT id, team_id, task_id FROM team_tasks WHERE subject = 'Untitled task'"
+        )
+        .all() as Array<{ id: number; team_id: number; task_id: string }>;
+      if (stale.length === 0) {
+        this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (30)');
+        return;
+      }
+
+      // events.event_type may be either snake_case or PascalCase depending
+      // on which CC version / route inserted the row, so match both.
+      const eventStmt = this.db.prepare(
+        "SELECT payload FROM events WHERE team_id = ? AND event_type IN ('task_created', 'TaskCreated') ORDER BY id DESC LIMIT 50"
+      );
+      const updateStmt = this.db.prepare(
+        'UPDATE team_tasks SET subject = ?, description = COALESCE(?, description) WHERE id = ?'
+      );
+
+      let updated = 0;
+      for (const row of stale) {
+        const events = eventStmt.all(row.team_id) as Array<{ payload: string }>;
+        for (const ev of events) {
+          try {
+            const outer = JSON.parse(ev.payload) as Record<string, unknown>;
+            const ccStdinRaw = outer.cc_stdin as string | undefined;
+            if (!ccStdinRaw) continue;
+            const cc = JSON.parse(ccStdinRaw) as Record<string, unknown>;
+            const taskId = cc.task_id ?? cc.taskId;
+            if (taskId !== row.task_id) continue;
+            const subject =
+              (cc.task_subject as string | undefined) ??
+              (cc.subject as string | undefined) ??
+              (cc.title as string | undefined);
+            if (!subject) continue;
+            const description =
+              (cc.task_description as string | null | undefined) ??
+              (cc.description as string | null | undefined) ??
+              null;
+            updateStmt.run(subject, description, row.id);
+            updated += 1;
+            break;
+          } catch {
+            // Skip malformed events.
+          }
+        }
+      }
+
+      if (updated > 0) {
+        console.log(
+          `[DB] v30 migration: backfilled ${updated}/${stale.length} task subjects from TaskCreated events`
+        );
+      }
+      this.db.exec('INSERT OR IGNORE INTO schema_version (version) VALUES (30)');
+    } catch (err) {
+      console.warn('[DB] v30 migration skipped:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -4063,8 +4186,56 @@ export class FleetDatabase {
         existingContent.length === cappedContent.length &&
         existingContent === cappedContent
       ) {
+        // Same content: dedup. If the incoming row carries an agent_name and
+        // the existing row had none, promote it — PostToolUse fires the file
+        // capture first without agent context, and SubagentStop later fires
+        // with the proper agent. Without this update the file would appear
+        // attributed to "unknown" forever.
+        const existingAgent = recent.agent_name as string | null;
+        const incomingAgent = data.agentName ?? null;
+        if (incomingAgent && !existingAgent) {
+          this.stmt(
+            'UPDATE handoff_files SET agent_name = ? WHERE id = ?'
+          ).run(incomingAgent, recent.id);
+          const updated = this.stmt(
+            'SELECT * FROM handoff_files WHERE id = ?'
+          ).get(recent.id) as Record<string, unknown>;
+          return { file: this.mapHandoffFileRow(updated), deduplicated: true };
+        }
         return { file: this.mapHandoffFileRow(recent), deduplicated: true };
       }
+    }
+
+    // Same content without a row in the dedup window is still a duplicate —
+    // Write→SubagentStop can span several minutes for long subagent turns.
+    // Look further back without a time bound and promote / dedup on exact
+    // content match, again preferring an attributed agent.
+    const sameContent = this.stmt(`
+      SELECT * FROM handoff_files
+       WHERE team_id = @teamId
+         AND file_type = @fileType
+         AND content = @content
+       ORDER BY id DESC
+       LIMIT 1
+    `).get({
+      teamId: data.teamId,
+      fileType: data.fileType,
+      content: cappedContent,
+    }) as Record<string, unknown> | undefined;
+
+    if (sameContent) {
+      const existingAgent = sameContent.agent_name as string | null;
+      const incomingAgent = data.agentName ?? null;
+      if (incomingAgent && !existingAgent) {
+        this.stmt(
+          'UPDATE handoff_files SET agent_name = ? WHERE id = ?'
+        ).run(incomingAgent, sameContent.id);
+        const updated = this.stmt(
+          'SELECT * FROM handoff_files WHERE id = ?'
+        ).get(sameContent.id) as Record<string, unknown>;
+        return { file: this.mapHandoffFileRow(updated), deduplicated: true };
+      }
+      return { file: this.mapHandoffFileRow(sameContent), deduplicated: true };
     }
 
     // ── Normal insert ─────────────────────────────────────────────────
